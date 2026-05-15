@@ -5,7 +5,7 @@ import aiosqlite
 import pytz
 from datetime import datetime
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
@@ -15,11 +15,12 @@ from aiogram.filters import Command
 # ============================================================
 BOT_TOKEN = "8674884867:AAG_PMl3U8IMc7MQD3Vn26PBMLpEB18_wD8"
 GROUP_ID = -1003818447487
-CHAT1_THREAD_ID = 1   # Рабочий чат
-CHAT2_THREAD_ID = 2   # Отчеты
+CHAT1_THREAD_ID = 1   # Рабочий чат (сотрудники пишут действия)
+CHAT2_THREAD_ID = 2   # Отчеты (бот пишет сводки и кнопки)
 
 DISTRICTS = ["Красная", "ФМР", "ЮМР", "Восточка", "Ставрополька", "ГМР"]
 
+# Временная сетка (шаг 30 минут, с 6:00 до 23:30)
 TIME_GRID = []
 for h in range(6, 24):
     TIME_GRID.append(f"{h:02d}:00")
@@ -151,7 +152,7 @@ async def get_shift_stats(shift_id: int) -> dict:
         return stats
 
 # ============================================================
-# ПАРСИНГ
+# ПАРСИНГ СООБЩЕНИЙ
 # ============================================================
 def extract_bike_codes(text: str) -> list:
     return re.findall(r'\b\d{4}\b', text)
@@ -194,6 +195,7 @@ def parse_message(text: str) -> list:
 # КЛАВИАТУРЫ
 # ============================================================
 def get_start_keyboard():
+    """Reply-кнопка для начала смены."""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🟢 Начать смену")]],
         resize_keyboard=True,
@@ -201,29 +203,15 @@ def get_start_keyboard():
     )
 
 def get_end_keyboard():
+    """Reply-кнопка для завершения смены."""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🔴 Закончить смену")]],
         resize_keyboard=True,
         one_time_keyboard=False
     )
 
-def get_time_keyboard():
-    buttons = []
-    row = []
-    for i, time in enumerate(TIME_GRID):
-        row.append(KeyboardButton(text=time))
-        if (i + 1) % 4 == 0:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
-def get_district_keyboard():
-    buttons = [[KeyboardButton(text=d)] for d in DISTRICTS]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
 def get_role_keyboard():
+    """Reply-кнопки выбора роли."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🔍 Скаут")],
@@ -232,6 +220,41 @@ def get_role_keyboard():
         resize_keyboard=True,
         one_time_keyboard=True
     )
+
+def get_time_inline_keyboard(user_id: int, action: str):
+    """Inline-кнопки выбора времени (сетка 30 минут)."""
+    buttons = []
+    row = []
+    for i, time in enumerate(TIME_GRID):
+        row.append(InlineKeyboardButton(
+            text=time,
+            callback_data=f"{action}_{time}_{user_id}"
+        ))
+        if (i + 1) % 4 == 0:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_district_inline_keyboard(user_id: int):
+    """Inline-кнопки выбора района."""
+    buttons = []
+    for district in DISTRICTS:
+        buttons.append([InlineKeyboardButton(
+            text=district,
+            callback_data=f"district_{district}_{user_id}"
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_end_shift_inline_keyboard(user_id: int):
+    """Inline-кнопка завершения смены."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🔴 Закончить смену",
+            callback_data=f"end_shift_{user_id}"
+        )
+    ]])
 
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -255,14 +278,16 @@ def calc_duration(start: str, end: str) -> str:
     mins = diff % 60
     return f"{hours} ч. {mins} мин."
 
+def extract_user_id_from_callback(callback_data: str) -> int:
+    """Извлекает user_id из callback_data (последнее значение после _)."""
+    parts = callback_data.split('_')
+    return int(parts[-1])
+
 # ============================================================
-# FSM
+# FSM — СОСТОЯНИЯ
 # ============================================================
 class ShiftStates(StatesGroup):
-    waiting_start_time = State()
-    waiting_district = State()
     on_shift = State()
-    waiting_end_time = State()
 
 class RegisterStates(StatesGroup):
     waiting_name = State()
@@ -274,9 +299,10 @@ class RegisterStates(StatesGroup):
 register_router = Router()
 chat1_router = Router()
 chat2_router = Router()
+callback_router = Router()
 
 # ============================================================
-# РЕГИСТРАЦИЯ В ЛС
+# ХЕНДЛЕРЫ: РЕГИСТРАЦИЯ В ЛС БОТА
 # ============================================================
 @register_router.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: Message, state: FSMContext):
@@ -300,7 +326,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def process_name(message: Message, state: FSMContext):
     full_name = message.text.strip()
     if len(full_name) < 5:
-        await message.answer("❌ Слишком короткое имя. Введите ФИО полностью:")
+        await message.answer("❌ Слишком короткое имя. Введите ФИО полностью (например: Иванов И.И.):")
         return
 
     await state.update_data(full_name=full_name)
@@ -330,10 +356,10 @@ async def process_role(message: Message, state: FSMContext):
         reply_markup=None
     )
     await state.clear()
-    logger.info(f"Зарегистрирован: {full_name} ({role_text})")
+    logger.info(f"Зарегистрирован: {full_name} ({role_text}), ID: {message.from_user.id}")
 
 # ============================================================
-# ПАРСИНГ ЧАТА 1
+# ХЕНДЛЕРЫ: ПАРСИНГ РАБОЧЕГО ЧАТА (ЧАТ 1)
 # ============================================================
 @chat1_router.message(
     F.chat.id == GROUP_ID,
@@ -363,60 +389,104 @@ async def handle_work_message(message: Message):
         logger.info(f"Действие: {user['full_name']}, {action['action_type']}, коды: {action['bike_codes']}")
 
 # ============================================================
-# УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2)
+# ХЕНДЛЕРЫ: УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2 — ОТЧЕТЫ)
 # ============================================================
-@chat2_router.message(
-    F.chat.id == GROUP_ID,
-    F.message_thread_id == CHAT2_THREAD_ID
-)
+@chat2_router.message(F.chat.id == GROUP_ID)
 async def handle_chat2(message: Message, state: FSMContext):
+    if message.message_thread_id == CHAT1_THREAD_ID:
+        return
+
     user_id = message.from_user.id
     user = await get_user(user_id)
 
     if not user:
         await message.answer(
             "❌ Вы не зарегистрированы.\n"
-            "Напишите боту в личные сообщения /start"
+            "Напишите боту в личные сообщения /start для регистрации."
         )
         return
 
     active_shift = await get_active_shift(user_id)
 
     if message.text == "🟢 Начать смену" and not active_shift:
-        await message.answer("⏰ Выберите время начала смены:", reply_markup=get_time_keyboard())
-        await state.set_state(ShiftStates.waiting_start_time)
+        # Создаём сообщение с инлайн-кнопками выбора времени
+        await message.answer(
+            "📋 **Новая смена**\nВыберите время начала:",
+            reply_markup=get_time_inline_keyboard(user_id, "start_time")
+        )
 
     elif message.text == "🔴 Закончить смену" and active_shift:
-        await message.answer("⏰ Выберите время окончания смены:", reply_markup=get_time_keyboard())
-        await state.set_state(ShiftStates.waiting_end_time)
+        await message.answer(
+            "⏰ Выберите время окончания смены:",
+            reply_markup=get_time_inline_keyboard(user_id, "end_time")
+        )
 
     elif not active_shift:
-        await message.answer("📋 Смена не активна:", reply_markup=get_start_keyboard())
+        await message.answer(
+            "📋 Смена не активна. Нажмите кнопку чтобы начать:",
+            reply_markup=get_start_keyboard()
+        )
     else:
-        await message.answer("🟢 Смена активна:", reply_markup=get_end_keyboard())
+        await message.answer(
+            "🟢 Смена активна. Нажмите кнопку чтобы закончить:",
+            reply_markup=get_end_keyboard()
+        )
 
-@chat2_router.message(ShiftStates.waiting_start_time, F.text)
-async def process_start_time(message: Message, state: FSMContext):
-    if ':' not in message.text:
-        await message.answer("❌ Пожалуйста, выберите время кнопкой:")
+# ============================================================
+# CALLBACK-ХЕНДЛЕРЫ (ИНЛАЙН-КНОПКИ)
+# ============================================================
+
+@callback_router.callback_query(F.data.startswith("start_time_"))
+async def callback_start_time(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    callback_user_id = extract_user_id_from_callback(callback.data)
+
+    # Защита: только владелец смены может нажимать
+    if user_id != callback_user_id:
+        await callback.answer("❌ Это не ваша смена!", show_alert=True)
         return
 
-    start_time = message.text.strip()
-    await state.update_data(start_time=start_time)
-    await message.answer("📍 Выберите район:", reply_markup=get_district_keyboard())
-    await state.set_state(ShiftStates.waiting_district)
-
-@chat2_router.message(ShiftStates.waiting_district, F.text)
-async def process_district(message: Message, state: FSMContext):
-    user = await get_user(message.from_user.id)
-    district = message.text.strip()
-
-    if district not in DISTRICTS:
-        await message.answer("❌ Пожалуйста, выберите район кнопкой:")
+    user = await get_user(user_id)
+    if not user:
+        await callback.answer("❌ Вы не зарегистрированы!", show_alert=True)
         return
 
-    data = await state.get_data()
-    start_time = data['start_time']
+    start_time = callback.data.replace(f"start_time_", "").replace(f"_{user_id}", "")
+
+    # Сохраняем время начала во временное хранилище
+    await callback.message.edit_text(
+        f"📋 **Новая смена**\n⏰ Время: {start_time}\n📍 Выберите район:",
+        reply_markup=get_district_inline_keyboard(user_id)
+    )
+    await callback.answer()
+
+@callback_router.callback_query(F.data.startswith("district_"))
+async def callback_district(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    callback_user_id = extract_user_id_from_callback(callback.data)
+
+    # Защита: только владелец смены может нажимать
+    if user_id != callback_user_id:
+        await callback.answer("❌ Это не ваша смена!", show_alert=True)
+        return
+
+    user = await get_user(user_id)
+    if not user:
+        await callback.answer("❌ Вы не зарегистрированы!", show_alert=True)
+        return
+
+    # Извлекаем время и район из callback_data
+    # Формат: district_РАЙОН_USERID
+    parts = callback.data.split('_')
+    district = parts[1]
+
+    # Получаем время начала из текста сообщения
+    message_text = callback.message.text
+    time_line = [line for line in message_text.split('\n') if 'Время:' in line]
+    if time_line:
+        start_time = time_line[0].replace('⏰ Время:', '').strip()
+    else:
+        start_time = "??:??"
 
     shift_id = await start_shift(
         user_id=user['user_id'],
@@ -428,36 +498,72 @@ async def process_district(message: Message, state: FSMContext):
 
     role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
 
-    await message.answer(
+    await callback.message.edit_text(
         f"👤 {user['full_name']} | {role_text}\n"
         f"🟢 Смену начал: {start_time}\n"
         f"📍 Район: {district}\n\n"
         f"✅ Смена активна!",
-        reply_markup=get_end_keyboard()
+        reply_markup=get_end_shift_inline_keyboard(user_id)
     )
-
-    await state.set_state(ShiftStates.on_shift)
-    await state.update_data(shift_id=shift_id, district=district)
+    await callback.answer()
     logger.info(f"Смена начата: {user['full_name']}, {start_time}, {district}")
 
-@chat2_router.message(ShiftStates.waiting_end_time, F.text)
-async def process_end_time(message: Message, state: FSMContext):
-    if ':' not in message.text:
-        await message.answer("❌ Пожалуйста, выберите время кнопкой:")
+@callback_router.callback_query(F.data.startswith("end_shift_"))
+async def callback_end_shift(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    callback_user_id = extract_user_id_from_callback(callback.data)
+
+    # Защита: только владелец смены может нажимать
+    if user_id != callback_user_id:
+        await callback.answer("❌ Это не ваша смена!", show_alert=True)
         return
 
-    user = await get_user(message.from_user.id)
-    end_time = message.text.strip()
+    user = await get_user(user_id)
+    if not user:
+        await callback.answer("❌ Вы не зарегистрированы!", show_alert=True)
+        return
 
-    data = await state.get_data()
-    start_time = data.get('start_time', '')
-    district = data.get('district', '')
+    # Показываем кнопки выбора времени окончания
+    await callback.message.edit_text(
+        callback.message.text + "\n\n⏰ Выберите время окончания:",
+        reply_markup=get_time_inline_keyboard(user_id, "end_time")
+    )
+    await callback.answer()
+
+@callback_router.callback_query(F.data.startswith("end_time_"))
+async def callback_end_time(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    callback_user_id = extract_user_id_from_callback(callback.data)
+
+    # Защита: только владелец смены может нажимать
+    if user_id != callback_user_id:
+        await callback.answer("❌ Это не ваша смена!", show_alert=True)
+        return
+
+    user = await get_user(user_id)
+    if not user:
+        await callback.answer("❌ Вы не зарегистрированы!", show_alert=True)
+        return
+
+    end_time = callback.data.replace(f"end_time_", "").replace(f"_{user_id}", "")
+
+    # Извлекаем данные из текста сообщения
+    message_text = callback.message.text
+    lines = message_text.split('\n')
+
+    # Ищем время начала
+    start_time = ""
+    district = ""
+    for line in lines:
+        if 'Смену начал:' in line:
+            start_time = line.split('Смену начал:')[1].strip()
+        if 'Район:' in line:
+            district = line.split('Район:')[1].strip()
 
     shift_id = await end_shift(user['user_id'], end_time)
 
     if not shift_id:
-        await message.answer("❌ Ошибка: не найдена активная смена.")
-        await state.clear()
+        await callback.answer("❌ Ошибка: не найдена активная смена.", show_alert=True)
         return
 
     stats = await get_shift_stats(shift_id)
@@ -466,6 +572,7 @@ async def process_end_time(message: Message, state: FSMContext):
 
     report = (
         f"👤 {user['full_name']} | {role_text}\n"
+        f"🟢 Смену начал: {start_time}\n"
         f"🔴 Смену закончил: {end_time}\n"
         f"⏱ Отработано: {duration}\n"
         f"📍 Район: {district}\n\n"
@@ -483,8 +590,9 @@ async def process_end_time(message: Message, state: FSMContext):
         report += f"✅ Поправлено: {stats['fix']}\n"
         report += f"🛠 Ремонт: {stats['repair']}\n"
 
-    await message.answer(report, reply_markup=get_start_keyboard())
-    await state.clear()
+    # Финальное сообщение — без кнопок
+    await callback.message.edit_text(report)
+    await callback.answer("✅ Смена завершена!")
     logger.info(f"Смена завершена: {user['full_name']}, {duration}")
 
 # ============================================================
@@ -494,6 +602,7 @@ async def main():
     await init_db()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
+    dp.include_router(callback_router)  # Важно: callback_router первым!
     dp.include_router(register_router)
     dp.include_router(chat1_router)
     dp.include_router(chat2_router)

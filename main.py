@@ -382,16 +382,28 @@ async def handle_work_message(message: Message):
 # ============================================================
 # ХЕНДЛЕРЫ: УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2 — ОТЧЕТЫ)
 # ============================================================
+# ============================================================
+# ХЕНДЛЕРЫ: УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2 — ОТЧЕТЫ)
+# ============================================================
 @chat2_router.message(F.chat.id == GROUP_ID)
 async def handle_chat2(message: Message, state: FSMContext):
+    # ЛОГИРУЕМ ВСЁ для отладки
+    logger.info(f"=== СООБЩЕНИЕ В ЧАТЕ 2 ===")
+    logger.info(f"От кого: {message.from_user.id} ({message.from_user.full_name})")
+    logger.info(f"Текст: {message.text}")
+    logger.info(f"Тред: {message.message_thread_id}")
+    logger.info(f"============================")
+
     # Игнорируем сообщения из Чата 1
     if message.message_thread_id == CHAT1_THREAD_ID:
+        logger.info("Пропущено: это Чат 1")
         return
 
     user_id = message.from_user.id
     user = await get_user(user_id)
 
     if not user:
+        logger.info(f"Пользователь {user_id} не зарегистрирован")
         await message.answer(
             "❌ Вы не зарегистрированы.\n"
             "Напишите боту в личные сообщения /start для регистрации."
@@ -399,26 +411,31 @@ async def handle_chat2(message: Message, state: FSMContext):
         return
 
     active_shift = await get_active_shift(user_id)
+    logger.info(f"Активная смена: {active_shift is not None}")
 
     # Нажата кнопка "Начать смену"
-    if message.text == "🟢 Начать смену" and not active_shift:
-        # Отправляем сообщение с инлайн-кнопками
-        await message.answer(
-            "📋 **Новая смена**\nВыберите время начала:",
-            reply_markup=get_time_inline_keyboard(user_id, "start_time")
-        )
-        # Убираем reply-клавиатуру
-        await message.answer(
-            "✅ Создана новая смена. Выберите время на сообщении выше.",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True)
-        )
-
-    # Если смена не активна — показываем кнопку "Начать"
-    elif not active_shift:
-        await message.answer(
-            "Нажмите кнопку чтобы начать смену:",
-            reply_markup=get_start_reply_keyboard()
-        )
+    if message.text and "Начать смену" in message.text:
+        logger.info(f"Кнопка Начать смену нажата пользователем {user_id}")
+        if not active_shift:
+            logger.info("Создаю новую смену...")
+            # Отправляем сообщение с инлайн-кнопками
+            await message.answer(
+                "📋 **Новая смена**\nВыберите время начала:",
+                reply_markup=get_time_inline_keyboard(user_id, "start_time")
+            )
+            # Убираем reply-клавиатуру
+            await message.answer(
+                "✅ Смена создана. Выберите время нажатием на кнопку выше.",
+                reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True)
+            )
+        else:
+            logger.info("Смена уже активна")
+            await message.answer(
+                "🟢 У вас уже есть активная смена!",
+                reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True)
+            )
+    else:
+        logger.info(f"Не кнопка: {message.text}")
 
 # ============================================================
 # CALLBACK-ХЕНДЛЕРЫ (ИНЛАЙН-КНОПКИ)

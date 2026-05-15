@@ -9,21 +9,17 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
-from aiohttp_socks import ProxyConnector
-from aiogram.client.session.aiohttp import AiohttpSession
 
 # ============================================================
-# КОНФИГУРАЦИЯ (ЗАМЕНИ BOT_TOKEN НА РЕАЛЬНЫЙ)
+# КОНФИГУРАЦИЯ
 # ============================================================
-PROXY_URL = "socks5://DT5Rdn:ff2A2C@195.216.134.245:8000"
-BOT_TOKEN = "8674884867:AAG_PMl3U8IMc7MQD3Vn26PBMLpEB18_wD8"  # ← ЗАМЕНИ НА СВОЙ ТОКЕН
+BOT_TOKEN = "8674884867:AAG_PMl3U8IMc7MQD3Vn26PBMLpEB18_wD8"
 GROUP_ID = -1003818447487
-CHAT1_THREAD_ID = 1   # Рабочий чат (сотрудники пишут действия)
-CHAT2_THREAD_ID = 2   # Отчеты (бот пишет сводки и кнопки)
+CHAT1_THREAD_ID = 1   # Рабочий чат
+CHAT2_THREAD_ID = 2   # Отчеты
 
 DISTRICTS = ["Красная", "ФМР", "ЮМР", "Восточка", "Ставрополька", "ГМР"]
 
-# Временная сетка (шаг 30 минут, с 6:00 до 23:30)
 TIME_GRID = []
 for h in range(6, 24):
     TIME_GRID.append(f"{h:02d}:00")
@@ -155,7 +151,7 @@ async def get_shift_stats(shift_id: int) -> dict:
         return stats
 
 # ============================================================
-# ПАРСИНГ СООБЩЕНИЙ
+# ПАРСИНГ
 # ============================================================
 def extract_bike_codes(text: str) -> list:
     return re.findall(r'\b\d{4}\b', text)
@@ -260,7 +256,7 @@ def calc_duration(start: str, end: str) -> str:
     return f"{hours} ч. {mins} мин."
 
 # ============================================================
-# FSM — СОСТОЯНИЯ
+# FSM
 # ============================================================
 class ShiftStates(StatesGroup):
     waiting_start_time = State()
@@ -280,7 +276,7 @@ chat1_router = Router()
 chat2_router = Router()
 
 # ============================================================
-# ХЕНДЛЕРЫ: РЕГИСТРАЦИЯ В ЛС
+# РЕГИСТРАЦИЯ В ЛС
 # ============================================================
 @register_router.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: Message, state: FSMContext):
@@ -290,8 +286,7 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer(
             f"✅ Вы уже зарегистрированы!\n\n"
             f"👤 Имя: {user['full_name']}\n"
-            f"🔧 Роль: {role_text}\n\n"
-            f"Теперь вы можете работать в чате BibiBike."
+            f"🔧 Роль: {role_text}"
         )
         return
 
@@ -305,7 +300,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def process_name(message: Message, state: FSMContext):
     full_name = message.text.strip()
     if len(full_name) < 5:
-        await message.answer("❌ Слишком короткое имя. Введите ФИО полностью (например: Иванов И.И.):")
+        await message.answer("❌ Слишком короткое имя. Введите ФИО полностью:")
         return
 
     await state.update_data(full_name=full_name)
@@ -331,15 +326,14 @@ async def process_role(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Регистрация завершена!\n\n"
         f"👤 {full_name}\n"
-        f"🔧 {role_text}\n\n"
-        f"Теперь вы можете работать в чате BibiBike.",
+        f"🔧 {role_text}",
         reply_markup=None
     )
     await state.clear()
-    logger.info(f"Зарегистрирован: {full_name} ({role_text}), ID: {message.from_user.id}")
+    logger.info(f"Зарегистрирован: {full_name} ({role_text})")
 
 # ============================================================
-# ХЕНДЛЕРЫ: ПАРСИНГ ЧАТА 1
+# ПАРСИНГ ЧАТА 1
 # ============================================================
 @chat1_router.message(
     F.chat.id == GROUP_ID,
@@ -369,7 +363,7 @@ async def handle_work_message(message: Message):
         logger.info(f"Действие: {user['full_name']}, {action['action_type']}, коды: {action['bike_codes']}")
 
 # ============================================================
-# ХЕНДЛЕРЫ: УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2)
+# УПРАВЛЕНИЕ СМЕНОЙ (ЧАТ 2)
 # ============================================================
 @chat2_router.message(
     F.chat.id == GROUP_ID,
@@ -382,7 +376,7 @@ async def handle_chat2(message: Message, state: FSMContext):
     if not user:
         await message.answer(
             "❌ Вы не зарегистрированы.\n"
-            "Напишите боту в личные сообщения /start для регистрации."
+            "Напишите боту в личные сообщения /start"
         )
         return
 
@@ -418,7 +412,7 @@ async def process_district(message: Message, state: FSMContext):
     district = message.text.strip()
 
     if district not in DISTRICTS:
-        await message.answer("❌ Пожалуйста, выберите район кнопкой из списка:")
+        await message.answer("❌ Пожалуйста, выберите район кнопкой:")
         return
 
     data = await state.get_data()
@@ -438,7 +432,7 @@ async def process_district(message: Message, state: FSMContext):
         f"👤 {user['full_name']} | {role_text}\n"
         f"🟢 Смену начал: {start_time}\n"
         f"📍 Район: {district}\n\n"
-        f"✅ Смена активна! Можете приступать к работе.",
+        f"✅ Смена активна!",
         reply_markup=get_end_keyboard()
     )
 
@@ -491,32 +485,21 @@ async def process_end_time(message: Message, state: FSMContext):
 
     await message.answer(report, reply_markup=get_start_keyboard())
     await state.clear()
-    logger.info(f"Смена завершена: {user['full_name']}, {duration}, {stats}")
+    logger.info(f"Смена завершена: {user['full_name']}, {duration}")
 
 # ============================================================
 # ЗАПУСК БОТА
 # ============================================================
 async def main():
     await init_db()
-
-    # Создаём прокси-коннектор
-    connector = ProxyConnector.from_url(PROXY_URL)
-
-    # Создаём бота с прокси (правильный способ для aiogram 3.x)
-    bot = Bot(
-        token=BOT_TOKEN,
-        session=AiohttpSession(proxy=PROXY_URL)
-    )
-
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
-
     dp.include_router(register_router)
     dp.include_router(chat1_router)
     dp.include_router(chat2_router)
 
     logger.info("=" * 50)
     logger.info("BibiBike Bot запущен!")
-    logger.info(f"Прокси: {PROXY_URL}")
     logger.info(f"Группа: {GROUP_ID}")
     logger.info("=" * 50)
 
@@ -526,6 +509,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Бот остановлен вручную")
+        logger.info("Бот остановлен")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"Ошибка: {e}")

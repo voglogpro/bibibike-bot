@@ -117,13 +117,29 @@ async def add_action(uid, sid, atype, codes=None, qty=0):
 async def get_stats(sid):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        c = await db.execute("SELECT action_type, COUNT(*) as cnt, SUM(quantity) as qty FROM actions WHERE shift_id = ? GROUP BY action_type", (sid,))
+        
+        c = await db.execute(
+            "SELECT action_type, COUNT(*) as cnt FROM actions WHERE shift_id = ? AND bike_codes != '' GROUP BY action_type",
+            (sid,)
+        )
         rows = await c.fetchall()
+        
+        c2 = await db.execute(
+            "SELECT action_type, SUM(quantity) as qty FROM actions WHERE shift_id = ? GROUP BY action_type",
+            (sid,)
+        )
+        rows2 = await c2.fetchall()
+        
         s = {'move': 0, 'fix': 0, 'repair': 0, 'to_sc': 0, 'from_sc': 0}
+        
         for r in rows:
             if r['action_type'] in s:
-                # Считаем: количество записей + сумма quantity
-                s[r['action_type']] = r['cnt'] + (r['qty'] or 0)
+                s[r['action_type']] = r['cnt']
+        
+        for r in rows2:
+            if r['action_type'] in s and r['qty']:
+                s[r['action_type']] += r['qty']
+        
         return s
 
 # ============================================================

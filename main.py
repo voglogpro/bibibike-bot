@@ -152,95 +152,55 @@ def clean_code(code):
 def parse_message(text):
     """
     Разбирает текст на действия.
-    Поддерживает:
-    - 4-значные коды (с точками на конце)
-    - Количество: "поправил 5"
-    - Фото с подписью (caption)
+    Собирает ВСЕ 4-значные коды, привязывает к найденным ключевым словам.
     """
     text = text.lower().strip()
-    lines = text.split('\n')
-
-    tokens = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Проверяем, вся строка — это код (возможно с точкой)
-        code_match = re.match(r'^(\d{4})[.,;:!?]*$', line)
-        if code_match:
-            tokens.append(('code', code_match.group(1)))
-            continue
-
-        # Ищем ключевые слова в строке
-        found_kw = None
-        for kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц',
-                   'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц',
-                   'ремонт', 'в ремонте', 'поломк', 'сломан',
-                   'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
-                   'поправил', 'выровнял', 'чист', 'поправ']:
-            if kw in line:
-                found_kw = kw
-                break
-
-        if found_kw:
-            tokens.append(('keyword', found_kw))
-
-            # Ищем количество после ключевого слова (число от 1 до 999)
-            qty_match = re.search(r'\b(\d{1,3})\b', line)
-            if qty_match:
-                qty = int(qty_match.group(1))
-                # Проверяем, что это не часть 4-значного кода
-                if not re.search(r'\b\d{4}\b', line):
-                    tokens.append(('quantity', qty))
-
-            # Ищем 4-значные коды в этой же строке
-            codes = re.findall(r'\b(\d{4})[.,;:!?]*\b', line)
-            for code in codes:
-                tokens.append(('code', code))
-        else:
-            # Ищем коды в строке без ключевого слова
-            codes = re.findall(r'\b(\d{4})[.,;:!?]*\b', line)
-            for code in codes:
-                tokens.append(('code', code))
-
-    if not tokens:
+    
+    # Собираем ВСЕ 4-значные коды
+    all_codes = re.findall(r'\b(\d{4})\b', text)
+    
+    # Ищем ключевые слова
+    keywords_found = []
+    for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
+               'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
+               'ремонт', 'поломк', 'сломан',
+               'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
+               'поправил', 'выровнял', 'чист', 'поправ',
+               'на сц', 'из сц']:
+        if kw in text:
+            atype = get_action_type(kw)
+            if atype and atype not in [a['action_type'] for a in keywords_found]:
+                qty = 0
+                qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', text)
+                if qty_match:
+                    num = int(qty_match.group(1))
+                    if not re.search(r'\b\d{4}\b', text):
+                        qty = num
+                
+                keywords_found.append({
+                    'action_type': atype,
+                    'quantity': qty
+                })
+    
+    if not keywords_found:
         return []
-
-    # Группируем
+    
     results = []
-    current_kw = None
-    current_codes = []
-    current_qty = 0
-
-    for ttype, tval in tokens:
-        if ttype == 'keyword':
-            if current_kw and (current_codes or current_qty):
-                atype = get_action_type(current_kw)
-                if atype:
-                    results.append({
-                        'action_type': atype,
-                        'bike_codes': current_codes.copy(),
-                        'quantity': current_qty
-                    })
-            current_kw = tval
-            current_codes = []
-            current_qty = 0
-        elif ttype == 'code':
-            current_codes.append(tval)
-        elif ttype == 'quantity':
-            current_qty = tval
-
-    # Последнее
-    if current_kw:
-        atype = get_action_type(current_kw)
-        if atype:
+    if all_codes:
+        for kw in keywords_found:
             results.append({
-                'action_type': atype,
-                'bike_codes': current_codes.copy(),
-                'quantity': current_qty
+                'action_type': kw['action_type'],
+                'bike_codes': all_codes.copy(),
+                'quantity': 0
             })
-
+    else:
+        for kw in keywords_found:
+            results.append({
+                'action_type': kw['action_type'],
+                'bike_codes': [],
+                'quantity': kw['quantity']
+            })
+    
     return results
 
 

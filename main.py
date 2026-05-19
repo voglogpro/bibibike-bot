@@ -265,8 +265,16 @@ async def work_chat(message: Message):
     if text.startswith('/'):
         return
 
-    # Пропускаем сообщения вида "09:00 фмр" (это команды начала/конца смены)
+     # Пропускаем Чат 2
+    if message.message_thread_id == CHAT2_THREAD_ID:
+        return
+
+    # Пропускаем сообщения вида "09:00 фмр" (это команды)
     if re.match(r'^\d{1,2}:\d{2}\s*', text):
+        return
+
+    # Пропускаем команды
+    if text.startswith('/'):
         return
 
     # Логи
@@ -484,8 +492,8 @@ async def main():
     await init_db()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
-    dp.include_router(work_router)
-    dp.include_router(cmd_router)
+    dp.include_router(cmd_router)   # Сначала команды!
+    dp.include_router(work_router)  # Потом рабочие сообщения
 
     logger.info("=" * 50)
     logger.info("🏍 BibiBike Bot запущен!")

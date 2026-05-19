@@ -250,22 +250,38 @@ cmd_router = Router()
 # ============================================================
 # ЧАТ 1 — ПАРСИНГ (текст + фото с подписью)
 # ============================================================
+# ============================================================
+# ЧАТ 1 — ПАРСИНГ (текст + фото с подписью) + ОТЛАДКА
+# ============================================================
 @work_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT1_THREAD_ID)
 async def work_chat(message: Message):
+    logger.info(f"=== ЧАТ 1: ПОЛУЧЕНО СООБЩЕНИЕ ===")
+    logger.info(f"От: {message.from_user.id} ({message.from_user.full_name})")
+    logger.info(f"Текст: {message.text}")
+    logger.info(f"Caption: {message.caption}")
+    logger.info(f"Тред: {message.message_thread_id}")
+
     user = await get_user(message.from_user.id)
     if not user:
+        logger.info(f"❌ Пользователь {message.from_user.id} не зарегистрирован")
         return
 
     shift = await get_active_shift(message.from_user.id)
     if not shift:
+        logger.info(f"❌ Нет активной смены у {user['full_name']}")
         return
 
     # Читаем текст или подпись к фото/видео/документу
     text = message.text or message.caption or ""
+    logger.info(f"Текст для парсинга: '{text}'")
+
     if not text:
+        logger.info("❌ Нет текста для парсинга")
         return
 
     actions = parse_message(text)
+    logger.info(f"Результат парсинга: {actions}")
+
     for action in actions:
         await add_action(
             message.from_user.id,
@@ -274,7 +290,10 @@ async def work_chat(message: Message):
             action.get('bike_codes', []),
             action.get('quantity', 0)
         )
-        logger.info(f"Записано: {user['full_name']} — {action}")
+        logger.info(f"✅ Записано: {user['full_name']} — {action}")
+
+    if not actions:
+        logger.info("❌ Ничего не распарсилось!")
 
 # ============================================================
 # ЧАТ 2 — РЕГИСТРАЦИЯ + СМЕНЫ

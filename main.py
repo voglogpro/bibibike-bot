@@ -248,39 +248,42 @@ work_router = Router()
 cmd_router = Router()
 
 # ============================================================
-# ЧАТ 1 — ПАРСИНГ (текст + фото с подписью)
+# ЧАТ 1 — ПАРСИНГ (читаем всё, кроме команд)
 # ============================================================
-# ============================================================
-# ЧАТ 1 — ПАРСИНГ (текст + фото с подписью) + ОТЛАДКА
-# ============================================================
-@work_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT1_THREAD_ID)
+@work_router.message(F.chat.id == GROUP_ID)
 async def work_chat(message: Message):
-    logger.info(f"=== ЧАТ 1: ПОЛУЧЕНО СООБЩЕНИЕ ===")
-    logger.info(f"От: {message.from_user.id} ({message.from_user.full_name})")
-    logger.info(f"Текст: {message.text}")
-    logger.info(f"Caption: {message.caption}")
-    logger.info(f"Тред: {message.message_thread_id}")
+    # Пропускаем Чат 2 (команды)
+    if message.message_thread_id == CHAT2_THREAD_ID:
+        return
+
+    # Читаем текст или подпись к фото
+    text = message.text or message.caption or ""
+    if not text:
+        return
+
+    # Пропускаем команды (начинаются с /)
+    if text.startswith('/'):
+        return
+
+    # Пропускаем сообщения вида "09:00 фмр" (это команды начала/конца смены)
+    if re.match(r'^\d{1,2}:\d{2}\s*', text):
+        return
+
+    # Логи
+    logger.info(f"ЧАТ 1: от {message.from_user.id} | текст: '{text}' | тред: {message.message_thread_id}")
 
     user = await get_user(message.from_user.id)
     if not user:
-        logger.info(f"❌ Пользователь {message.from_user.id} не зарегистрирован")
+        logger.info(f"Пропущено: не зарегистрирован")
         return
 
     shift = await get_active_shift(message.from_user.id)
     if not shift:
-        logger.info(f"❌ Нет активной смены у {user['full_name']}")
-        return
-
-    # Читаем текст или подпись к фото/видео/документу
-    text = message.text or message.caption or ""
-    logger.info(f"Текст для парсинга: '{text}'")
-
-    if not text:
-        logger.info("❌ Нет текста для парсинга")
+        logger.info(f"Пропущено: нет активной смены")
         return
 
     actions = parse_message(text)
-    logger.info(f"Результат парсинга: {actions}")
+    logger.info(f"Распаршено: {actions}")
 
     for action in actions:
         await add_action(
@@ -290,10 +293,7 @@ async def work_chat(message: Message):
             action.get('bike_codes', []),
             action.get('quantity', 0)
         )
-        logger.info(f"✅ Записано: {user['full_name']} — {action}")
-
-    if not actions:
-        logger.info("❌ Ничего не распарсилось!")
+        logger.info(f"Записано: {user['full_name']} — {action}")
 
 # ============================================================
 # ЧАТ 2 — РЕГИСТРАЦИЯ + СМЕНЫ

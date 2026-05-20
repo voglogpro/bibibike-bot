@@ -444,28 +444,28 @@ async def cmd_chat(message: Message):
             diff = em - sm
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
-            report = (
-                f"👤 {user['full_name']} | {role_text}\n"
-                f"🟢 Начал: {active_shift['start_time']}\n"
-                f"🔴 Закончил: {time_str}\n"
-                f"⏱ Отработано: {duration}\n"
-                f"📍 Район: {active_shift['district']}\n\n"
-                f"📊 Статистика за смену:\n"
+                       report = (
+                f"{user['full_name']} | {role_text}\n"
+                f"Начал: {active_shift['start_time']}\n"
+                f"Закончил: {time_str}\n"
+                f"Отработано: {duration}\n"
+                f"Район: {active_shift['district']}\n\n"
+                f"Статистика за смену:\n"
             )
 
             if user['role'] == 'scout':
-                report += f"🚲 Перемещено: {stats['move']}\n"
-                report += f"✅ Поправлено: {stats['fix']}\n"
-                report += f"🛠 Ремонт: {stats['repair']}\n"
+                report += f"Перемещено: {stats['move']}\n"
+                report += f"Поправлено: {stats['fix']}\n"
+                report += f"Ремонт: {stats['repair']}\n"
             else:
-                report += f"📦 Привез на СЦ: {stats['to_sc']}\n"
-                report += f"📤 Вывез из СЦ: {stats['from_sc']}\n"
-                report += f"🚲 Перемещено: {stats['move']}\n"
-                report += f"✅ Поправлено: {stats['fix']}\n"
-                report += f"🛠 Ремонт: {stats['repair']}\n"
+                report += f"Привез на СЦ: {stats['to_sc']}\n"
+                report += f"Вывез из СЦ: {stats['from_sc']}\n"
+                report += f"Перемещено: {stats['move']}\n"
+                report += f"Поправлено: {stats['fix']}\n"
+                report += f"Ремонт: {stats['repair']}\n"
 
             if comment:
-                report += f"\n💬 Комментарий: {comment}"
+                report += f"\nКомментарий: {comment}"
 
             try:
                 await message.delete()

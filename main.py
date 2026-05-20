@@ -11,8 +11,8 @@ from aiogram.filters import Command
 # ============================================================
 BOT_TOKEN = "8897464834:AAGMgpcYbto51407Rxgz7NE5DllYam5-s-I"
 GROUP_ID = -1003895375312
-CHAT1_THREAD_ID = 1   # Рабочий чат (только читаем)
-CHAT2_THREAD_ID = 2   # Отчеты (команды и итоги)
+CHAT1_THREAD_ID = 1
+CHAT2_THREAD_ID = 2
 
 DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр"]
 
@@ -62,7 +62,6 @@ async def init_db():
         await db.commit()
     logger.info("БД готова")
 
-# --- USERS ---
 async def add_user(uid, name, role):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)", (uid, name, role))
@@ -75,7 +74,6 @@ async def get_user(uid):
         r = await c.fetchone()
         return dict(r) if r else None
 
-# --- SHIFTS ---
 async def get_active_shift(uid):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -104,7 +102,6 @@ async def end_shift(uid, time, comment=""):
         r = await c.fetchone()
         return r[0] if r else None
 
-# --- ACTIONS ---
 async def add_action(uid, sid, atype, codes=None, qty=0):
     cstr = ",".join(codes) if codes else ""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -117,52 +114,31 @@ async def add_action(uid, sid, atype, codes=None, qty=0):
 async def get_stats(sid):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        
-        # Получаем все записи для этой смены
         c = await db.execute(
             "SELECT action_type, bike_codes, quantity FROM actions WHERE shift_id = ?",
             (sid,)
         )
         rows = await c.fetchall()
-        
         s = {'move': 0, 'fix': 0, 'repair': 0, 'to_sc': 0, 'from_sc': 0}
-        
         for r in rows:
             atype = r['action_type']
             if atype in s:
-                # Считаем коды: если bike_codes не пустой — считаем количество кодов через запятую
                 codes = r['bike_codes']
                 if codes:
                     s[atype] += len(codes.split(','))
-                # Добавляем quantity
                 if r['quantity']:
                     s[atype] += r['quantity']
-        
         return s
-# ============================================================
-# ПАРСИНГ (v3 — коды с точками + количество)
-# ============================================================
-def clean_code(code):
-    """Убирает точку, запятую, скобку в конце кода."""
-    return code.rstrip('.,;:!?()[]{}')
 
+# ============================================================
+# ПАРСИНГ
+# ============================================================
 def parse_message(text):
-    """
-    Собирает ВСЕ 4-значные коды.
-    Для каждого ключевого слова создаёт действие.
-    Если есть количество (число 1-999) — использует его вместо кодов.
-    """
     text = text.lower().strip()
-    
-    # Собираем ВСЕ 4-значные коды
     all_codes = re.findall(r'\b(\d{4})\b', text)
-    
-    # Ищем ключевые слова и количество
     keywords_found = []
-    
-    # Разбиваем на строки для поиска количества рядом с ключевым словом
     lines = text.split('\n')
-    
+
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
                'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
                'ремонт', 'поломк', 'сломан',
@@ -173,57 +149,33 @@ def parse_message(text):
             atype = get_action_type(kw)
             if atype and atype not in [a['action_type'] for a in keywords_found]:
                 qty = 0
-                
-                # Ищем количество В ТОЙ ЖЕ СТРОКЕ, где ключевое слово
                 for line in lines:
                     if kw in line:
-                        # Ищем число 1-999 в этой строке
                         qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
                         if qty_match:
                             num = int(qty_match.group(1))
-                            # Убедимся, что это не часть 4-значного кода
                             if not re.search(r'\b\d{4}\b', line):
                                 qty = num
                         break
-                
-                keywords_found.append({
-                    'action_type': atype,
-                    'quantity': qty
-                })
-    
+                keywords_found.append({'action_type': atype, 'quantity': qty})
+
     if not keywords_found:
         return []
-    
-    # Разделяем: действия с количеством и действия с кодами
+
     qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
     code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
-    
     results = []
-    
-    # Действия с количеством — без кодов
+
     for kw in qty_actions:
-        results.append({
-            'action_type': kw['action_type'],
-            'bike_codes': [],
-            'quantity': kw['quantity']
-        })
-    
-    # Действия без количества — с кодами
+        results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
+
     if all_codes:
         for kw in code_actions:
-            results.append({
-                'action_type': kw['action_type'],
-                'bike_codes': all_codes.copy(),
-                'quantity': 0
-            })
+            results.append({'action_type': kw['action_type'], 'bike_codes': all_codes.copy(), 'quantity': 0})
     else:
         for kw in code_actions:
-            results.append({
-                'action_type': kw['action_type'],
-                'bike_codes': [],
-                'quantity': 0
-            })
-    
+            results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': 0})
+
     return results
 
 
@@ -232,7 +184,7 @@ def get_action_type(kw):
         return 'to_sc'
     if kw in ['вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц']:
         return 'from_sc'
-    if kw in ['ремонт', 'в ремонте', 'поломк', 'сломан']:
+    if kw in ['ремонт', 'поломк', 'сломан']:
         return 'repair'
     if kw in ['переместил', 'перенес', 'перенёс', 'переставил', 'перемещ']:
         return 'move'
@@ -247,115 +199,90 @@ work_router = Router()
 cmd_router = Router()
 
 # ============================================================
-# ЧАТ 1 — ПАРСИНГ (читаем всё, кроме команд)
+# ЧАТ 1
 # ============================================================
 @work_router.message(F.chat.id == GROUP_ID)
 async def work_chat(message: Message):
-    # Пропускаем Чат 2 (команды)
     if message.message_thread_id == CHAT2_THREAD_ID:
         return
 
-    # Читаем текст или подпись к фото
     text = message.text or message.caption or ""
     if not text:
         return
-
-    # Пропускаем команды (начинаются с /)
     if text.startswith('/'):
         return
-
-     # Пропускаем Чат 2
-    if message.message_thread_id == CHAT2_THREAD_ID:
-        return
-
-    # Пропускаем сообщения вида "09:00 фмр" (это команды)
     if re.match(r'^\d{1,2}:\d{2}\s*', text):
         return
 
-    # Пропускаем команды
-    if text.startswith('/'):
-        return
-
-    # Логи
     logger.info(f"ЧАТ 1: от {message.from_user.id} | текст: '{text}' | тред: {message.message_thread_id}")
 
     user = await get_user(message.from_user.id)
     if not user:
-        logger.info(f"Пропущено: не зарегистрирован")
+        logger.info("Пропущено: не зарегистрирован")
         return
 
     shift = await get_active_shift(message.from_user.id)
     if not shift:
-        logger.info(f"Пропущено: нет активной смены")
+        logger.info("Пропущено: нет активной смены")
         return
 
     actions = parse_message(text)
     logger.info(f"Распаршено: {actions}")
 
     for action in actions:
-        await add_action(
-            message.from_user.id,
-            shift['id'],
-            action['action_type'],
-            action.get('bike_codes', []),
-            action.get('quantity', 0)
-        )
+        await add_action(message.from_user.id, shift['id'], action['action_type'],
+                         action.get('bike_codes', []), action.get('quantity', 0))
         logger.info(f"Записано: {user['full_name']} — {action}")
 
 # ============================================================
-# ЧАТ 2 — РЕГИСТРАЦИЯ + СМЕНЫ
+# ЧАТ 2
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
     user = await get_user(message.from_user.id)
     text = (message.text or message.caption or "").strip()
 
-    # === ПОМОЩЬ ===
     if text == "/help":
         await message.answer(
-            "📋 **BibiBike — как работать:**\n\n"
-            "**Регистрация (1 раз):**\n"
-            "`Понамарев К.А. скаут`\n\n"
-            "**Начать смену:**\n"
-            "`09:00 фмр`\n\n"
-            "**Закончить смену:**\n"
-            "`18:00`\n"
-            "`18:00 Комментарий`\n\n"
-            "**Статус:** `/status`\n"
-            f"**Районы:** {', '.join(DISTRICTS)}"
+            "BibiBike - команды:\n\n"
+            "Регистрация (1 раз):\n"
+            "Фамилия И.О. скаут\n\n"
+            "Начать смену:\n"
+            "09:00 фмр\n\n"
+            "Закончить смену:\n"
+            "18:00\n"
+            "18:00 Комментарий\n\n"
+            "Статус: /status\n"
+            f"Районы: {', '.join(DISTRICTS)}"
         )
         return
 
-    # === СТАТУС ===
     if text == "/status":
         if not user:
-            await message.answer("❌ Вы не зарегистрированы.")
+            await message.answer("Вы не зарегистрированы.")
             return
         shift = await get_active_shift(user['user_id'])
         if shift:
             role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
             await message.answer(
-                f"👤 {user['full_name']} | {role_text}\n"
-                f"🟢 Активная смена с {shift['start_time']}\n"
-                f"📍 {shift['district']}"
+                f"{user['full_name']} | {role_text}\n"
+                f"Активная смена с {shift['start_time']}\n"
+                f"Район: {shift['district']}"
             )
         else:
-            await message.answer("❌ Нет активной смены.")
+            await message.answer("Нет активной смены.")
         return
 
-    # === РЕГИСТРАЦИЯ (если ещё не зарегистрирован) ===
     if not user:
-        # Формат: Фамилия И.О. роль
         parts = text.split()
         if len(parts) >= 2:
-            # Последнее слово — роль
             role_word = parts[-1].lower()
             if role_word in ["скаут", "scout"]:
                 role = "scout"
             elif role_word in ["водитель", "driver", "вод"]:
                 role = "driver"
             else:
-                await message.answer("❌ Укажите роль: скаут или водитель\nПример: Понамарев К.А. скаут")
+                await message.answer("Укажите роль: скаут или водитель\nПример: Понамарев К.А. скаут")
                 return
 
             full_name = " ".join(parts[:-1])
@@ -368,25 +295,21 @@ async def cmd_chat(message: Message):
 
             role_text = "Скаут" if role == 'scout' else 'Водитель'
             await message.answer(
-                f"✅ Запомнил!\n\n"
-                f"👤 {full_name} | {role_text}\n\n"
-                f"Теперь напиши время и район для начала смены.\n"
+                f"Запомнил: {full_name} | {role_text}\n\n"
+                f"Для начала смены напиши время и район.\n"
                 f"Например: 09:00 фмр"
             )
             logger.info(f"Зарегистрирован: {full_name} ({role_text})")
             return
         else:
             await message.answer(
-                "❌ Вы не зарегистрированы.\n"
+                "Вы не зарегистрированы.\n"
                 "Напишите: Фамилия И.О. роль\n"
                 "Например: Понамарев К.А. скаут"
             )
             return
 
-    # === ПОЛЬЗОВАТЕЛЬ ЗАРЕГИСТРИРОВАН ===
     active_shift = await get_active_shift(user['user_id'])
-
-    # Пробуем распарсить как время (ЧЧ:ММ ...)
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
@@ -394,8 +317,6 @@ async def cmd_chat(message: Message):
         extra = time_match.group(2).strip()
 
         if not active_shift:
-            # === НАЧАЛО СМЕНЫ ===
-            # extra = район (возможно + комментарий, но при старте — только район)
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
                 await start_shift(user['user_id'], user['full_name'], user['role'], time_str, district)
@@ -407,34 +328,31 @@ async def cmd_chat(message: Message):
 
                 role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
                 await message.answer(
-                    f"✅ Смена начата!\n\n"
-                    f"👤 {user['full_name']} | {role_text}\n"
-                    f"🟢 Начал: {time_str}\n"
-                    f"📍 Район: {district}"
+                    f"Смена начата.\n\n"
+                    f"{user['full_name']} | {role_text}\n"
+                    f"Начал: {time_str}\n"
+                    f"Район: {district}"
                 )
                 logger.info(f"Смена начата: {user['full_name']}, {time_str}, {district}")
                 return
             else:
                 await message.answer(
-                    f"❌ Укажите район.\n"
+                    f"Укажите район.\n"
                     f"Формат: 09:00 фмр\n"
                     f"Доступны: {', '.join(DISTRICTS)}"
                 )
                 return
 
         else:
-            # === КОНЕЦ СМЕНЫ ===
             comment = extra if extra else ""
-
             sid = await end_shift(user['user_id'], time_str, comment)
             if not sid:
-                await message.answer("❌ Ошибка завершения смены!")
+                await message.answer("Ошибка завершения смены.")
                 return
 
             stats = await get_stats(sid)
             role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
 
-            # Расчёт времени
             sp = active_shift['start_time'].split(':')
             ep = time_str.split(':')
             sm = int(sp[0]) * 60 + int(sp[1])
@@ -444,7 +362,7 @@ async def cmd_chat(message: Message):
             diff = em - sm
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
-                                report = (
+            report = (
                 f"{user['full_name']} | {role_text}\n"
                 f"Начал: {active_shift['start_time']}\n"
                 f"Закончил: {time_str}\n"
@@ -476,12 +394,11 @@ async def cmd_chat(message: Message):
             logger.info(f"Смена завершена: {user['full_name']}, {duration}")
             return
 
-    # Если не время — неизвестная команда
     await message.answer(
-        f"❌ Неизвестный формат.\n\n"
-        f"Начать смену: 09:00 фмр\n"
-        f"Закончить: 18:00 или 18:00 Комментарий\n"
-        f"Помощь: /help"
+        "Неизвестный формат.\n\n"
+        "Начать смену: 09:00 фмр\n"
+        "Закончить: 18:00 или 18:00 Комментарий\n"
+        "Помощь: /help"
     )
 
 # ============================================================
@@ -491,11 +408,11 @@ async def main():
     await init_db()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
-    dp.include_router(cmd_router)   # Сначала команды!
-    dp.include_router(work_router)  # Потом рабочие сообщения
+    dp.include_router(cmd_router)
+    dp.include_router(work_router)
 
     logger.info("=" * 50)
-    logger.info("🏍 BibiBike Bot запущен!")
+    logger.info("BibiBike Bot запущен!")
     logger.info(f"Группа: {GROUP_ID}")
     logger.info(f"Чат 1 (рабочий): тред {CHAT1_THREAD_ID}")
     logger.info(f"Чат 2 (отчеты): тред {CHAT2_THREAD_ID}")

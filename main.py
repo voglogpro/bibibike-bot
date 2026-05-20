@@ -444,7 +444,7 @@ async def cmd_chat(message: Message):
             diff = em - sm
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
-                       report = (
+                                report = (
                 f"{user['full_name']} | {role_text}\n"
                 f"Начал: {active_shift['start_time']}\n"
                 f"Закончил: {time_str}\n"

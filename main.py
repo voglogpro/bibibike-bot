@@ -118,30 +118,27 @@ async def get_stats(sid):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         
+        # Получаем все записи для этой смены
         c = await db.execute(
-            "SELECT action_type, COUNT(*) as cnt FROM actions WHERE shift_id = ? AND bike_codes != '' GROUP BY action_type",
+            "SELECT action_type, bike_codes, quantity FROM actions WHERE shift_id = ?",
             (sid,)
         )
         rows = await c.fetchall()
         
-        c2 = await db.execute(
-            "SELECT action_type, SUM(quantity) as qty FROM actions WHERE shift_id = ? GROUP BY action_type",
-            (sid,)
-        )
-        rows2 = await c2.fetchall()
-        
         s = {'move': 0, 'fix': 0, 'repair': 0, 'to_sc': 0, 'from_sc': 0}
         
         for r in rows:
-            if r['action_type'] in s:
-                s[r['action_type']] = r['cnt']
-        
-        for r in rows2:
-            if r['action_type'] in s and r['qty']:
-                s[r['action_type']] += r['qty']
+            atype = r['action_type']
+            if atype in s:
+                # Считаем коды: если bike_codes не пустой — считаем количество кодов через запятую
+                codes = r['bike_codes']
+                if codes:
+                    s[atype] += len(codes.split(','))
+                # Добавляем quantity
+                if r['quantity']:
+                    s[atype] += r['quantity']
         
         return s
-
 # ============================================================
 # ПАРСИНГ (v3 — коды с точками + количество)
 # ============================================================

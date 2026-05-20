@@ -179,23 +179,37 @@ def parse_message(text):
                     'quantity': qty
                 })
     
-    if not keywords_found:
+        if not keywords_found:
         return []
     
+    # Разделяем: действия с количеством и действия с кодами
+    qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
+    code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
+    
     results = []
+    
+    # Действия с количеством — без кодов
+    for kw in qty_actions:
+        results.append({
+            'action_type': kw['action_type'],
+            'bike_codes': [],
+            'quantity': kw['quantity']
+        })
+    
+    # Действия без количества — с кодами
     if all_codes:
-        for kw in keywords_found:
+        for kw in code_actions:
             results.append({
                 'action_type': kw['action_type'],
                 'bike_codes': all_codes.copy(),
                 'quantity': 0
             })
     else:
-        for kw in keywords_found:
+        for kw in code_actions:
             results.append({
                 'action_type': kw['action_type'],
                 'bike_codes': [],
-                'quantity': kw['quantity']
+                'quantity': 0
             })
     
     return results

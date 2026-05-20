@@ -148,16 +148,21 @@ def clean_code(code):
 
 def parse_message(text):
     """
-    Разбирает текст на действия.
-    Собирает ВСЕ 4-значные коды, привязывает к найденным ключевым словам.
+    Собирает ВСЕ 4-значные коды.
+    Для каждого ключевого слова создаёт действие.
+    Если есть количество (число 1-999) — использует его вместо кодов.
     """
     text = text.lower().strip()
     
     # Собираем ВСЕ 4-значные коды
     all_codes = re.findall(r'\b(\d{4})\b', text)
     
-    # Ищем ключевые слова
+    # Ищем ключевые слова и количество
     keywords_found = []
+    
+    # Разбиваем на строки для поиска количества рядом с ключевым словом
+    lines = text.split('\n')
+    
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
                'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
                'ремонт', 'поломк', 'сломан',
@@ -168,18 +173,25 @@ def parse_message(text):
             atype = get_action_type(kw)
             if atype and atype not in [a['action_type'] for a in keywords_found]:
                 qty = 0
-                qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', text)
-                if qty_match:
-                    num = int(qty_match.group(1))
-                    if not re.search(r'\b\d{4}\b', text):
-                        qty = num
+                
+                # Ищем количество В ТОЙ ЖЕ СТРОКЕ, где ключевое слово
+                for line in lines:
+                    if kw in line:
+                        # Ищем число 1-999 в этой строке
+                        qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
+                        if qty_match:
+                            num = int(qty_match.group(1))
+                            # Убедимся, что это не часть 4-значного кода
+                            if not re.search(r'\b\d{4}\b', line):
+                                qty = num
+                        break
                 
                 keywords_found.append({
                     'action_type': atype,
                     'quantity': qty
                 })
     
-        if not keywords_found:
+    if not keywords_found:
         return []
     
     # Разделяем: действия с количеством и действия с кодами

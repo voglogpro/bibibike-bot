@@ -137,8 +137,8 @@ async def get_stats(sid):
 def parse_message(text):
     """
     Коды привязываются к каждому ключевому слову.
-    Каждое слово получает все коды, собранные ДО него.
-    Коды не сбрасываются между словами.
+    Каждое слово получает коды, собранные ДО него.
+    После обработки ключевых слов коды сбрасываются.
     """
     text = text.lower().strip()
     lines = text.split('\n')
@@ -189,6 +189,10 @@ def parse_message(text):
                     'bike_codes': current_codes.copy() if current_codes else [],
                     'quantity': 0
                 })
+        
+        # Сбрасываем коды после обработки ключевых слов
+        if keywords_in_line:
+            current_codes = []
     
     return results
 

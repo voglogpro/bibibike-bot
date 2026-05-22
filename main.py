@@ -135,11 +135,6 @@ async def get_stats(sid):
 # ПАРСИНГ
 # ============================================================
 def parse_message(text):
-    """
-    Переместил, на сц, вывез с сц — получают ВСЕ коды перед собой, сбрасывают коды.
-    Поправил — получает ВСЕ коды перед собой, сбрасывает коды.
-    Ремонт — получает ТОЛЬКО коды из своей строки, его коды удаляются из общей копилки.
-    """
     text = text.lower().strip()
     lines = text.split('\n')
     
@@ -191,18 +186,13 @@ def parse_message(text):
                     'quantity': 0
                 })
         
-        # Сброс кодов после ключевых слов
+        # Сброс кодов: ремонт не сбрасывает, остальные сбрасывают
         if keywords_in_line:
-            if 'repair' in keywords_in_line:
-                # Убираем коды из строки с ремонтом из общей копилки
-                for code in codes_in_line:
-                    if code in current_codes:
-                        current_codes.remove(code)
-            else:
-                # Полный сброс для остальных действий
+            if 'repair' not in keywords_in_line:
                 current_codes = []
     
     return results
+    
 def get_action_type(kw):
     if kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц']:
         return 'to_sc'

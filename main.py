@@ -136,9 +136,9 @@ async def get_stats(sid):
 # ============================================================
 def parse_message(text):
     """
-    Коды привязываются к каждому ключевому слову.
-    Каждое слово получает коды, собранные ДО него.
-    После обработки ключевых слов коды сбрасываются.
+    Переместил, на сц, вывез с сц — получают ВСЕ коды перед собой.
+    Ремонт — получает ТОЛЬКО коды из своей строки.
+    Поправил — получает ТОЛЬКО коды из своей строки, либо количество.
     """
     text = text.lower().strip()
     lines = text.split('\n')
@@ -151,11 +151,9 @@ def parse_message(text):
         if not line:
             continue
         
-        # Ищем коды в строке
         codes_in_line = re.findall(r'\b(\d{4})\b', line)
         current_codes.extend(codes_in_line)
         
-        # Ищем ключевые слова в строке
         keywords_in_line = []
         for kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц',
                    'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц',
@@ -167,9 +165,7 @@ def parse_message(text):
                 if atype and atype not in keywords_in_line:
                     keywords_in_line.append(atype)
         
-        # Для каждого ключевого слова создаём действие
         for atype in keywords_in_line:
-            # Ищем количество
             qty = 0
             qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
             if qty_match:
@@ -184,18 +180,20 @@ def parse_message(text):
                     'quantity': qty
                 })
             else:
+                # Ремонт и поправил — только коды из своей строки
+                if atype in ['repair', 'fix']:
+                    codes = codes_in_line.copy() if codes_in_line else []
+                else:
+                    # Переместил, на сц, вывез — все собранные коды
+                    codes = current_codes.copy() if current_codes else []
+                
                 results.append({
                     'action_type': atype,
-                    'bike_codes': current_codes.copy() if current_codes else [],
+                    'bike_codes': codes,
                     'quantity': 0
                 })
-        
-        # Сбрасываем коды после обработки ключевых слов
-        if keywords_in_line:
-            current_codes = []
     
     return results
-
 
 def get_action_type(kw):
     if kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц']:

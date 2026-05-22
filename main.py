@@ -135,56 +135,73 @@ async def get_stats(sid):
 # ПАРСИНГ
 # ============================================================
 def parse_message(text):
+    """
+    Разбирает текст на действия.
+    Коды привязываются к ближайшему ключевому слову ПЕРЕД ними.
+    Если в строке и код, и ключевое слово — привязывается к этому слову.
+    """
     text = text.lower().strip()
-    all_codes = re.findall(r'\b(\d{4})\b', text)
     lines = text.split('\n')
     
-    # Коды из строк с ремонтом
-    repair_codes = []
+    results = []  # Итоговый список действий
+    current_codes = []  # Коды, собранные перед ключевым словом
+    
     for line in lines:
-        if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
-            repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
-    
-    # Ищем ключевые слова
-    keywords_found = []
-    
-    for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
-               'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
-               'ремонт', 'поломк', 'сломан',
-               'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
-               'поправил', 'выровнял', 'чист', 'поправ',
-               'на сц', 'из сц']:
-        if kw in text:
-            atype = get_action_type(kw)
-            if atype and atype not in [a['action_type'] for a in keywords_found]:
-                qty = 0
-                for line in lines:
-                    if kw in line:
-                        qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
-                        if qty_match:
-                            num = int(qty_match.group(1))
-                            if not re.search(r'\b\d{4}\b', line):
-                                qty = num
-                        break
-                keywords_found.append({'action_type': atype, 'quantity': qty})
-    
-    if not keywords_found:
-        return []
-    
-    qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
-    code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
-    results = []
-    
-    for kw in qty_actions:
-        results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
-    
-    for kw in code_actions:
-        if kw['action_type'] == 'repair':
-            codes = repair_codes.copy() if repair_codes else []
-        else:
-            codes = all_codes.copy() if all_codes else []
+        line = line.strip()
+        if not line:
+            continue
         
-        results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
+        # Ищем коды в строке
+        codes_in_line = re.findall(r'\b(\d{4})\b', line)
+        current_codes.extend(codes_in_line)
+        
+        # Ищем ключевые слова в строке
+        keywords_in_line = []
+        for kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц',
+                   'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц',
+                   'ремонт', 'поломк', 'сломан',
+                   'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
+                   'поправил', 'выровнял', 'чист', 'поправ']:
+            if kw in line:
+                atype = get_action_type(kw)
+                if atype and atype not in keywords_in_line:
+                    keywords_in_line.append(atype)
+        
+        # Если есть ключевые слова — фиксируем действие
+        for atype in keywords_in_line:
+            # Ищем количество в этой строке
+            qty = 0
+            qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
+            if qty_match:
+                num = int(qty_match.group(1))
+                if not re.search(r'\b\d{4}\b', line):
+                    qty = num
+            
+            if qty > 0:
+                # Действие с количеством
+                results.append({
+                    'action_type': atype,
+                    'bike_codes': [],
+                    'quantity': qty
+                })
+            else:
+                # Действие с кодами
+                if current_codes:
+                    results.append({
+                        'action_type': atype,
+                        'bike_codes': current_codes.copy(),
+                        'quantity': 0
+                    })
+                else:
+                    results.append({
+                        'action_type': atype,
+                        'bike_codes': [],
+                        'quantity': 0
+                    })
+            
+            # Если в строке были коды — сбрасываем их для следующего действия
+            if codes_in_line:
+                current_codes = []
     
     return results
 

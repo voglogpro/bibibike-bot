@@ -136,15 +136,15 @@ async def get_stats(sid):
 # ============================================================
 def parse_message(text):
     """
-    Разбирает текст на действия.
-    Коды привязываются к ближайшему ключевому слову ПЕРЕД ними.
-    Если в строке и код, и ключевое слово — привязывается к этому слову.
+    Коды привязываются к каждому ключевому слову.
+    Каждое слово получает все коды, собранные ДО него.
+    Коды не сбрасываются между словами.
     """
     text = text.lower().strip()
     lines = text.split('\n')
     
-    results = []  # Итоговый список действий
-    current_codes = []  # Коды, собранные перед ключевым словом
+    results = []
+    current_codes = []
     
     for line in lines:
         line = line.strip()
@@ -167,9 +167,9 @@ def parse_message(text):
                 if atype and atype not in keywords_in_line:
                     keywords_in_line.append(atype)
         
-        # Если есть ключевые слова — фиксируем действие
+        # Для каждого ключевого слова создаём действие
         for atype in keywords_in_line:
-            # Ищем количество в этой строке
+            # Ищем количество
             qty = 0
             qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
             if qty_match:
@@ -178,30 +178,17 @@ def parse_message(text):
                     qty = num
             
             if qty > 0:
-                # Действие с количеством
                 results.append({
                     'action_type': atype,
                     'bike_codes': [],
                     'quantity': qty
                 })
             else:
-                # Действие с кодами
-                if current_codes:
-                    results.append({
-                        'action_type': atype,
-                        'bike_codes': current_codes.copy(),
-                        'quantity': 0
-                    })
-                else:
-                    results.append({
-                        'action_type': atype,
-                        'bike_codes': [],
-                        'quantity': 0
-                    })
-            
-            # Если в строке были коды — сбрасываем их для следующего действия
-            if codes_in_line:
-                current_codes = []
+                results.append({
+                    'action_type': atype,
+                    'bike_codes': current_codes.copy() if current_codes else [],
+                    'quantity': 0
+                })
     
     return results
 

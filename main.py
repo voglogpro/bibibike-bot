@@ -180,13 +180,10 @@ def parse_message(text):
                     'quantity': qty
                 })
             else:
-                # Ремонт и поправил — только коды из своей строки
-                                if atype in ['repair', 'fix']:
-                    # Ищем коды в этой строке (могли уже уйти в current_codes)
+                if atype in ['repair', 'fix']:
                     line_codes = re.findall(r'\b(\d{4})\b', line)
                     codes = line_codes.copy() if line_codes else []
                 else:
-                    # Переместил, на сц, вывез — все собранные коды
                     codes = current_codes.copy() if current_codes else []
                 
                 results.append({

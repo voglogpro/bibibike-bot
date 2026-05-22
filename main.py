@@ -1,4 +1,5 @@
 import asyncio
+import os
 import logging
 import re
 import aiosqlite
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # БАЗА ДАННЫХ
 # ============================================================
-DB_PATH = "bibibike_work.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bibibike_work.db")
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:

@@ -151,9 +151,11 @@ def parse_message(text):
         if not line:
             continue
         
+        # Коды в этой строке
         codes_in_line = re.findall(r'\b(\d{4})\b', line)
         current_codes.extend(codes_in_line)
         
+        # Ключевые слова в этой строке
         keywords_in_line = []
         for kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц',
                    'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц',
@@ -181,8 +183,10 @@ def parse_message(text):
                 })
             else:
                 if atype in ['repair', 'fix']:
-                    codes = line_codes.copy() if line_codes else []
+                    # Только коды из этой строки
+                    codes = codes_in_line.copy() if codes_in_line else []
                 else:
+                    # Все собранные коды
                     codes = current_codes.copy() if current_codes else []
                 
                 results.append({

@@ -136,9 +136,17 @@ async def get_stats(sid):
 def parse_message(text):
     text = text.lower().strip()
     all_codes = re.findall(r'\b(\d{4})\b', text)
-    keywords_found = []
     lines = text.split('\n')
-
+    
+    # Коды из строк с ремонтом
+    repair_codes = []
+    for line in lines:
+        if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
+            repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
+    
+    # Ищем ключевые слова
+    keywords_found = []
+    
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
                'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
                'ремонт', 'поломк', 'сломан',
@@ -158,24 +166,25 @@ def parse_message(text):
                                 qty = num
                         break
                 keywords_found.append({'action_type': atype, 'quantity': qty})
-
+    
     if not keywords_found:
         return []
-
+    
     qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
     code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
     results = []
-
+    
     for kw in qty_actions:
         results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
-
-    if all_codes:
-        for kw in code_actions:
-            results.append({'action_type': kw['action_type'], 'bike_codes': all_codes.copy(), 'quantity': 0})
-    else:
-        for kw in code_actions:
-            results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': 0})
-
+    
+    for kw in code_actions:
+        if kw['action_type'] == 'repair':
+            codes = repair_codes.copy() if repair_codes else []
+        else:
+            codes = all_codes.copy() if all_codes else []
+        
+        results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
+    
     return results
 
 

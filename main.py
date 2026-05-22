@@ -135,6 +135,11 @@ async def get_stats(sid):
 # ПАРСИНГ
 # ============================================================
 def parse_message(text):
+    """
+    Переместил, на сц, вывез с сц — получают ВСЕ коды перед собой.
+    Ремонт — получает ТОЛЬКО коды из своей строки, НЕ сбрасывает коды.
+    Поправил — получает ВСЕ коды перед собой, сбрасывает коды.
+    """
     text = text.lower().strip()
     lines = text.split('\n')
     
@@ -175,10 +180,11 @@ def parse_message(text):
                     'quantity': qty
                 })
             else:
-                if atype in ['repair', 'fix']:
-                    # Для ремонта и поправил: коды из своей строки + все коды перед этой строкой
-                    codes = current_codes.copy() if current_codes else []
+                if atype == 'repair':
+                    # Ремонт: только коды из своей строки
+                    codes = codes_in_line.copy() if codes_in_line else []
                 else:
+                    # Остальные: все собранные коды
                     codes = current_codes.copy() if current_codes else []
                 
                 results.append({
@@ -187,9 +193,14 @@ def parse_message(text):
                     'quantity': 0
                 })
         
-        # После ключевых слов сбрасываем коды
+        # Сбрасываем коды после НЕ-ремонтных ключевых слов
         if keywords_in_line:
-            current_codes = []
+            has_repair = any(kw == 'repair' for kw in keywords_in_line)
+            has_other = any(kw != 'repair' for kw in keywords_in_line)
+            if has_other and not has_repair:
+                current_codes = []
+            elif has_other and has_repair:
+                current_codes = []
     
     return results
 

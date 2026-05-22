@@ -181,7 +181,6 @@ def parse_message(text):
                 })
             else:
                 if atype in ['repair', 'fix']:
-                    line_codes = re.findall(r'\b(\d{4})\b', line)
                     codes = line_codes.copy() if line_codes else []
                 else:
                     codes = current_codes.copy() if current_codes else []

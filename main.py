@@ -160,7 +160,7 @@ def parse_message(text):
                 qty = 0
                 for line in lines:
                     if kw in line:
-                        qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)', line)
+                        qty_match = re.search(r'(?<!\d)(\d{1,3})(?!\d)(?![а-яa-z])', line)
                         if qty_match:
                             num = int(qty_match.group(1))
                             if not re.search(r'\b\d{4}\b', line):

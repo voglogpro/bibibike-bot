@@ -1,5 +1,4 @@
 import asyncio
-import os
 import logging
 import re
 import aiosqlite
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # БАЗА ДАННЫХ
 # ============================================================
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bibibike_work.db")
+DB_PATH = "bibibike_work.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -139,13 +138,11 @@ def parse_message(text):
     all_codes = re.findall(r'\b(\d{4})\b', text)
     lines = text.split('\n')
     
-    # Коды из строк с ремонтом
     repair_codes = []
     for line in lines:
         if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
             repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
     
-    # Ищем ключевые слова
     keywords_found = []
     
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
@@ -183,11 +180,11 @@ def parse_message(text):
             codes = repair_codes.copy() if repair_codes else []
         else:
             codes = all_codes.copy() if all_codes else []
-        
         results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
     
     return results
-    
+
+
 def get_action_type(kw):
     if kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц']:
         return 'to_sc'
@@ -200,6 +197,16 @@ def get_action_type(kw):
     if kw in ['поправил', 'выровнял', 'чист', 'поправ']:
         return 'fix'
     return None
+
+# ============================================================
+# ФУНКЦИЯ АВТОУДАЛЕНИЯ
+# ============================================================
+async def auto_delete(msg: Message, delay: int = 60):
+    await asyncio.sleep(delay)
+    try:
+        await msg.delete()
+    except:
+        pass
 
 # ============================================================
 # РОУТЕРЫ
@@ -223,16 +230,10 @@ async def work_chat(message: Message):
     if re.match(r'^\d{1,2}:\d{2}\s*', text):
         return
 
-    logger.info(f"ЧАТ 1: от {message.from_user.id} | текст: '{text}' | тред: {message.message_thread_id}")
-
-    user = await get_user(message.from_user.id)
-    if not user:
-        logger.info("Пропущено: не зарегистрирован")
-        return
+    logger.info(f"ЧАТ 1: от {message.from_user.id} | текст: '{text}'")
 
     shift = await get_active_shift(message.from_user.id)
     if not shift:
-        logger.info("Пропущено: нет активной смены")
         return
 
     actions = parse_message(text)
@@ -241,7 +242,7 @@ async def work_chat(message: Message):
     for action in actions:
         await add_action(message.from_user.id, shift['id'], action['action_type'],
                          action.get('bike_codes', []), action.get('quantity', 0))
-        logger.info(f"Записано: {user['full_name']} — {action}")
+        logger.info(f"Записано: {shift['full_name']} — {action}")
 
 # ============================================================
 # ЧАТ 2
@@ -249,31 +250,70 @@ async def work_chat(message: Message):
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
     user_id = message.from_user.id
-    full_name = message.from_user.full_name
+    user = await get_user(user_id)
+    full_name = user['full_name'] if user else message.from_user.full_name
+    role = user['role'] if user else ""
     text = (message.text or message.caption or "").strip()
 
+    # Удаляем сообщение пользователя
+    try:
+        await message.delete()
+    except:
+        pass
+
+    # /help
     if text == "/help":
-        await message.answer(
+        msg = await message.answer(
             "BibiBike - команды:\n\n"
             "Начать смену:\n09:00 фмр\n\n"
             "Закончить смену:\n18:00\n18:00 Комментарий\n\n"
-            "Статус: /status\n"
-            f"Районы: {', '.join(DISTRICTS)}"
+            "Установить имя и роль:\n/setname Фамилия И.О. скаут\n\n"
+            "Статус: /status"
         )
+        asyncio.create_task(auto_delete(msg))
         return
 
+    # /status
     if text == "/status":
         shift = await get_active_shift(user_id)
         if shift:
-            await message.answer(
-                f"{full_name}\n"
+            role_text = f" | {shift['role']}" if shift.get('role') else ""
+            msg = await message.answer(
+                f"{full_name}{role_text}\n"
                 f"Активная смена с {shift['start_time']}\n"
                 f"Район: {shift['district']}"
             )
         else:
-            await message.answer("Нет активной смены.")
+            msg = await message.answer("Нет активной смены.")
+        asyncio.create_task(auto_delete(msg))
         return
 
+    # /setname Фамилия И.О. роль
+    if text.startswith("/setname"):
+        parts = text.split(maxsplit=1)
+        if len(parts) >= 2:
+            args = parts[1].strip().split()
+            if len(args) >= 2:
+                new_role = args[-1].lower()
+                if new_role in ["скаут", "scout"]:
+                    new_role = "Скаут"
+                elif new_role in ["водитель", "driver", "вод"]:
+                    new_role = "Водитель"
+                else:
+                    msg = await message.answer("Укажите роль: скаут или водитель\nПример: /setname Иванов И.И. скаут")
+                    asyncio.create_task(auto_delete(msg))
+                    return
+                new_name = " ".join(args[:-1])
+                await add_user(user_id, new_name, new_role)
+                msg = await message.answer(f"Сохранено: {new_name} | {new_role}")
+            else:
+                msg = await message.answer("Формат: /setname Фамилия И.О. роль\nПример: /setname Иванов И.И. скаут")
+        else:
+            msg = await message.answer("Формат: /setname Фамилия И.О. роль\nПример: /setname Иванов И.И. скаут")
+        asyncio.create_task(auto_delete(msg))
+        return
+
+    # Начало или конец смены
     active_shift = await get_active_shift(user_id)
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
@@ -285,20 +325,18 @@ async def cmd_chat(message: Message):
             # Начало смены
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
-                await start_shift(user_id, full_name, "", time_str, district)
-                try:
-                    await message.delete()
-                except:
-                    pass
-                await message.answer(
+                role_for_shift = role if role else ""
+                await start_shift(user_id, full_name, role_for_shift, time_str, district)
+                msg = await message.answer(
                     f"Смена начата.\n\n{full_name}\nНачал: {time_str}\nРайон: {district}"
                 )
                 logger.info(f"Смена начата: {full_name}, {time_str}, {district}")
                 return
             else:
-                await message.answer(
+                msg = await message.answer(
                     f"Укажите район.\nФормат: 09:00 фмр\nДоступны: {', '.join(DISTRICTS)}"
                 )
+                asyncio.create_task(auto_delete(msg))
                 return
 
         else:
@@ -306,7 +344,8 @@ async def cmd_chat(message: Message):
             comment = extra if extra else ""
             sid = await end_shift(user_id, time_str, comment)
             if not sid:
-                await message.answer("Ошибка завершения смены.")
+                msg = await message.answer("Ошибка завершения смены.")
+                asyncio.create_task(auto_delete(msg))
                 return
 
             stats = await get_stats(sid)
@@ -319,8 +358,10 @@ async def cmd_chat(message: Message):
             diff = em - sm
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
+            role_text = f" | {active_shift['role']}" if active_shift.get('role') else ""
+
             report = (
-                f"{full_name}\n"
+                f"{full_name}{role_text}\n"
                 f"Начал: {active_shift['start_time']}\n"
                 f"Закончил: {time_str}\n"
                 f"Отработано: {duration}\n"
@@ -328,7 +369,6 @@ async def cmd_chat(message: Message):
                 f"Статистика за смену:\n"
             )
 
-            # Только те строки, где есть действия
             if stats['move'] > 0:
                 report += f"Перемещено: {stats['move']}\n"
             if stats['fix'] > 0:
@@ -343,21 +383,19 @@ async def cmd_chat(message: Message):
             if comment:
                 report += f"\nКомментарий: {comment}"
 
-            try:
-                await message.delete()
-            except:
-                pass
-
             await message.answer(report)
             logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
-    await message.answer(
+    # Неизвестный формат
+    msg = await message.answer(
         "Неизвестный формат.\n\n"
         "Начать смену: 09:00 фмр\n"
         "Закончить: 18:00 или 18:00 Комментарий\n"
         "Помощь: /help"
     )
+    asyncio.create_task(auto_delete(msg))
+
 # ============================================================
 # ЗАПУСК
 # ============================================================

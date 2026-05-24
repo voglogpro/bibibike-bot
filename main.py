@@ -248,33 +248,25 @@ async def work_chat(message: Message):
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
-    user = await get_user(message.from_user.id)
+    user_id = message.from_user.id
+    full_name = message.from_user.full_name
     text = (message.text or message.caption or "").strip()
 
     if text == "/help":
         await message.answer(
             "BibiBike - команды:\n\n"
-            "Регистрация (1 раз):\n"
-            "Фамилия И.О. скаут\n\n"
-            "Начать смену:\n"
-            "09:00 фмр\n\n"
-            "Закончить смену:\n"
-            "18:00\n"
-            "18:00 Комментарий\n\n"
+            "Начать смену:\n09:00 фмр\n\n"
+            "Закончить смену:\n18:00\n18:00 Комментарий\n\n"
             "Статус: /status\n"
             f"Районы: {', '.join(DISTRICTS)}"
         )
         return
 
     if text == "/status":
-        if not user:
-            await message.answer("Вы не зарегистрированы.")
-            return
-        shift = await get_active_shift(user['user_id'])
+        shift = await get_active_shift(user_id)
         if shift:
-            role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
             await message.answer(
-                f"{user['full_name']} | {role_text}\n"
+                f"{full_name}\n"
                 f"Активная смена с {shift['start_time']}\n"
                 f"Район: {shift['district']}"
             )
@@ -282,43 +274,7 @@ async def cmd_chat(message: Message):
             await message.answer("Нет активной смены.")
         return
 
-    if not user:
-        parts = text.split()
-        if len(parts) >= 2:
-            role_word = parts[-1].lower()
-            if role_word in ["скаут", "scout"]:
-                role = "scout"
-            elif role_word in ["водитель", "driver", "вод"]:
-                role = "driver"
-            else:
-                await message.answer("Укажите роль: скаут или водитель\nПример: Понамарев К.А. скаут")
-                return
-
-            full_name = " ".join(parts[:-1])
-            await add_user(message.from_user.id, full_name, role)
-
-            try:
-                await message.delete()
-            except:
-                pass
-
-            role_text = "Скаут" if role == 'scout' else 'Водитель'
-            await message.answer(
-                f"Запомнил: {full_name} | {role_text}\n\n"
-                f"Для начала смены напиши время и район.\n"
-                f"Например: 09:00 фмр"
-            )
-            logger.info(f"Зарегистрирован: {full_name} ({role_text})")
-            return
-        else:
-            await message.answer(
-                "Вы не зарегистрированы.\n"
-                "Напишите: Фамилия И.О. роль\n"
-                "Например: Понамарев К.А. скаут"
-            )
-            return
-
-    active_shift = await get_active_shift(user['user_id'])
+    active_shift = await get_active_shift(user_id)
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
@@ -326,42 +282,34 @@ async def cmd_chat(message: Message):
         extra = time_match.group(2).strip()
 
         if not active_shift:
+            # Начало смены
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
-                await start_shift(user['user_id'], user['full_name'], user['role'], time_str, district)
-
+                await start_shift(user_id, full_name, "", time_str, district)
                 try:
                     await message.delete()
                 except:
                     pass
-
-                role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
                 await message.answer(
-                    f"Смена начата.\n\n"
-                    f"{user['full_name']} | {role_text}\n"
-                    f"Начал: {time_str}\n"
-                    f"Район: {district}"
+                    f"Смена начата.\n\n{full_name}\nНачал: {time_str}\nРайон: {district}"
                 )
-                logger.info(f"Смена начата: {user['full_name']}, {time_str}, {district}")
+                logger.info(f"Смена начата: {full_name}, {time_str}, {district}")
                 return
             else:
                 await message.answer(
-                    f"Укажите район.\n"
-                    f"Формат: 09:00 фмр\n"
-                    f"Доступны: {', '.join(DISTRICTS)}"
+                    f"Укажите район.\nФормат: 09:00 фмр\nДоступны: {', '.join(DISTRICTS)}"
                 )
                 return
 
         else:
+            # Конец смены
             comment = extra if extra else ""
-            sid = await end_shift(user['user_id'], time_str, comment)
+            sid = await end_shift(user_id, time_str, comment)
             if not sid:
                 await message.answer("Ошибка завершения смены.")
                 return
 
             stats = await get_stats(sid)
-            role_text = "Скаут" if user['role'] == 'scout' else 'Водитель'
-
             sp = active_shift['start_time'].split(':')
             ep = time_str.split(':')
             sm = int(sp[0]) * 60 + int(sp[1])
@@ -372,7 +320,7 @@ async def cmd_chat(message: Message):
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
             report = (
-                f"{user['full_name']} | {role_text}\n"
+                f"{full_name}\n"
                 f"Начал: {active_shift['start_time']}\n"
                 f"Закончил: {time_str}\n"
                 f"Отработано: {duration}\n"
@@ -380,16 +328,17 @@ async def cmd_chat(message: Message):
                 f"Статистика за смену:\n"
             )
 
-            if user['role'] == 'scout':
+            # Только те строки, где есть действия
+            if stats['move'] > 0:
                 report += f"Перемещено: {stats['move']}\n"
+            if stats['fix'] > 0:
                 report += f"Поправлено: {stats['fix']}\n"
+            if stats['repair'] > 0:
                 report += f"Ремонт: {stats['repair']}\n"
-            else:
+            if stats['to_sc'] > 0:
                 report += f"Привез на СЦ: {stats['to_sc']}\n"
+            if stats['from_sc'] > 0:
                 report += f"Вывез из СЦ: {stats['from_sc']}\n"
-                report += f"Перемещено: {stats['move']}\n"
-                report += f"Поправлено: {stats['fix']}\n"
-                report += f"Ремонт: {stats['repair']}\n"
 
             if comment:
                 report += f"\nКомментарий: {comment}"
@@ -400,7 +349,7 @@ async def cmd_chat(message: Message):
                 pass
 
             await message.answer(report)
-            logger.info(f"Смена завершена: {user['full_name']}, {duration}")
+            logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
     await message.answer(
@@ -409,7 +358,6 @@ async def cmd_chat(message: Message):
         "Закончить: 18:00 или 18:00 Комментарий\n"
         "Помощь: /help"
     )
-
 # ============================================================
 # ЗАПУСК
 # ============================================================

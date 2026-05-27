@@ -10,7 +10,7 @@ from aiogram.filters import Command
 # КОНФИГУРАЦИЯ
 # ============================================================
 BOT_TOKEN = "8897464834:AAGMgpcYbto51407Rxgz7NE5DllYam5-s-I"
-GROUP_ID = -1003431950710
+GROUP_ID = -1003895375312
 CHAT1_THREAD_ID = 1
 CHAT2_THREAD_ID = 2
 

@@ -150,7 +150,7 @@ def parse_message(text):
                'ремонт', 'поломк', 'сломан',
                'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
                'поправил', 'выровнял', 'чист', 'поправ',
-               'на сц', 'из сц']:
+               'на сц', 'из сц', 'в сц']:
         if kw in text:
             atype = get_action_type(kw)
             if atype and atype not in [a['action_type'] for a in keywords_found]:

@@ -12,9 +12,9 @@ from aiogram.filters import Command
 BOT_TOKEN = "8897464834:AAGMgpcYbto51407Rxgz7NE5DllYam5-s-I"
 GROUP_ID = -1003431950710
 CHAT1_THREAD_ID = 1
-CHAT2_THREAD_ID = 3
+CHAT2_THREAD_ID = 2
 
-DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр", "весь город"]
+DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр"]
 
 # ============================================================
 # ЛОГИРОВАНИЕ
@@ -261,6 +261,10 @@ async def cmd_chat(message: Message):
     except:
         pass
 
+    # Игнорируем сообщения чарджеров
+    if "чарджер" in text.lower():
+        return
+
     # /help
     if text == "/help":
         msg = await message.answer(
@@ -387,14 +391,8 @@ async def cmd_chat(message: Message):
             logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
-    # Неизвестный формат
-    msg = await message.answer(
-        "Неизвестный формат.\n\n"
-        "Начать смену: 09:00 фмр\n"
-        "Закончить: 18:00 или 18:00 Комментарий\n"
-        "Помощь: /help"
-    )
-    asyncio.create_task(auto_delete(msg))
+    # Неизвестный формат — молча игнорируем
+    return
 
 # ============================================================
 # ЗАПУСК

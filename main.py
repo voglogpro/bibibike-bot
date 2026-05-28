@@ -137,14 +137,14 @@ def parse_message(text):
     text = text.lower().strip()
     all_codes = re.findall(r'\b(\d{4})\b', text)
     lines = text.split('\n')
-    
+
     repair_codes = []
     for line in lines:
         if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
             repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
-    
+
     keywords_found = []
-    
+
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
                'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'с сц',
                'ремонт', 'поломк', 'сломан',
@@ -164,24 +164,24 @@ def parse_message(text):
                                 qty = num
                         break
                 keywords_found.append({'action_type': atype, 'quantity': qty})
-    
+
     if not keywords_found:
         return []
-    
+
     qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
     code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
     results = []
-    
+
     for kw in qty_actions:
         results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
-    
+
     for kw in code_actions:
         if kw['action_type'] == 'repair':
             codes = repair_codes.copy() if repair_codes else []
         else:
             codes = all_codes.copy() if all_codes else []
         results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
-    
+
     return results
 
 
@@ -269,8 +269,8 @@ async def cmd_chat(message: Message):
     if text == "/help":
         msg = await message.answer(
             "BibiBike - команды:\n\n"
-            "Начать смену:\n09:00 фмр\n\n"
-            "Закончить смену:\n18:00\n18:00 Комментарий\n\n"
+            "Начать смену:\n/09:00 фмр\n\n"
+            "Закончить смену:\n/18:00\n/18:00 Комментарий\n\n"
             "Установить имя и роль:\n/setname Фамилия И.О. скаут\n\n"
             "Статус: /status"
         )
@@ -317,14 +317,13 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    
     # Начало или конец смены — только с /
-if not text.startswith('/'):
-    return
+    if not text.startswith('/'):
+        return
 
-text = text[1:]
-active_shift = await get_active_shift(user_id)
-time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
+    text = text[1:]
+    active_shift = await get_active_shift(user_id)
+    time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
         time_str = time_match.group(1)
@@ -343,7 +342,7 @@ time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
                 return
             else:
                 msg = await message.answer(
-                    f"Укажите район.\nФормат: 09:00 фмр\nДоступны: {', '.join(DISTRICTS)}"
+                    f"Укажите район.\nФормат: /09:00 фмр\nДоступны: {', '.join(DISTRICTS)}"
                 )
                 asyncio.create_task(auto_delete(msg))
                 return

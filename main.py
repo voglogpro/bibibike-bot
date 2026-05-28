@@ -215,7 +215,7 @@ work_router = Router()
 cmd_router = Router()
 
 # ============================================================
-# ЧАТ 1
+# ЧАТ 1 (Рабочий чат)
 # ============================================================
 @work_router.message(F.chat.id == GROUP_ID)
 async def work_chat(message: Message):
@@ -245,7 +245,7 @@ async def work_chat(message: Message):
         logger.info(f"Записано: {shift['full_name']} — {action}")
 
 # ============================================================
-# ЧАТ 2
+# ЧАТ 2 (Управление сменами и команды)
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
@@ -255,18 +255,16 @@ async def cmd_chat(message: Message):
     role = user['role'] if user else ""
     text = (message.text or message.caption or "").strip()
 
-    # Удаляем сообщение пользователя
-    try:
-        await message.delete()
-    except:
-        pass
-
-    # Игнорируем сообщения чарджеров
+    # Игнорируем сообщения чарджеров и оставляем их в чате
     if "чарджер" in text.lower():
         return
 
     # /help
     if text == "/help":
+        try:
+            await message.delete()
+        except:
+            pass
         msg = await message.answer(
             "BibiBike - команды:\n\n"
             "Начать смену:\n/09:00 фмр\n\n"
@@ -279,6 +277,10 @@ async def cmd_chat(message: Message):
 
     # /status
     if text == "/status":
+        try:
+            await message.delete()
+        except:
+            pass
         shift = await get_active_shift(user_id)
         if shift:
             role_text = f" | {shift['role']}" if shift.get('role') else ""
@@ -294,6 +296,10 @@ async def cmd_chat(message: Message):
 
     # /setname Фамилия И.О. роль
     if text.startswith("/setname"):
+        try:
+            await message.delete()
+        except:
+            pass
         parts = text.split(maxsplit=1)
         if len(parts) >= 2:
             args = parts[1].strip().split()
@@ -317,7 +323,7 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # Начало или конец смены — только с /
+    # Начало или конец смены — только если строка начинается с /
     if not text.startswith('/'):
         return
 
@@ -326,6 +332,12 @@ async def cmd_chat(message: Message):
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
+        # Раз текст подошел под паттерн времени с косой чертой — удаляем команду юзера из чата
+        try:
+            await message.delete()
+        except:
+            pass
+
         time_str = time_match.group(1)
         extra = time_match.group(2).strip()
 
@@ -395,11 +407,11 @@ async def cmd_chat(message: Message):
             logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
-    # Неизвестный формат — молча игнорируем
+    # Любой другой текст со слэшем, не подошедший под форматы (например, /hello) — просто игнорируем
     return
 
 # ============================================================
-# ЗАПУСК
+# ЗАПУСК БОТА
 # ============================================================
 async def main():
     await init_db()

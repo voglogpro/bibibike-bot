@@ -317,9 +317,14 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # Начало или конец смены
-    active_shift = await get_active_shift(user_id)
-    time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
+    
+    # Начало или конец смены — только с /
+if not text.startswith('/'):
+    return
+
+text = text[1:]
+active_shift = await get_active_shift(user_id)
+time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
         time_str = time_match.group(1)

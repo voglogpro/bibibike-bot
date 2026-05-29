@@ -4,7 +4,6 @@ import re
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message
-from aiogram.filters import Command
 
 # ============================================================
 # КОНФИГУРАЦИЯ
@@ -16,7 +15,7 @@ CHAT2_THREAD_ID = 2
 
 DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр"]
 
-# ИНИЦИАЛИЗАЦИЯ РОУТЕРОВ (То, что я забыл добавить в прошлый раз)
+# ИНИЦИАЛИЗАЦИЯ РОУТЕРОВ
 work_router = Router()
 cmd_router = Router()
 
@@ -154,7 +153,7 @@ async def get_stats(sid):
         return s
 
 # ============================================================
-# ПАРСИНГ
+# ПАРСИНГ ТЕКСТА О ТЕКУЩЕЙ РАБОТЕ
 # ============================================================
 def parse_message(text):
     text = text.lower().strip()
@@ -222,7 +221,7 @@ def get_action_type(kw):
     return None
 
 # ============================================================
-# ФУНКЦИЯ АВТОУДАЛЕНИЯ
+# ФУНКЦИЯ АВТОУДАЛЕНИЯ КОМАНД
 # ============================================================
 async def auto_delete(msg: Message, delay: int = 60):
     await asyncio.sleep(delay)
@@ -247,7 +246,6 @@ async def process_work_message(message: Message):
     if not shift:
         return
 
-    # Удаляем старые действия по этому message_id
     await delete_actions_by_message(message.from_user.id, message.message_id)
 
     actions = parse_message(text)
@@ -265,7 +263,7 @@ async def process_work_message(message: Message):
         logger.info(f"Записано: {shift['full_name']} — {action}")
 
 # ============================================================
-# ЧАТ 1 — НОВЫЕ СООБЩЕНИЯ
+# ЧАТ 1 — НОВЫЕ РАБОЧИЕ СООБЩЕНИЯ
 # ============================================================
 @work_router.message(F.chat.id == GROUP_ID)
 async def work_chat(message: Message):
@@ -274,7 +272,7 @@ async def work_chat(message: Message):
     await process_work_message(message)
 
 # ============================================================
-# ЧАТ 1 — РЕДАКТИРОВАННЫЕ СООБЩЕНИЯ
+# ЧАТ 1 — РЕДАКТИРОВАННЫЕ РАБОЧИЕ СООБЩЕНИЯ
 # ============================================================
 @work_router.edited_message(F.chat.id == GROUP_ID)
 async def work_chat_edit(message: Message):
@@ -284,7 +282,7 @@ async def work_chat_edit(message: Message):
     await process_work_message(message)
 
 # ============================================================
-# ЧАТ 2
+# ЧАТ 2 — УПРАВЛЕНИЕ СМЕНАМИ И ОТЧЕТАМИ
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
@@ -324,11 +322,17 @@ async def cmd_chat(message: Message):
             pass
         shift = await get_active_shift(user_id)
         if shift:
-            role_text = f" | {shift['role']}" if shift.get('role') else ""
+            role_emoji = ""
+            if shift.get('role') == "Скаут":
+                role_emoji = " 🚶"
+            elif shift.get('role') == "Водитель":
+                role_emoji = " 🚚"
+            role_text = f" | {shift['role']}{role_emoji}" if shift.get('role') else ""
+            
             msg = await message.answer(
                 f"{full_name}{role_text}\n"
                 f"Активная смена с {shift['start_time']}\n"
-                f"Район: {shift['district']}"
+                f"Район: {shift['district'].upper()}"
             )
         else:
             msg = await message.answer("Нет активной смены.")
@@ -357,7 +361,6 @@ async def cmd_chat(message: Message):
         parts = text.split(maxsplit=1)
         args = parts[1].split() if len(parts) > 1 else []
 
-        # Считываем все 5 метрик работы
         try:
             new_move = int(args[0]) if len(args) > 0 else 0
             new_fix = int(args[1]) if len(args) > 1 else 0
@@ -372,7 +375,6 @@ async def cmd_chat(message: Message):
         new_comment = " ".join(args[5:]) if len(args) > 5 else last_shift.get('comment', '')
 
         async with aiosqlite.connect(DB_PATH) as db:
-            # Очищаем вообще все старые действия за эту смену, так как сейчас мы перезаписываем всё целиком
             await db.execute("DELETE FROM actions WHERE shift_id = ?", (last_shift['id'],))
             
             if new_move > 0:
@@ -404,7 +406,6 @@ async def cmd_chat(message: Message):
             await db.execute("UPDATE shifts SET comment = ? WHERE id = ?", (new_comment, last_shift['id']))
             await db.commit()
 
-        # Запрашиваем обновлённую чистую статистику из базы
         stats = await get_stats(last_shift['id'])
 
         sp = last_shift['start_time'].split(':')
@@ -416,14 +417,19 @@ async def cmd_chat(message: Message):
         diff = em - sm
         duration = f"{diff // 60} ч. {diff % 60} мин."
 
-        role_text = f" | {last_shift['role']}" if last_shift.get('role') else ""
+        role_emoji = ""
+        if last_shift.get('role') == "Скаут":
+            role_emoji = " 🚶"
+        elif last_shift.get('role') == "Водитель":
+            role_emoji = " 🚚"
+        role_text = f" | {last_shift['role']}{role_emoji}" if last_shift.get('role') else ""
 
         report = (
             f"{full_name}{role_text}\n"
             f"Начал: {last_shift['start_time']}\n"
             f"Закончил: {last_shift['end_time']}\n"
             f"Отработано: {duration}\n"
-            f"Район: {last_shift['district']}\n\n"
+            f"Район: {last_shift['district'].upper()}\n\n"
             f"Статистика за смену (ОБНОВЛЕНА):\n"
         )
 
@@ -474,7 +480,7 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # Команды времени /09:00 фмр или /18:00
+    # Обработка команд времени (Начало / Конец смены)
     if not text.startswith('/'):
         return
 
@@ -492,13 +498,26 @@ async def cmd_chat(message: Message):
         extra = time_match.group(2).strip()
 
         if not active_shift:
-            # Начало смены
+            # НАЧАЛО СМЕНЫ
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
                 role_for_shift = role if role else ""
                 await start_shift(user_id, full_name, role_for_shift, time_str, district)
+                
+                # Добавление красивых иконок под роль
+                role_emoji = ""
+                if role == "Скаут":
+                    role_emoji = " 🚶"
+                elif role == "Водитель":
+                    role_emoji = " 🚚"
+                
+                role_text = f" | {role}{role_emoji}" if role else ""
+                
                 msg = await message.answer(
-                    f"Смена начата.\n\n{full_name}\nНачал: {time_str}\nРайон: {district}"
+                    f"🟢 **Смена начата**\n\n"
+                    f"{full_name}{role_text}\n"
+                    f"Начал: {time_str}\n"
+                    f"Район: {district.upper()}"
                 )
                 logger.info(f"Смена начата: {full_name}, {time_str}, {district}")
                 return
@@ -510,7 +529,7 @@ async def cmd_chat(message: Message):
                 return
 
         else:
-            # Конец смены
+            # КОНЕЦ СМЕНЫ
             comment = extra if extra else ""
             sid = await end_shift(user_id, time_str, comment)
             if not sid:
@@ -528,14 +547,19 @@ async def cmd_chat(message: Message):
             diff = em - sm
             duration = f"{diff // 60} ч. {diff % 60} мин."
 
-            role_text = f" | {active_shift['role']}" if active_shift.get('role') else ""
+            role_emoji = ""
+            if active_shift.get('role') == "Скаут":
+                role_emoji = " 🚶"
+            elif active_shift.get('role') == "Водитель":
+                role_emoji = " 🚚"
+            role_text = f" | {active_shift['role']}{role_emoji}" if active_shift.get('role') else ""
 
             report = (
                 f"{full_name}{role_text}\n"
                 f"Начал: {active_shift['start_time']}\n"
                 f"Закончил: {time_str}\n"
                 f"Отработано: {duration}\n"
-                f"Район: {active_shift['district']}\n\n"
+                f"Район: {active_shift['district'].upper()}\n\n"
                 f"Статистика за смену:\n"
             )
 
@@ -560,7 +584,7 @@ async def cmd_chat(message: Message):
     return
 
 # ============================================================
-# ЗАПУСК
+# ЗАПУСК БОТА
 # ============================================================
 async def main():
     await init_db()

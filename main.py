@@ -228,12 +228,6 @@ async def auto_delete(msg: Message, delay: int = 60):
         pass
 
 # ============================================================
-# РОУТЕРЫ
-# ============================================================
-work_router = Router()
-cmd_router = Router()
-
-# ============================================================
 # ОБРАБОТКА РАБОЧЕГО СООБЩЕНИЯ
 # ============================================================
 async def process_work_message(message: Message):
@@ -286,10 +280,6 @@ async def work_chat_edit(message: Message):
     await process_work_message(message)
 
 # ============================================================
-# ЧАТ 1 — УДАЛЁННЫЕ СООБЩЕНИЯ (БОТ НЕ ВИДИТ УДАЛЕНИЕ, ЭТО ЗАГЛУШКА)
-# ============================================================
-
-# ============================================================
 # ЧАТ 2
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
@@ -315,7 +305,8 @@ async def cmd_chat(message: Message):
             "Начать смену:\n/09:00 фмр\n\n"
             "Закончить смену:\n/18:00\n/18:00 Комментарий\n\n"
             "Установить имя и роль:\n/setname Фамилия И.О. скаут\n\n"
-            "Исправить последний отчёт:\n/fix 11 5 1 Комментарий\n\n"
+            "Исправить последний отчёт (5 цифр: перем. поправ. рем. в_СЦ из_СЦ):\n"
+            "/fix 11 5 1 2 0 Комментарий\n\n"
             "Статус: /status"
         )
         asyncio.create_task(auto_delete(msg))
@@ -340,7 +331,7 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # /fix 11 5 1 Комментарий
+    # /fix [move] [fix] [repair] [to_sc] [from_sc] Комментарий
     if text.startswith("/fix"):
         try:
             await message.delete()
@@ -362,13 +353,24 @@ async def cmd_chat(message: Message):
         parts = text.split(maxsplit=1)
         args = parts[1].split() if len(parts) > 1 else []
 
-        new_move = int(args[0]) if len(args) > 0 else 0
-        new_fix = int(args[1]) if len(args) > 1 else 0
-        new_repair = int(args[2]) if len(args) > 2 else 0
-        new_comment = " ".join(args[3:]) if len(args) > 3 else last_shift.get('comment', '')
+        # Считываем все 5 метрик работы
+        try:
+            new_move = int(args[0]) if len(args) > 0 else 0
+            new_fix = int(args[1]) if len(args) > 1 else 0
+            new_repair = int(args[2]) if len(args) > 2 else 0
+            new_to_sc = int(args[3]) if len(args) > 3 else 0
+            new_from_sc = int(args[4]) if len(args) > 4 else 0
+        except ValueError:
+            msg = await message.answer("Ошибка: первые 5 аргументов должны быть числами.\nПример: /fix 11 5 1 2 0 Комментарий")
+            asyncio.create_task(auto_delete(msg))
+            return
+
+        new_comment = " ".join(args[5:]) if len(args) > 5 else last_shift.get('comment', '')
 
         async with aiosqlite.connect(DB_PATH) as db:
+            # Очищаем вообще все старые действия за эту смену, так как сейчас мы перезаписываем всё целиком
             await db.execute("DELETE FROM actions WHERE shift_id = ?", (last_shift['id'],))
+            
             if new_move > 0:
                 await db.execute(
                     "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'move', '', ?)",
@@ -384,8 +386,22 @@ async def cmd_chat(message: Message):
                     "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'repair', '', ?)",
                     (user_id, last_shift['id'], new_repair)
                 )
+            if new_to_sc > 0:
+                await db.execute(
+                    "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'to_sc', '', ?)",
+                    (user_id, last_shift['id'], new_to_sc)
+                )
+            if new_from_sc > 0:
+                await db.execute(
+                    "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'from_sc', '', ?)",
+                    (user_id, last_shift['id'], new_from_sc)
+                )
+                
             await db.execute("UPDATE shifts SET comment = ? WHERE id = ?", (new_comment, last_shift['id']))
             await db.commit()
+
+        # Запрашиваем обновлённую чистую статистику из базы
+        stats = await get_stats(last_shift['id'])
 
         sp = last_shift['start_time'].split(':')
         ep = last_shift['end_time'].split(':')
@@ -404,24 +420,28 @@ async def cmd_chat(message: Message):
             f"Закончил: {last_shift['end_time']}\n"
             f"Отработано: {duration}\n"
             f"Район: {last_shift['district']}\n\n"
-            f"Статистика за смену:\n"
+            f"Статистика за смену (ОБНОВЛЕНА):\n"
         )
 
-        if new_move > 0:
-            report += f"Перемещено: {new_move}\n"
-        if new_fix > 0:
-            report += f"Поправлено: {new_fix}\n"
-        if new_repair > 0:
-            report += f"Ремонт: {new_repair}\n"
+        if stats['move'] > 0:
+            report += f"Перемещено: {stats['move']}\n"
+        if stats['fix'] > 0:
+            report += f"Поправлено: {stats['fix']}\n"
+        if stats['repair'] > 0:
+            report += f"Ремонт: {stats['repair']}\n"
+        if stats['to_sc'] > 0:
+            report += f"Привез на СЦ: {stats['to_sc']}\n"
+        if stats['from_sc'] > 0:
+            report += f"Вывез из СЦ: {stats['from_sc']}\n"
 
         if new_comment:
             report += f"\nКомментарий: {new_comment}"
 
         await message.answer(report)
-        logger.info(f"Отчёт исправлен: {full_name}")
+        logger.info(f"Отчёт полностью пересчитан: {full_name}")
         return
 
-    # /setname Фамилия И.О. роль
+    # /setname ...
     if text.startswith("/setname"):
         try:
             await message.delete()
@@ -450,7 +470,7 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # Начало или конец смены — только с /
+    # Команды времени /09:00 фмр или /18:00
     if not text.startswith('/'):
         return
 
@@ -459,6 +479,11 @@ async def cmd_chat(message: Message):
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
+        try:
+            await message.delete()
+        except:
+            pass
+
         time_str = time_match.group(1)
         extra = time_match.group(2).strip()
 
@@ -466,10 +491,6 @@ async def cmd_chat(message: Message):
             # Начало смены
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
-                try:
-                    await message.delete()
-                except:
-                    pass
                 role_for_shift = role if role else ""
                 await start_shift(user_id, full_name, role_for_shift, time_str, district)
                 msg = await message.answer(
@@ -486,10 +507,6 @@ async def cmd_chat(message: Message):
 
         else:
             # Конец смены
-            try:
-                await message.delete()
-            except:
-                pass
             comment = extra if extra else ""
             sid = await end_shift(user_id, time_str, comment)
             if not sid:
@@ -536,7 +553,6 @@ async def cmd_chat(message: Message):
             logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
-    # Неизвестный формат — молча игнорируем
     return
 
 # ============================================================

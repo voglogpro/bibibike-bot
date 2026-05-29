@@ -12,9 +12,9 @@ from aiogram.filters import Command
 BOT_TOKEN = "8897464834:AAGMgpcYbto51407Rxgz7NE5DllYam5-s-I"
 GROUP_ID = -1003431950710
 CHAT1_THREAD_ID = 1
-CHAT2_THREAD_ID = 3
+CHAT2_THREAD_ID = 2
 
-DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр", "весь город"]
+DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр"]
 
 # ============================================================
 # ЛОГИРОВАНИЕ
@@ -54,6 +54,7 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 shift_id INTEGER,
+                message_id INTEGER,
                 action_type TEXT,
                 bike_codes TEXT,
                 quantity INTEGER DEFAULT 0
@@ -81,6 +82,16 @@ async def get_active_shift(uid):
         r = await c.fetchone()
         return dict(r) if r else None
 
+async def get_last_shift(uid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        c = await db.execute(
+            "SELECT * FROM shifts WHERE user_id = ? AND is_active = 0 ORDER BY id DESC LIMIT 1",
+            (uid,)
+        )
+        r = await c.fetchone()
+        return dict(r) if r else None
+
 async def start_shift(uid, name, role, time, district):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE shifts SET is_active = 0 WHERE user_id = ? AND is_active = 1", (uid,))
@@ -102,12 +113,20 @@ async def end_shift(uid, time, comment=""):
         r = await c.fetchone()
         return r[0] if r else None
 
-async def add_action(uid, sid, atype, codes=None, qty=0):
+async def add_action(uid, sid, mid, atype, codes=None, qty=0):
     cstr = ",".join(codes) if codes else ""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO actions (user_id, shift_id, action_type, bike_codes, quantity) VALUES (?, ?, ?, ?, ?)",
-            (uid, sid, atype, cstr, qty)
+            "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, ?, ?, ?, ?)",
+            (uid, sid, mid, atype, cstr, qty)
+        )
+        await db.commit()
+
+async def delete_actions_by_message(uid, mid):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM actions WHERE user_id = ? AND message_id = ?",
+            (uid, mid)
         )
         await db.commit()
 
@@ -137,20 +156,20 @@ def parse_message(text):
     text = text.lower().strip()
     all_codes = re.findall(r'\b(\d{4})\b', text)
     lines = text.split('\n')
-
+    
     repair_codes = []
     for line in lines:
         if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
             repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
-
+    
     keywords_found = []
-
+    
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
-               'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'с сц',
+               'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
                'ремонт', 'поломк', 'сломан',
                'переместил', 'перенес', 'перенёс', 'переставил', 'перемещ',
                'поправил', 'выровнял', 'чист', 'поправ',
-               'на сц', 'из сц', 'в сц']:
+               'на сц', 'из сц']:
         if kw in text:
             atype = get_action_type(kw)
             if atype and atype not in [a['action_type'] for a in keywords_found]:
@@ -164,29 +183,29 @@ def parse_message(text):
                                 qty = num
                         break
                 keywords_found.append({'action_type': atype, 'quantity': qty})
-
+    
     if not keywords_found:
         return []
-
+    
     qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
     code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
     results = []
-
+    
     for kw in qty_actions:
         results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
-
+    
     for kw in code_actions:
         if kw['action_type'] == 'repair':
             codes = repair_codes.copy() if repair_codes else []
         else:
             codes = all_codes.copy() if all_codes else []
         results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
-
+    
     return results
 
 
 def get_action_type(kw):
-    if kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц', 'в сц']:
+    if kw in ['привез на сц', 'привёз на сц', 'на сц привез', 'на сц']:
         return 'to_sc'
     if kw in ['вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц', 'из сц']:
         return 'from_sc'
@@ -215,13 +234,9 @@ work_router = Router()
 cmd_router = Router()
 
 # ============================================================
-# ЧАТ 1 (Рабочий чат)
+# ОБРАБОТКА РАБОЧЕГО СООБЩЕНИЯ
 # ============================================================
-@work_router.message(F.chat.id == GROUP_ID)
-async def work_chat(message: Message):
-    if message.message_thread_id == CHAT2_THREAD_ID:
-        return
-
+async def process_work_message(message: Message):
     text = message.text or message.caption or ""
     if not text:
         return
@@ -230,22 +245,52 @@ async def work_chat(message: Message):
     if re.match(r'^\d{1,2}:\d{2}\s*', text):
         return
 
-    logger.info(f"ЧАТ 1: от {message.from_user.id} | текст: '{text}'")
-
     shift = await get_active_shift(message.from_user.id)
     if not shift:
         return
 
+    # Удаляем старые действия по этому message_id
+    await delete_actions_by_message(message.from_user.id, message.message_id)
+
     actions = parse_message(text)
-    logger.info(f"Распаршено: {actions}")
+    logger.info(f"Распаршено (msg={message.message_id}): {actions}")
 
     for action in actions:
-        await add_action(message.from_user.id, shift['id'], action['action_type'],
-                         action.get('bike_codes', []), action.get('quantity', 0))
+        await add_action(
+            message.from_user.id,
+            shift['id'],
+            message.message_id,
+            action['action_type'],
+            action.get('bike_codes', []),
+            action.get('quantity', 0)
+        )
         logger.info(f"Записано: {shift['full_name']} — {action}")
 
 # ============================================================
-# ЧАТ 2 (Управление сменами и команды)
+# ЧАТ 1 — НОВЫЕ СООБЩЕНИЯ
+# ============================================================
+@work_router.message(F.chat.id == GROUP_ID)
+async def work_chat(message: Message):
+    if message.message_thread_id == CHAT2_THREAD_ID:
+        return
+    await process_work_message(message)
+
+# ============================================================
+# ЧАТ 1 — РЕДАКТИРОВАННЫЕ СООБЩЕНИЯ
+# ============================================================
+@work_router.edited_message(F.chat.id == GROUP_ID)
+async def work_chat_edit(message: Message):
+    if message.message_thread_id == CHAT2_THREAD_ID:
+        return
+    logger.info(f"СООБЩЕНИЕ ОТРЕДАКТИРОВАНО: {message.message_id}")
+    await process_work_message(message)
+
+# ============================================================
+# ЧАТ 1 — УДАЛЁННЫЕ СООБЩЕНИЯ (БОТ НЕ ВИДИТ УДАЛЕНИЕ, ЭТО ЗАГЛУШКА)
+# ============================================================
+
+# ============================================================
+# ЧАТ 2
 # ============================================================
 @cmd_router.message(F.chat.id == GROUP_ID, F.message_thread_id == CHAT2_THREAD_ID)
 async def cmd_chat(message: Message):
@@ -255,7 +300,7 @@ async def cmd_chat(message: Message):
     role = user['role'] if user else ""
     text = (message.text or message.caption or "").strip()
 
-    # Игнорируем сообщения чарджеров и оставляем их в чате
+    # Игнорируем сообщения чарджеров
     if "чарджер" in text.lower():
         return
 
@@ -270,6 +315,7 @@ async def cmd_chat(message: Message):
             "Начать смену:\n/09:00 фмр\n\n"
             "Закончить смену:\n/18:00\n/18:00 Комментарий\n\n"
             "Установить имя и роль:\n/setname Фамилия И.О. скаут\n\n"
+            "Исправить последний отчёт:\n/fix 11 5 1 Комментарий\n\n"
             "Статус: /status"
         )
         asyncio.create_task(auto_delete(msg))
@@ -292,6 +338,87 @@ async def cmd_chat(message: Message):
         else:
             msg = await message.answer("Нет активной смены.")
         asyncio.create_task(auto_delete(msg))
+        return
+
+    # /fix 11 5 1 Комментарий
+    if text.startswith("/fix"):
+        try:
+            await message.delete()
+        except:
+            pass
+
+        shift = await get_active_shift(user_id)
+        if shift:
+            msg = await message.answer("У вас активная смена. Завершите её сначала.")
+            asyncio.create_task(auto_delete(msg))
+            return
+
+        last_shift = await get_last_shift(user_id)
+        if not last_shift:
+            msg = await message.answer("Нет завершённых смен.")
+            asyncio.create_task(auto_delete(msg))
+            return
+
+        parts = text.split(maxsplit=1)
+        args = parts[1].split() if len(parts) > 1 else []
+
+        new_move = int(args[0]) if len(args) > 0 else 0
+        new_fix = int(args[1]) if len(args) > 1 else 0
+        new_repair = int(args[2]) if len(args) > 2 else 0
+        new_comment = " ".join(args[3:]) if len(args) > 3 else last_shift.get('comment', '')
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM actions WHERE shift_id = ?", (last_shift['id'],))
+            if new_move > 0:
+                await db.execute(
+                    "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'move', '', ?)",
+                    (user_id, last_shift['id'], new_move)
+                )
+            if new_fix > 0:
+                await db.execute(
+                    "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'fix', '', ?)",
+                    (user_id, last_shift['id'], new_fix)
+                )
+            if new_repair > 0:
+                await db.execute(
+                    "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'repair', '', ?)",
+                    (user_id, last_shift['id'], new_repair)
+                )
+            await db.execute("UPDATE shifts SET comment = ? WHERE id = ?", (new_comment, last_shift['id']))
+            await db.commit()
+
+        sp = last_shift['start_time'].split(':')
+        ep = last_shift['end_time'].split(':')
+        sm = int(sp[0]) * 60 + int(sp[1])
+        em = int(ep[0]) * 60 + int(ep[1])
+        if em < sm:
+            em += 24 * 60
+        diff = em - sm
+        duration = f"{diff // 60} ч. {diff % 60} мин."
+
+        role_text = f" | {last_shift['role']}" if last_shift.get('role') else ""
+
+        report = (
+            f"{full_name}{role_text}\n"
+            f"Начал: {last_shift['start_time']}\n"
+            f"Закончил: {last_shift['end_time']}\n"
+            f"Отработано: {duration}\n"
+            f"Район: {last_shift['district']}\n\n"
+            f"Статистика за смену:\n"
+        )
+
+        if new_move > 0:
+            report += f"Перемещено: {new_move}\n"
+        if new_fix > 0:
+            report += f"Поправлено: {new_fix}\n"
+        if new_repair > 0:
+            report += f"Ремонт: {new_repair}\n"
+
+        if new_comment:
+            report += f"\nКомментарий: {new_comment}"
+
+        await message.answer(report)
+        logger.info(f"Отчёт исправлен: {full_name}")
         return
 
     # /setname Фамилия И.О. роль
@@ -323,7 +450,7 @@ async def cmd_chat(message: Message):
         asyncio.create_task(auto_delete(msg))
         return
 
-    # Начало или конец смены — только если строка начинается с /
+    # Начало или конец смены — только с /
     if not text.startswith('/'):
         return
 
@@ -332,12 +459,6 @@ async def cmd_chat(message: Message):
     time_match = re.match(r'(\d{1,2}:\d{2})\s*(.*)', text)
 
     if time_match:
-        # Раз текст подошел под паттерн времени с косой чертой — удаляем команду юзера из чата
-        try:
-            await message.delete()
-        except:
-            pass
-
         time_str = time_match.group(1)
         extra = time_match.group(2).strip()
 
@@ -345,6 +466,10 @@ async def cmd_chat(message: Message):
             # Начало смены
             district = extra.split()[0].lower() if extra else ""
             if district and district in DISTRICTS:
+                try:
+                    await message.delete()
+                except:
+                    pass
                 role_for_shift = role if role else ""
                 await start_shift(user_id, full_name, role_for_shift, time_str, district)
                 msg = await message.answer(
@@ -361,6 +486,10 @@ async def cmd_chat(message: Message):
 
         else:
             # Конец смены
+            try:
+                await message.delete()
+            except:
+                pass
             comment = extra if extra else ""
             sid = await end_shift(user_id, time_str, comment)
             if not sid:
@@ -407,11 +536,11 @@ async def cmd_chat(message: Message):
             logger.info(f"Смена завершена: {full_name}, {duration}")
             return
 
-    # Любой другой текст со слэшем, не подошедший под форматы (например, /hello) — просто игнорируем
+    # Неизвестный формат — молча игнорируем
     return
 
 # ============================================================
-# ЗАПУСК БОТА
+# ЗАПУСК
 # ============================================================
 async def main():
     await init_db()

@@ -10,7 +10,7 @@ from aiogram.types import Message
 # ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
-# Бот больше не хранит токен в коде! Он безопасно берет его из настроек BotHost
+# Бот безопасно берет токен из настроек окружения BotHost
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 GROUP_ID = -1003431950710
@@ -73,17 +73,15 @@ async def init_db():
             )
         """)
         await db.commit()
-        
-        # Автоматическая миграция: если база данных старая и в ней нет message_id,
-        # этот блок безопасно добавит колонку без потери текущих данных.
+
+        # Автоматическая миграция для старых баз данных
         try:
             await db.execute("ALTER TABLE actions ADD COLUMN message_id INTEGER")
             await db.commit()
             logger.info("Миграция: Колонка message_id успешно добавлена в таблицу actions.")
         except aiosqlite.OperationalError:
-            # Если колонка уже существует, sqlite выдаст ошибку, которую мы просто игнорируем
             pass
-            
+
     logger.info("БД готова")
 
 async def add_user(uid, name, role):
@@ -524,7 +522,6 @@ async def cmd_chat(message: Message):
                 role_for_shift = role if role else ""
                 await start_shift(user_id, full_name, role_for_shift, time_str, district)
 
-                # Добавление красивых иконок под роль
                 role_emoji = ""
                 if role == "Скаут":
                     role_emoji = " 🚶"
@@ -533,11 +530,12 @@ async def cmd_chat(message: Message):
 
                 role_text = f" | {role}{role_emoji}" if role else ""
 
+                # Изменено форматирование: только фраза "Смена начата" и ФИО будут жирными
                 msg = await message.answer(
-                    f"🟢 **Смена начата**\n\n"
-                    f"{full_name}{role_text}\n"
+                    f"🟢 <b>Смена начата: {full_name}</b>{role_text}\n"
                     f"Начал: {time_str}\n"
-                    f"Район: {district.upper()}"
+                    f"Район: {district.upper()}",
+                    parse_mode="HTML"
                 )
                 logger.info(f"Смена начата: {full_name}, {time_str}, {district}")
                 return

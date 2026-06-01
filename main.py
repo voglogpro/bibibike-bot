@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import re
+import os
+import sys
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message
@@ -8,7 +10,9 @@ from aiogram.types import Message
 # ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
-BOT_TOKEN = "8897464834:AAGMgpcYbto51407Rxgz7NE5DllYam5-s-I"
+# Бот больше не хранит токен в коде! Он безопасно берет его из настроек BotHost
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 GROUP_ID = -1003431950710
 CHAT1_THREAD_ID = 1
 CHAT2_THREAD_ID = 3
@@ -24,6 +28,11 @@ cmd_router = Router()
 # ============================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Проверка наличия токена перед запуском
+if not BOT_TOKEN:
+    logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения BOT_TOKEN не задана в панели BotHost!")
+    sys.exit(1)
 
 # ============================================================
 # БАЗА ДАННЫХ
@@ -64,6 +73,17 @@ async def init_db():
             )
         """)
         await db.commit()
+        
+        # Автоматическая миграция: если база данных старая и в ней нет message_id,
+        # этот блок безопасно добавит колонку без потери текущих данных.
+        try:
+            await db.execute("ALTER TABLE actions ADD COLUMN message_id INTEGER")
+            await db.commit()
+            logger.info("Миграция: Колонка message_id успешно добавлена в таблицу actions.")
+        except aiosqlite.OperationalError:
+            # Если колонка уже существует, sqlite выдаст ошибку, которую мы просто игнорируем
+            pass
+            
     logger.info("БД готова")
 
 async def add_user(uid, name, role):
@@ -159,14 +179,14 @@ def parse_message(text):
     text = text.lower().strip()
     all_codes = re.findall(r'\b(\d{4})\b', text)
     lines = text.split('\n')
-    
+
     repair_codes = []
     for line in lines:
         if any(kw in line for kw in ['ремонт', 'поломк', 'сломан']):
             repair_codes.extend(re.findall(r'\b(\d{4})\b', line))
-    
+
     keywords_found = []
-    
+
     for kw in ['привез на сц', 'привёз на сц', 'на сц привез',
                'вывез из сц', 'вывёз из сц', 'из сц вывез', 'вывез с сц',
                'ремонт', 'поломк', 'сломан',
@@ -186,24 +206,24 @@ def parse_message(text):
                                 qty = num
                         break
                 keywords_found.append({'action_type': atype, 'quantity': qty})
-    
+
     if not keywords_found:
         return []
-    
+
     qty_actions = [kw for kw in keywords_found if kw['quantity'] > 0]
     code_actions = [kw for kw in keywords_found if kw['quantity'] == 0]
     results = []
-    
+
     for kw in qty_actions:
         results.append({'action_type': kw['action_type'], 'bike_codes': [], 'quantity': kw['quantity']})
-    
+
     for kw in code_actions:
         if kw['action_type'] == 'repair':
             codes = repair_codes.copy() if repair_codes else []
         else:
             codes = all_codes.copy() if all_codes else []
         results.append({'action_type': kw['action_type'], 'bike_codes': codes, 'quantity': 0})
-    
+
     return results
 
 
@@ -328,7 +348,7 @@ async def cmd_chat(message: Message):
             elif shift.get('role') == "Водитель":
                 role_emoji = " 🚚"
             role_text = f" | {shift['role']}{role_emoji}" if shift.get('role') else ""
-            
+
             msg = await message.answer(
                 f"{full_name}{role_text}\n"
                 f"Активная смена с {shift['start_time']}\n"
@@ -376,7 +396,7 @@ async def cmd_chat(message: Message):
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM actions WHERE shift_id = ?", (last_shift['id'],))
-            
+
             if new_move > 0:
                 await db.execute(
                     "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'move', '', ?)",
@@ -402,7 +422,7 @@ async def cmd_chat(message: Message):
                     "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, quantity) VALUES (?, ?, 0, 'from_sc', '', ?)",
                     (user_id, last_shift['id'], new_from_sc)
                 )
-                
+
             await db.execute("UPDATE shifts SET comment = ? WHERE id = ?", (new_comment, last_shift['id']))
             await db.commit()
 
@@ -503,16 +523,16 @@ async def cmd_chat(message: Message):
             if district and district in DISTRICTS:
                 role_for_shift = role if role else ""
                 await start_shift(user_id, full_name, role_for_shift, time_str, district)
-                
+
                 # Добавление красивых иконок под роль
                 role_emoji = ""
                 if role == "Скаут":
                     role_emoji = " 🚶"
                 elif role == "Водитель":
                     role_emoji = " 🚚"
-                
+
                 role_text = f" | {role}{role_emoji}" if role else ""
-                
+
                 msg = await message.answer(
                     f"🟢 **Смена начата**\n\n"
                     f"{full_name}{role_text}\n"

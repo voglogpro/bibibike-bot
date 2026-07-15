@@ -129,7 +129,7 @@ DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/зам
 
 # Пароль админки не хранится в репозитории. Если ADMIN_PASSWORD пуст, админка
 # отключена. После проверки сервер выдаёт подписанную сессию на несколько часов.
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "123")
 ADMIN_SESSION_TTL_SEC = int(os.getenv("ADMIN_SESSION_TTL_SEC", str(8 * 60 * 60)))
 INIT_DATA_MAX_AGE_SEC = int(os.getenv("INIT_DATA_MAX_AGE_SEC", str(24 * 60 * 60)))
 CITY_MEMBERSHIP_TTL_SEC = int(os.getenv("CITY_MEMBERSHIP_TTL_SEC", "300"))

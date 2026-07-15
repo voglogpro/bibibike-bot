@@ -230,6 +230,30 @@
     background:var(--ink);color:#fff;font-weight:700;font-size:14px;border-radius:99px;padding:12px 20px;z-index:60;
     box-shadow:0 10px 26px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
   .toast.show{opacity:1}
+  .status.wait{background:rgba(255,171,47,.12);border-color:rgba(255,171,47,.35)}
+  .status.wait .dot{background:var(--orange);box-shadow:0 0 0 5px rgba(255,171,47,.12)}
+  .admin-login{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
+  .admin-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+  .admin-head .formhead{margin:0}
+  .admin-list{display:grid;gap:8px}
+  .admin-row{padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--bg)}
+  .admin-row .top{display:flex;justify-content:space-between;gap:8px;font-weight:800}
+  .admin-row .meta{margin-top:5px;color:var(--muted);font-size:12px;line-height:1.45}
+  .admin-badge{display:inline-block;padding:2px 7px;border-radius:99px;background:var(--line);font-size:10px;font-weight:800}
+  .admin-section{font-weight:900;margin:16px 0 8px}
+  .admin-note{font-size:12px;color:var(--muted);margin-top:8px}
+  .admin-city{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--bg)}
+  .admin-city span{color:var(--muted);font-size:12px}.admin-city b{font-size:14px}
+  .admin-role-groups{display:grid;gap:12px}
+  .admin-role-head{display:flex;align-items:center;justify-content:space-between;margin:0 2px 6px;color:var(--green-deep);font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
+  .admin-role-head span{min-width:24px;text-align:center;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);font-size:10px}
+  .admin-history-box{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
+  .admin-history-box .admin-head{margin-bottom:10px}
+  .admin-history-actions{margin-top:5px;color:var(--green-deep);font-size:11px;font-weight:700;line-height:1.45}
+  .manual-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:7px;margin-top:9px;align-items:end}
+  .manual-controls .tinput{min-width:0}
+  @media(max-width:420px){.manual-controls{grid-template-columns:1fr 1fr}.manual-controls .mini{grid-column:1/-1}}
+  .mini{border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:8px 11px;font-weight:800}
 </style>
 </head>
 <body>
@@ -264,6 +288,10 @@
           <button data-role="водитель">Водитель</button>
           <button data-role="чарджер">Чарджер</button>
         </div>
+      </div>
+      <div class="field">
+        <label>Город</label>
+        <select class="tinput" id="regCity"></select>
       </div>
       <button class="save" id="btnRegister">Продолжить</button>
     </div>
@@ -333,6 +361,7 @@
           <div class="foot" style="margin-bottom:10px">
             <span>Время <b id="fTime">0:00</b></span>
             <span>Район <b id="fDist">—</b></span>
+            <span>Город <b id="fCity">—</b></span>
           </div>
 
           <button class="bigbtn stop" id="btnStopForm"><span>■</span> Закончить смену</button>
@@ -363,6 +392,10 @@
         <div class="field">
           <label>Район / зона</label>
           <input class="tinput" id="startDistrict" placeholder="фмр">
+        </div>
+        <div class="field">
+          <label>Город</label>
+          <select class="tinput" id="startCity"></select>
         </div>
         <button class="save" id="btnStart">Открыть смену</button>
       </div>
@@ -418,11 +451,11 @@
     <div id="tab-settings" class="page hidden">
       <div class="panel">
         <div class="formhead">Настройки</div>
-        <p class="hint">Часовой пояс влияет на время, которое подставляется в формы. Оплата — на расчёт заработка будущих смен (закрытые не пересчитываются).</p>
+        <p class="hint">Часовой пояс берётся из настроек выбранного города. Оплата — на расчёт заработка будущих смен (закрытые не пересчитываются).</p>
 
         <div class="field">
-          <label>Часовой пояс</label>
-          <select class="tinput" id="tzSelect">
+          <label>Часовой пояс города</label>
+          <select class="tinput" id="tzSelect" disabled>
             <option value="2">Калининград (UTC+2)</option>
             <option value="3" selected>Москва · Краснодар · Ставрополь (UTC+3)</option>
             <option value="4">Самара (UTC+4)</option>
@@ -435,6 +468,11 @@
             <option value="11">Магадан (UTC+11)</option>
             <option value="12">Камчатка (UTC+12)</option>
           </select>
+        </div>
+
+        <div class="field">
+          <label>Город по умолчанию</label>
+          <select class="tinput" id="citySelect"></select>
         </div>
 
         <div class="field">
@@ -476,7 +514,48 @@
           </div>
         </div>
 
+        <div class="field">
+          <label>Админка</label>
+          <div class="toggle-row">
+            <span class="toggle-desc">Включите переключатель и введите пароль. Администратор видит только свой город: открытые и завершённые смены, сотрудников по ролям и полную историю.</span>
+            <label class="switch"><input type="checkbox" id="adminToggle"><span class="slider"></span></label>
+          </div>
+          <div class="admin-login hidden" id="adminLogin">
+            <div class="err" id="adminErr"></div>
+            <input class="tinput" id="adminPassword" type="password" autocomplete="current-password" placeholder="Пароль админки">
+            <button class="save" id="adminLoginBtn" style="margin-top:9px">Войти</button>
+          </div>
+        </div>
+
         <button class="save" id="saveSettings">Сохранить</button>
+      </div>
+
+      <div class="panel hidden" id="adminPanel">
+        <div class="admin-head">
+          <div class="formhead">Админка</div>
+          <button class="mini" id="adminReload">Обновить</button>
+        </div>
+        <div class="admin-city"><span>Доступ только к своему городу</span><b id="adminCityName">—</b></div>
+        <div class="admin-note" id="adminUpdated"></div>
+        <div class="admin-section">Открытые смены</div>
+        <div class="admin-role-groups" id="adminOpen"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">Завершённые сегодня</div>
+        <div class="admin-role-groups" id="adminClosed"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">Сотрудники и история смен</div>
+        <div class="admin-role-groups" id="adminEmployees"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-history-box hidden" id="adminHistoryBox">
+          <div class="admin-head">
+            <div class="formhead" id="adminHistoryTitle">История смен</div>
+            <button class="mini" id="adminHistoryClose">Закрыть</button>
+          </div>
+          <div class="admin-list" id="adminHistory"><div class="hempty">Загружаю…</div></div>
+        </div>
+        <div class="admin-section">КПД сотрудников</div>
+        <div class="admin-role-groups" id="adminKpi"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">Текущий месяц</div>
+        <div class="admin-role-groups" id="adminMonth"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section hidden" id="manualTitle">Ручные отчёты — нужна проверка</div>
+        <div class="admin-list" id="adminManual"></div>
       </div>
     </div>
 
@@ -507,7 +586,7 @@
 
 <script>
 /* Запросы идут на тот же адрес, с которого открыта страница (бот сам её отдаёт). */
-const API_BASE = new URLSearchParams(location.search).get('api') || "";
+const API_BASE = "";
 
 const tg = window.Telegram ? window.Telegram.WebApp : null;
 const initData = tg ? tg.initData : "";
@@ -528,32 +607,51 @@ let selPayType = "hourly";
 let selRole = "";
 let tick = null;
 let histLoaded = false;
+let stateLoadedAt = Date.now();
+let adminToken = "";
+let adminHistoryRequest = 0;
+let adminHistoryUserId = null;
+let adminHistoryOffset = 0;
 
 /* ---------- утилиты ---------- */
 const $ = id => document.getElementById(id);
 const rub = n => Math.round(n).toLocaleString('ru-RU');
+const esc = value => String(value == null ? '' : value)
+  .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+  .replaceAll('"','&quot;').replaceAll("'",'&#039;');
 function toast(msg){
   const t = $('toast'); t.textContent = msg; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'), 2600);
 }
-function tzOffset(){ return parseInt(localStorage.getItem('bb_tz') || '3', 10); }
-function nowInTz(){
+function tzOffset(){
+  if(STATE && STATE.city && Number.isFinite(Number(STATE.city.timezone_offset))){
+    return Number(STATE.city.timezone_offset);
+  }
+  return parseInt(localStorage.getItem('bb_tz') || '3', 10);
+}
+function cityOffset(cityId){
+  const city = STATE && (STATE.cities||[]).find(item=>Number(item.id)===Number(cityId));
+  return city ? Number(city.timezone_offset) : tzOffset();
+}
+function nowInTz(offset=tzOffset()){
   const d = new Date();
   const utc = d.getTime() + d.getTimezoneOffset()*60000;
-  return new Date(utc + tzOffset()*3600000);
+  return new Date(utc + offset*3600000);
 }
-function nowHM(){
-  const d = nowInTz();
+function nowHM(offset=tzOffset()){
+  const d = nowInTz(offset);
   return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
-function elapsedMin(hm){
-  if(!hm) return 0;
-  const [h,m] = hm.split(':').map(Number);
-  const d = nowInTz();
-  let cur = d.getHours()*60 + d.getMinutes() + d.getSeconds()/60;
-  let diff = cur - (h*60+m);
-  if(diff < 0) diff += 24*60;
-  return diff;
+function serverNowMs(){
+  if(!(STATE && STATE.shift && STATE.shift.server_now)) return Date.now();
+  return Date.parse(STATE.shift.server_now) + (Date.now() - stateLoadedAt);
+}
+function elapsedMin(startAt){
+  if(!startAt) return 0;
+  return Math.max(0, (serverNowMs() - Date.parse(startAt)) / 60000);
+}
+function scheduledNow(){
+  return !!(STATE && STATE.shift && STATE.shift.start_at && serverNowMs() < Date.parse(STATE.shift.start_at));
 }
 function hm(mins){
   const h = Math.floor(mins/60), m = Math.floor(mins%60);
@@ -578,21 +676,47 @@ async function api(path, opts={}){
   if(!res.ok) throw { message: (data && data.message) || ('Ошибка '+res.status) };
   return data;
 }
+async function adminApi(path, opts={}){
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      'Authorization':'tma '+initData, 'Content-Type':'application/json',
+      'X-Admin-Token':adminToken, ...(opts.headers||{})
+    }
+  });
+  let data = null;
+  try{ data = await res.json(); }catch(e){}
+  if(!res.ok) throw { message:(data && data.message)||('Ошибка '+res.status), status:res.status };
+  return data;
+}
 
 /* ---------- расчёт заработка ---------- */
 function earnedNow(){
   if(!STATE || !STATE.active || !STATE.shift) return 0;
+  if(scheduledNow()) return 0;
   const amt = STATE.user.pay_amount || 0;
   const pt  = STATE.user.pay_type;
   const st  = STATE.shift.stats || {};
   if(pt === 'salary') return amt;
   if(pt === 'piece')  return amt * (st.battery || 0);
-  return amt * elapsedMin(STATE.shift.start_time) / 60;
+  return amt * elapsedMin(STATE.shift.start_at) / 60;
 }
 function paintMoney(){
   if(!(STATE && STATE.active && STATE.shift)) return;
   $('money').textContent = rub(earnedNow());
-  $('fTime').textContent = hm(elapsedMin(STATE.shift.start_time));
+  const waiting = scheduledNow();
+  $('fTime').textContent = waiting ? 'ожидает' : hm(elapsedMin(STATE.shift.start_at));
+  $('statusBox').classList.toggle('wait', waiting);
+  $('statusVal').textContent = waiting ? 'начнётся в '+STATE.shift.start_time : 'активна';
+  paintEarnSub();
+}
+function paintEarnSub(){
+  if(!(STATE && STATE.active && STATE.shift)) return;
+  const u=STATE.user;
+  if(scheduledNow()) $('earnSub').textContent = 'Ожидает начала · действия уже считаются';
+  else if(u.pay_type === 'hourly') $('earnSub').textContent = rub(u.pay_amount)+' ₽/час · капает по времени';
+  else if(u.pay_type === 'piece') $('earnSub').textContent = rub(u.pay_amount)+' ₽ за замену АКБ';
+  else $('earnSub').textContent = 'Фикс за выход';
 }
 function startTick(){
   clearInterval(tick);
@@ -607,11 +731,14 @@ function render(){
 
   $('uName').textContent = u.name || 'Без имени';
   const title = lv.title ? ' · «'+lv.title+'»' : '';
-  $('uRole').innerHTML = (u.role ? '<b>'+u.role+'</b>' : 'Роль не указана') + title;
+  $('uRole').textContent = (u.role || 'Роль не указана') + title;
 
   const on = STATE.active && STATE.shift;
   $('statusBox').classList.toggle('on', !!on);
-  $('statusVal').textContent = on ? 'активна' : 'не активна';
+  $('statusBox').classList.toggle('wait', !!(on && scheduledNow()));
+  $('statusVal').textContent = on
+    ? (scheduledNow() ? 'начнётся в '+STATE.shift.start_time : 'активна')
+    : 'не активна';
 
   if(on){
     $('activeBlock').classList.remove('hidden');
@@ -627,12 +754,12 @@ function render(){
     $('countersGrid').classList.toggle('edit-on', !!u.edit_mode);
     updateEditButtons();
     $('fDist').textContent = STATE.shift.district || '—';
+    $('fCity').textContent = (STATE.shift.city && STATE.shift.city.name) || STATE.city.name || '—';
     $('earnLbl').textContent = PAY[u.pay_type].earnLbl;
-    if(u.pay_type === 'hourly') $('earnSub').textContent = rub(u.pay_amount)+' ₽/час · капает по времени';
-    else if(u.pay_type === 'piece') $('earnSub').textContent = rub(u.pay_amount)+' ₽ за замену АКБ';
-    else $('earnSub').textContent = 'Фикс за выход';
+    paintEarnSub();
     paintMoney();
   } else {
+    $('statusBox').classList.remove('wait');
     $('activeBlock').classList.add('hidden');
     $('idleBlock').classList.remove('hidden');
     if(STATE.last){
@@ -661,10 +788,38 @@ function render(){
   $('monthEarned').textContent = rub(STATE.month_earned || 0) + ' ₽';
 }
 
+function fillCitySelect(id, selected){
+  const select = $(id);
+  if(!select || !STATE) return;
+  select.replaceChildren();
+  (STATE.cities || []).forEach(city=>{
+    const option = document.createElement('option');
+    option.value = String(city.id);
+    option.textContent = city.name;
+    option.selected = Number(selected) === Number(city.id);
+    select.appendChild(option);
+  });
+  select.disabled = (STATE.cities || []).length <= 1;
+}
+function populateCitySelectors(){
+  const selected = (STATE.user && STATE.user.city_id) || (STATE.city && STATE.city.id);
+  const keep = (id, fallback, preserve) => preserve && $(id).value ? $(id).value : fallback;
+  fillCitySelect('regCity', keep('regCity', selected, !$('regScreen').classList.contains('hidden')));
+  fillCitySelect('startCity', keep('startCity', selected, !$('startForm').classList.contains('hidden')));
+  fillCitySelect('citySelect', keep('citySelect', selected, !$('tab-settings').classList.contains('hidden')));
+}
+
 /* ---------- загрузка ---------- */
 async function load(){
   try{
-    STATE = await api('/api/state');
+    const previousCity = STATE && STATE.city && STATE.city.id;
+    const nextState = await api('/api/state');
+    const cityChanged = previousCity != null && Number(previousCity) !== Number(nextState.city.id);
+    if(cityChanged) histLoaded = false;
+    STATE = nextState;
+    stateLoadedAt = Date.now();
+    populateCitySelectors();
+    if(cityChanged && !$('tab-rating').classList.contains('hidden')) await loadHistory();
     $('loading').classList.add('hidden');
     $('autherr').classList.add('hidden');
     // Обязательная регистрация: пока нет имени+роли — показываем только экран знакомства
@@ -711,11 +866,15 @@ document.querySelectorAll('[data-hide]').forEach(x=>{
   x.onclick = ()=> $(x.dataset.hide).classList.add('hidden');
 });
 maskTime($('startTime')); maskTime($('stopTime'));
+$('startCity').onchange = ()=>{
+  $('startTime').value = nowHM(cityOffset($('startCity').value));
+};
 
 $('btnStartForm').onclick = ()=>{
   $('stopForm').classList.add('hidden');
   $('startErr').classList.remove('show');
-  $('startTime').value = nowHM();
+  const cityId = $('startCity').value || STATE.user.city_id;
+  $('startTime').value = nowHM(cityOffset(cityId));
   $('startForm').classList.remove('hidden');
   $('startForm').scrollIntoView({behavior:'smooth'});
 };
@@ -736,12 +895,14 @@ $('btnStart').onclick = async ()=>{
   if(STATE && STATE.active) return showErr('startErr','Смена уже открыта.');
   const btn = $('btnStart'); btn.disabled = true; btn.textContent='Отправляю…';
   try{
-    await api('/api/shift/start', { method:'POST', body: JSON.stringify({
-      time: t, district: $('startDistrict').value.trim()
+    const result = await api('/api/shift/start', { method:'POST', body: JSON.stringify({
+      time: t, district: $('startDistrict').value.trim(), city_id: parseInt($('startCity').value)
     })});
     if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     $('startForm').classList.add('hidden');
-    toast('Смена открыта — отчёт в теме «Отчёты»');
+    toast(result.scheduled
+      ? `Смена начнётся в ${t} — действия уже считаются`
+      : 'Смена открыта — отчёт в теме «Отчёты»');
     await load();
   }catch(e){
     showErr('startErr', e.message || 'Не получилось. Попробуй ещё раз.');
@@ -839,8 +1000,11 @@ function fillSettings(){
   syncPayType(); syncRole();
   $('amtInput').value = u.pay_amount || 0;
   $('nameInput').value = u.name || '';
-  $('tzSelect').value = String(tzOffset());
+  $('tzSelect').value = String(cityOffset(u.city_id));
   $('editModeToggle').checked = !!u.edit_mode;
+  fillCitySelect('citySelect', u.city_id);
+  $('adminToggle').checked = !!adminToken;
+  $('adminPanel').classList.toggle('hidden', !adminToken);
 }
 function syncPayType(){
   document.querySelectorAll('#payTypeSeg button').forEach(b=>b.classList.toggle('on', b.dataset.pt===selPayType));
@@ -852,10 +1016,10 @@ function syncRole(){
 }
 document.querySelectorAll('#payTypeSeg button').forEach(b=>{ b.onclick = ()=>{ selPayType=b.dataset.pt; syncPayType(); }; });
 document.querySelectorAll('#roleSeg button').forEach(b=>{ b.onclick = ()=>{ selRole=b.dataset.role; syncRole(); }; });
+$('citySelect').onchange = ()=>{ $('tzSelect').value = String(cityOffset($('citySelect').value)); };
 
 $('saveSettings').onclick = async ()=>{
   const btn = $('saveSettings'); btn.disabled = true; btn.textContent='Сохраняю…';
-  localStorage.setItem('bb_tz', $('tzSelect').value);
   try{
     await api('/api/settings', { method:'POST', body: JSON.stringify({
       pay_type: selPayType,
@@ -863,8 +1027,10 @@ $('saveSettings').onclick = async ()=>{
       name: $('nameInput').value.trim(),
       role: selRole,
       edit_mode: $('editModeToggle').checked,
+      city_id: parseInt($('citySelect').value),
     })});
     if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    histLoaded = false;
     toast('Сохранено');
     await load();
   }catch(e){
@@ -873,6 +1039,256 @@ $('saveSettings').onclick = async ()=>{
     btn.disabled=false; btn.textContent='Сохранить';
   }
 };
+
+/* ---------- админка ---------- */
+function closeAdmin(){
+  adminToken = '';
+  adminHistoryRequest++;
+  adminHistoryUserId = null;
+  adminHistoryOffset = 0;
+  $('adminToggle').checked = false;
+  $('adminLogin').classList.add('hidden');
+  $('adminPanel').classList.add('hidden');
+  $('adminHistoryBox').classList.add('hidden');
+  $('adminCityName').textContent = '—';
+  $('adminPassword').value = '';
+}
+
+$('adminToggle').onchange = ()=>{
+  if(!$('adminToggle').checked){
+    closeAdmin();
+    return;
+  }
+  $('adminErr').classList.remove('show');
+  $('adminLogin').classList.remove('hidden');
+  $('adminPassword').value = '';
+  setTimeout(()=>$('adminPassword').focus(), 50);
+};
+
+$('adminLoginBtn').onclick = async ()=>{
+  const password = $('adminPassword').value;
+  if(!password) return showErr('adminErr','Введи пароль.');
+  const btn = $('adminLoginBtn'); btn.disabled=true; btn.textContent='Проверяю…';
+  try{
+    const result = await api('/api/admin/login', {
+      method:'POST', body:JSON.stringify({password})
+    });
+    adminToken = result.token;
+    $('adminPassword').value = '';
+    $('adminLogin').classList.add('hidden');
+    $('adminPanel').classList.remove('hidden');
+    $('adminCityName').textContent = (result.city && result.city.name) || '—';
+    await loadAdmin();
+  }catch(e){
+    $('adminPassword').value = '';
+    showErr('adminErr', e.message || 'Не удалось войти.');
+  }finally{
+    btn.disabled=false; btn.textContent='Войти';
+  }
+};
+
+const ADMIN_ROLE_GROUPS = [
+  {key:'scout', label:'Скауты'},
+  {key:'driver', label:'Водители'},
+  {key:'charger', label:'Чарджеры'},
+  {key:'other', label:'Без роли'},
+];
+function adminRoleKey(role){
+  const value=String(role||'').trim().toLowerCase();
+  if(value.includes('скаут')) return 'scout';
+  if(value.includes('водител')) return 'driver';
+  if(value.includes('чардж')) return 'charger';
+  return 'other';
+}
+function renderAdminRoleGroups(items, renderItem, emptyText){
+  if(!items || !items.length) return `<div class="hempty">${esc(emptyText)}</div>`;
+  const grouped={scout:[],driver:[],charger:[],other:[]};
+  items.forEach(item=>grouped[adminRoleKey(item.role)].push(item));
+  return ADMIN_ROLE_GROUPS.filter(group=>grouped[group.key].length).map(group=>
+    `<div class="admin-role-group"><div class="admin-role-head">${group.label}<span>${grouped[group.key].length}</span></div>
+     <div class="admin-list">${grouped[group.key].map(renderItem).join('')}</div></div>`
+  ).join('');
+}
+function adminSourceLabel(source){
+  return source==='manual_chat' || source==='manual_signal' ? 'Вручную' : 'Бот';
+}
+function renderAdminShift(item){
+  const statuses={scheduled:'ожидает начала',active:'идёт',closed:'закрыта'};
+  const source=adminSourceLabel(item.source);
+  const kpi=item.efficiency==null?'—':Number(item.efficiency).toLocaleString('ru-RU')+' дейст./ч';
+  const end=item.end?'–'+esc(item.end):'';
+  const date=item.date && item.date!=='—' ? esc(item.date)+' · ' : '';
+  const district=item.district ? ' · '+esc(item.district) : '';
+  return `<div class="admin-row"><div class="top"><span>${esc(item.name)}</span><span>${rub(item.earned)} ₽</span></div>
+    <div class="meta"><span class="admin-badge">${source}</span> ${esc(statuses[item.status]||item.status)}${district}<br>
+    ${date}${esc(item.start||'—')}${end} · ${hm(item.worked_minutes||0)} · действий ${Number(item.actions)||0} · КПД ${esc(kpi)}</div></div>`;
+}
+function renderAdminEmployee(item){
+  const open=item.has_open_shift?'<span class="admin-badge">смена открыта</span> ':'';
+  return `<div class="admin-row"><div class="top"><span>${esc(item.name)}</span>
+    <button class="mini admin-history-open" data-user-id="${Number(item.user_id)}">История</button></div>
+    <div class="meta">${open}завершённых смен ${Number(item.closed_shifts)||0}</div></div>`;
+}
+function renderAdminHistoryItems(items){
+  const actionNames={move:'перемещено',fix:'поправлено',repair:'ремонт',battery:'АКБ',to_sc:'на СЦ',from_sc:'из СЦ'};
+  return items.map(item=>{
+    const source=adminSourceLabel(item.source);
+    const actions=Object.entries(item.actions||{}).filter(([,count])=>Number(count)>0)
+      .map(([type,count])=>`${actionNames[type]||type}: ${Number(count)}`).join(' · ');
+    const district=item.district?' · '+esc(item.district):'';
+    const comment=item.comment?`<br>Комментарий: ${esc(item.comment)}`:'';
+    return `<div class="admin-row"><div class="top"><span>${esc(item.date)}</span><span>${rub(item.earned)} ₽</span></div>
+      <div class="meta"><span class="admin-badge">${source}</span> ${esc(item.start||'—')}–${esc(item.end||'—')} · ${hm(item.worked_minutes||0)}${district}${comment}</div>
+      <div class="admin-history-actions">${actions||'Действий нет'}</div></div>`;
+  }).join('');
+}
+async function loadAdminHistory(userId, append=false){
+  userId=Number(userId);
+  if(append && adminHistoryUserId!==userId) append=false;
+  if(!append){
+    adminHistoryUserId=userId;
+    adminHistoryOffset=0;
+  }
+  const offset=append?adminHistoryOffset:0;
+  const requestId=++adminHistoryRequest;
+  const box=$('adminHistoryBox');
+  box.classList.remove('hidden');
+  if(!append){
+    $('adminHistoryTitle').textContent='История смен';
+    $('adminHistory').innerHTML='<div class="hempty">Загружаю…</div>';
+  }else{
+    const more=$('adminHistory').querySelector('.admin-history-more');
+    if(more){more.disabled=true;more.textContent='Загружаю…';}
+  }
+  try{
+    const data=await adminApi('/api/admin/history?user_id='+encodeURIComponent(userId)+'&limit=50&offset='+offset);
+    if(requestId!==adminHistoryRequest) return;
+    $('adminHistoryTitle').textContent='История: '+data.employee.name;
+    const list=$('adminHistory');
+    const rows=renderAdminHistoryItems(data.items||[]);
+    if(append){
+      const oldMore=list.querySelector('.admin-history-more');
+      if(oldMore) oldMore.remove();
+      list.insertAdjacentHTML('beforeend', rows);
+    }else{
+      list.innerHTML=rows||'<div class="hempty">Завершённых смен пока нет.</div>';
+    }
+    adminHistoryOffset=offset+(data.items||[]).length;
+    if(data.page && data.page.has_more){
+      list.insertAdjacentHTML('beforeend','<button class="mini admin-history-more">Показать ещё</button>');
+      list.querySelector('.admin-history-more').onclick=()=>loadAdminHistory(userId,true);
+    }
+    if(!append) box.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){
+    if(requestId!==adminHistoryRequest) return;
+    if(e.status===401) closeAdmin();
+    if(!append) $('adminHistory').innerHTML='<div class="hempty">Не удалось загрузить историю.</div>';
+    else{
+      const more=$('adminHistory').querySelector('.admin-history-more');
+      if(more){more.disabled=false;more.textContent='Повторить загрузку';}
+    }
+    toast(e.message || 'Не удалось загрузить историю смен.');
+  }
+}
+$('adminHistoryClose').onclick=()=>{
+  adminHistoryRequest++;
+  adminHistoryUserId=null;
+  adminHistoryOffset=0;
+  $('adminHistoryBox').classList.add('hidden');
+};
+
+function suggestedManualTimes(text){
+  const times=[];
+  for(const match of String(text||'').matchAll(/(^|\D)(\d{1,2}):([0-5]\d)(?!\d)/g)){
+    const hour=Number(match[2]);
+    if(hour<=23) times.push(String(hour).padStart(2,'0')+':'+match[3]);
+  }
+  return times.length ? [times[0], times[times.length-1]] : ['', ''];
+}
+
+async function approveManual(row, btn){
+  const reportId=Number(row.dataset.reportId);
+  const updatedAt=row.dataset.updatedAt;
+  const startTime=row.querySelector('[data-manual-start]').value;
+  const endTime=row.querySelector('[data-manual-end]').value;
+  if(!startTime || !endTime) return toast('Укажи начало и окончание смены.');
+  btn.disabled=true; btn.textContent='Сохраняю…';
+  try{
+    await adminApi('/api/admin/manual/approve', {
+      method:'POST', body:JSON.stringify({
+        report_id:reportId,start_time:startTime,end_time:endTime,updated_at:updatedAt
+      })
+    });
+    toast('Ручная смена учтена.');
+    row.remove();
+    if(!$('adminManual').querySelector('[data-report-id]')) $('manualTitle').classList.add('hidden');
+    await loadAdmin(true);
+  }catch(e){
+    if(e.status===401) closeAdmin();
+    toast(e.message || 'Не удалось учесть ручную смену.');
+  }finally{
+    btn.disabled=false; btn.textContent='Учесть смену';
+  }
+}
+
+async function loadAdmin(silent=false){
+  if(!adminToken) return;
+  if(!silent){
+    $('adminOpen').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminClosed').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminEmployees').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminKpi').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminMonth').innerHTML='<div class="hempty">Загружаю…</div>';
+  }
+  try{
+    const data = await adminApi('/api/admin/dashboard');
+    $('adminCityName').textContent=(data.city && data.city.name)||'—';
+    $('adminUpdated').textContent = 'Обновлено: '+new Date(data.generated_at).toLocaleString('ru-RU');
+    $('adminOpen').innerHTML=renderAdminRoleGroups(
+      data.open||[], renderAdminShift, 'Открытых смен сейчас нет.'
+    );
+    $('adminClosed').innerHTML=renderAdminRoleGroups(
+      data.closed_today||[], renderAdminShift, 'Сегодня завершённых смен пока нет.'
+    );
+    $('adminEmployees').innerHTML=renderAdminRoleGroups(
+      data.employees||[], renderAdminEmployee, 'Сотрудники пока не найдены.'
+    );
+    document.querySelectorAll('#adminEmployees .admin-history-open').forEach(btn=>{
+      btn.onclick=()=>loadAdminHistory(Number(btn.dataset.userId));
+    });
+    const kpi=data.kpi||[];
+    $('adminKpi').innerHTML=renderAdminRoleGroups(kpi, item=>{
+      const value=Number(item.efficiency||0).toLocaleString('ru-RU')+' дейст./ч';
+      return `<div class="admin-row"><div class="top"><span>${esc(item.name)}</span><span>${esc(value)}</span></div>
+        <div class="meta">${hm(item.worked_minutes||0)} · действий ${Number(item.actions)||0}</div></div>`;
+    }, 'КПД появится после первой учтённой смены.');
+    $('adminMonth').innerHTML=renderAdminRoleGroups(data.month||[], item=>
+      `<div class="admin-row"><div class="top"><span>${esc(item.name)}</span><span>${rub(item.earned)} ₽</span></div>
+       <div class="meta">смен ${Number(item.shifts)||0} · ${hm(item.worked_minutes||0)} · действий ${Number(item.actions)||0}</div></div>`,
+      'За этот месяц данных нет.'
+    );
+    if(!silent){
+      const manual=data.manual_needs_review||[];
+      $('manualTitle').classList.toggle('hidden', !manual.length);
+      $('adminManual').innerHTML = manual.map(item=>{
+        const suggested=suggestedManualTimes(item.raw_text);
+        return `<div class="admin-row" data-report-id="${Number(item.id)}" data-updated-at="${esc(item.updated_at)}"><div class="top"><span>${esc(item.sender_name||('Сотрудник #'+Number(item.user_id)))}</span><span class="admin-badge">проверить</span></div>
+         <div class="meta">Сообщение #${Number(item.message_id)} · ${esc(item.parse_error||'Не распознано')}<br>${esc(item.raw_text).slice(0,300)}</div>
+         <div class="manual-controls"><input class="tinput" data-manual-start type="time" aria-label="Начало смены" value="${suggested[0]}">
+         <input class="tinput" data-manual-end type="time" aria-label="Окончание смены" value="${suggested[1]}">
+         <button class="mini manual-approve">Учесть смену</button></div></div>`;
+      }).join('');
+      document.querySelectorAll('#adminManual .manual-approve').forEach(btn=>{
+        btn.onclick=()=>approveManual(btn.closest('[data-report-id]'), btn);
+      });
+    }
+  }catch(e){
+    if(e.status===401) closeAdmin();
+    toast(e.message || 'Не удалось загрузить админку');
+  }
+}
+
+$('adminReload').onclick = ()=>loadAdmin();
 
 /* ---------- история (в Профиле) ---------- */
 async function loadHistory(){
@@ -885,12 +1301,13 @@ async function loadHistory(){
     } else {
       $('hList').innerHTML = data.items.map(it=>{
         const ptName = {hourly:'почасовая',salary:'оклад',piece:'сделка'}[it.pay_type]||'';
-        const dist = it.district ? ' · '+it.district : '';
+        const dist = it.district ? ' · '+esc(it.district) : '';
+        const city = it.city_name ? ' · '+esc(it.city_name) : '';
         return `<div class="hrow" id="hrow-${it.shift_id}">
-          <div><div class="d">${it.date}</div>
-          <div class="meta"><span class="bdg">${ptName}</span> ${it.worked}${dist}</div></div>
+          <div><div class="d">${esc(it.date)}</div>
+          <div class="meta"><span class="bdg">${esc(ptName)}</span> ${esc(it.worked)}${dist}${city}</div></div>
           <div class="e">${rub(it.earned)} ₽</div>
-          <button class="del" data-sid="${it.shift_id}" data-date="${it.date}">🗑</button></div>`;
+          <button class="del" data-sid="${Number(it.shift_id)}" data-date="${esc(it.date)}">🗑</button></div>`;
       }).join('');
       document.querySelectorAll('#hList .del').forEach(b=>{
         b.onclick = ()=> confirmDelete(parseInt(b.dataset.sid), b.dataset.date);
@@ -907,7 +1324,7 @@ function confirmDelete(sid, date){
   if(!row || row.querySelector('.confirm-del')) return;
   const box = document.createElement('div');
   box.className = 'confirm-del';
-  box.innerHTML = `<span>Удалить смену от ${date}? Отчёт в «Отчётах» тоже удалится.</span>
+  box.innerHTML = `<span>Удалить смену от ${esc(date)}? Отчёт в «Отчётах» тоже удалится.</span>
     <button class="no">Нет</button><button class="yes">Удалить</button>`;
   row.after(box);
   box.querySelector('.no').onclick = ()=> box.remove();
@@ -941,9 +1358,11 @@ $('btnRegister').onclick = async ()=>{
   $('regErr').classList.remove('show');
   if(!name) return showErr('regErr','Впиши имя, например Иванов И.И.');
   if(!regRole) return showErr('regErr','Выбери роль.');
+  const cityId = parseInt($('regCity').value);
+  if(!cityId) return showErr('regErr','Выбери город.');
   const btn = $('btnRegister'); btn.disabled = true; btn.textContent = 'Сохраняю…';
   try{
-    await api('/api/settings', { method:'POST', body: JSON.stringify({ name, role: regRole })});
+    await api('/api/settings', { method:'POST', body: JSON.stringify({ name, role: regRole, city_id: cityId })});
     if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     await load();
   }catch(e){
@@ -958,7 +1377,17 @@ if(tg){
   try{ tg.setHeaderColor('#0A100C'); tg.setBackgroundColor('#0A100C'); }catch(e){}
 }
 load();
-setInterval(()=>{ if(!document.hidden && STATE) load(); }, 20000);
+let periodicLoadRunning=false;
+setInterval(async ()=>{
+  if(document.hidden || !STATE || periodicLoadRunning) return;
+  periodicLoadRunning=true;
+  try{
+    await load();
+    if(adminToken && !$('tab-settings').classList.contains('hidden')) await loadAdmin(true);
+  }finally{
+    periodicLoadRunning=false;
+  }
+}, 20000);
 </script>
 </body>
 </html>

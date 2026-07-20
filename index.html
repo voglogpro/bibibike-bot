@@ -324,6 +324,13 @@
     <div class="sm">Это приложение работает только внутри Telegram —<br>по кнопке под отчётом или в закрепе темы.</div>
   </div>
 
+  <!-- Постоянная ошибка связи: не оставляем пользователя на пустом экране. -->
+  <div id="loaderr" class="center hidden">
+    <div class="big">Не удалось загрузить приложение</div>
+    <div class="sm" id="loadErrText">Сервер временно не отвечает.</div>
+    <button class="save" id="btnRetryLoad" style="max-width:280px;margin:18px auto 0">Повторить</button>
+  </div>
+
   <!-- Обязательная регистрация (первый вход) -->
   <div id="regScreen" class="hidden">
     <div class="panel">
@@ -788,7 +795,7 @@ async function api(path, opts={}){
   const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
   if(mutating){ stateMutationDepth++; stateRevision++; }
   try{
-    const res = await fetch(API_BASE + path, {
+    const res = await fetchApi(API_BASE + path, {
       ...opts,
       headers: { 'Authorization':'tma '+initData, 'Content-Type':'application/json', ...(opts.headers||{}) }
     });
@@ -805,7 +812,7 @@ async function adminApi(path, opts={}){
   const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
   if(mutating){ stateMutationDepth++; stateRevision++; }
   try{
-    const res = await fetch(path, {
+    const res = await fetchApi(path, {
       ...opts,
       headers: {
         'Authorization':'tma '+initData, 'Content-Type':'application/json',
@@ -818,6 +825,26 @@ async function adminApi(path, opts={}){
     return data;
   }finally{
     if(mutating){ stateMutationDepth=Math.max(0,stateMutationDepth-1); stateRevision++; }
+  }
+}
+
+async function fetchApi(url, opts={}){
+  /* GET-загрузки можно безопасно повторить после таймаута. POST не прерываем:
+     сервер мог уже выполнить действие, и повтор создал бы дубль. Если вызывающий
+     код передал собственный signal, он сам управляет отменой запроса. */
+  const method = String(opts.method || 'GET').toUpperCase();
+  if(method !== 'GET' || opts.signal) return fetch(url, opts);
+  const controller = new AbortController();
+  const timeout = setTimeout(()=>controller.abort(), 15000);
+  try{
+    return await fetch(url, {...opts, signal:controller.signal});
+  }catch(e){
+    if(e && e.name === 'AbortError'){
+      throw {message:'Сервер не ответил за 15 секунд. Проверьте BotHost и повторите.'};
+    }
+    throw e;
+  }finally{
+    clearTimeout(timeout);
   }
 }
 
@@ -975,6 +1002,7 @@ async function load({background=false}={}){
     if(cityChanged && !$('tab-rating').classList.contains('hidden')) await loadHistory();
     $('loading').classList.add('hidden');
     $('autherr').classList.add('hidden');
+    $('loaderr').classList.add('hidden');
     // Обязательная регистрация: пока нет имени+роли — показываем только экран знакомства
     if(!STATE.registered){
       clearInterval(tick);
@@ -996,13 +1024,24 @@ async function load({background=false}={}){
     if(e.auth){
       $('app').classList.add('hidden');
       $('tabbar').classList.add('hidden');
+      $('loaderr').classList.add('hidden');
       $('autherr').classList.remove('hidden');
     } else {
-      toast(e.message || 'Нет связи с ботом');
+      $('app').classList.add('hidden');
+      $('tabbar').classList.add('hidden');
+      $('autherr').classList.add('hidden');
+      $('loadErrText').textContent = e.message || 'Нет связи с ботом';
+      $('loaderr').classList.remove('hidden');
     }
     return false;
   }
 }
+
+$('btnRetryLoad').onclick = ()=>{
+  $('loaderr').classList.add('hidden');
+  $('loading').classList.remove('hidden');
+  load();
+};
 
 /* ---------- вкладки ---------- */
 document.querySelectorAll('.tab').forEach(t=>{

@@ -115,10 +115,9 @@ DEBOUNCE_SEC = 20
 # ============================================================
 # === НОВОЕ: МИНИ-ПРИЛОЖЕНИЕ (ЗАРПЛАТА) =====================
 # ============================================================
-# Порт нашего веб-сервера задаётся отдельной переменной WEB_PORT.
-# Дефолт 3000 сохранён из рабочей версии; на хостинге WEB_PORT должен совпадать
-# с портом, выделенным для Mini App.
-# Этот же порт нужно указать в поле «Порт веб-приложения» при создании бота.
+# BotHost передаёт выделенный веб-порт через стандартную переменную PORT.
+# WEB_PORT оставлен запасным вариантом для старой настройки; локально используется 3000.
+# В панели BotHost порт веб-приложения должен совпадать с тем, что виден в стартовом логе.
 WEBAPP_PORT = int(os.getenv("PORT") or os.getenv("WEB_PORT") or "3000")
 
 # Имя бота (без @) и short-name Mini App из BotFather (/newapp) —
@@ -127,10 +126,9 @@ WEBAPP_PORT = int(os.getenv("PORT") or os.getenv("WEB_PORT") or "3000")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "bbbotdelaetbot")
 WEBAPP_SHORTNAME = os.getenv("WEBAPP_SHORTNAME", "zp")
 
-# === НОВОЕ: прямой https-адрес страницы приложения (бот сам её отдаёт на BotHost).
-# Нужен для web_app-кнопки, которая открывает Mini App в один тап прямо из отчёта.
-# Если пусто — кнопка откатится на старую url-ссылку t.me/бот/shortname.
-# Задавать ТОЛЬКО через переменную окружения, дефолт — публичный адрес бота. ===
+# Публичный адрес нужен как ориентир для настройки приложения в BotFather.
+# Ссылка из группового отчёта идёт через t.me/бот/shortname, а фактический URL
+# этого short-name хранится на стороне Telegram и должен указывать на этот домен.
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://bot-1783532208-8771-voglogpro.bothost.tech/")
 
 # Домен, с которого открывается сама страница мини-приложения (GitHub Pages).
@@ -147,7 +145,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-20 · дневные и ночные декады админки"
+BUILD_VERSION = "2026-07-20 · FIXED day/night + Обед + Mini App"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -509,11 +507,47 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_admin_periods_city_kind "
             "ON admin_periods(city_id, shift_kind, ended_at)"
         )
+        # Неудачный/прерванный деплой мог успеть создать таблицу без
+        # UNIQUE-индекса. Тогда два открытых периода одного типа ломали бы
+        # каждый следующий запуск на CREATE UNIQUE INDEX. Чиним такую
+        # частичную миграцию атомарно: оставляем самый поздний период,
+        # а предыдущие закрываем в момент его начала.
+        await db.commit()
+        await db.execute("BEGIN IMMEDIATE")
+        duplicate_admin_periods = await (await db.execute(
+            "SELECT city_id, shift_kind, COUNT(*) FROM admin_periods "
+            "WHERE ended_at IS NULL GROUP BY city_id, shift_kind HAVING COUNT(*) > 1"
+        )).fetchall()
+        repaired_admin_periods = 0
+        for period_city_id, period_kind, amount in duplicate_admin_periods:
+            keep = await (await db.execute(
+                "SELECT id, started_at FROM admin_periods "
+                "WHERE city_id = ? AND shift_kind = ? AND ended_at IS NULL "
+                "ORDER BY julianday(started_at) DESC, id DESC LIMIT 1",
+                (period_city_id, period_kind),
+            )).fetchone()
+            if not keep:
+                continue
+            cursor = await db.execute(
+                "UPDATE admin_periods SET ended_at = ? "
+                "WHERE city_id = ? AND shift_kind = ? AND ended_at IS NULL AND id <> ?",
+                (keep[1], period_city_id, period_kind, keep[0]),
+            )
+            repaired_admin_periods += max(0, cursor.rowcount)
+            logger.warning(
+                f"Миграция: у города {period_city_id} было {amount} открытых "
+                f"admin-декад ({period_kind}); оставлена #{keep[0]}."
+            )
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_periods_one_open "
             "ON admin_periods(city_id, shift_kind) WHERE ended_at IS NULL"
         )
         await db.commit()
+        if repaired_admin_periods:
+            logger.info(
+                f"Миграция: закрыто дублей admin-декад: "
+                f"{repaired_admin_periods}."
+            )
 
         # Автоматическая миграция для старых баз данных
         try:
@@ -1072,7 +1106,7 @@ async def _admin_period_for_start(city_id, shift_kind, start_at, active=False, d
     return dict(row) if row else None
 
 
-async def sync_shift_admin_period(shift_id):
+async def sync_shift_admin_period(shift_id, previous_start_at=None):
     """Синхронизирует тип и административную декаду после создания/правки смены."""
     initial_shift = await get_shift_by_id(shift_id)
     if not initial_shift:
@@ -1106,18 +1140,46 @@ async def sync_shift_admin_period(shift_id):
         period = None
         existing_period_id = shift.get("admin_period_id")
         existing_kind = shift.get("shift_kind")
-        # Закрытая смена сохраняет уже закреплённую декаду, если её тип не
-        # менялся и исправленное время открытия не ушло за конец этой декады.
-        # Так перенесённая при reset активная смена остаётся в новом периоде,
-        # но правка 09:00→13:00 через границу reset корректно меняет период.
+        # Закрытая смена сохраняет уже закреплённую декаду, если её новое
+        # время открытия всё ещё лежит внутри этой декады. Обе границы важны:
+        # правки 09:00→13:00 и 13:00→09:00 через reset должны работать симметрично.
+        #
+        # Исключение: активная смена при reset намеренно переносится в новую
+        # декаду целиком, поэтому её start_at может быть раньше started_at периода.
+        # previous_start_at позволяет отличить такую закреплённую смену от обычной
+        # правки назад через границу reset.
         if not shift.get("is_active") and existing_period_id and existing_kind == kind:
             row = await (await db.execute(
-                "SELECT * FROM admin_periods WHERE id = ? AND city_id = ? AND shift_kind = ? "
-                "AND (ended_at IS NULL OR julianday(?) < julianday(ended_at))",
-                (existing_period_id, city["id"], kind, started),
+                "SELECT * FROM admin_periods WHERE id = ? AND city_id = ? AND shift_kind = ?",
+                (existing_period_id, city["id"], kind),
             )).fetchone()
             if row:
-                period = dict(row)
+                existing_period = dict(row)
+                tz = _city_tz(city)
+
+                def local_datetime(value):
+                    parsed = _parse_datetime(value) if isinstance(value, str) else value
+                    if not isinstance(parsed, datetime):
+                        return None
+                    return parsed.astimezone(tz) if parsed.tzinfo else parsed.replace(tzinfo=tz)
+
+                new_started = local_datetime(started)
+                old_started = local_datetime(previous_start_at)
+                period_started = local_datetime(existing_period.get("started_at"))
+                period_ended = local_datetime(existing_period.get("ended_at"))
+                inside_period = bool(
+                    new_started and period_started
+                    and period_started <= new_started
+                    and (period_ended is None or new_started < period_ended)
+                )
+                was_pinned_by_reset = bool(
+                    old_started and period_started and old_started < period_started
+                )
+                still_before_pinned_period = bool(
+                    new_started and period_started and new_started < period_started
+                )
+                if inside_period or (was_pinned_by_reset and still_before_pinned_period):
+                    period = existing_period
         if period is None:
             period = await _admin_period_for_start(
                 city["id"], kind, started, active=bool(shift.get("is_active")), db=db
@@ -1132,10 +1194,12 @@ async def sync_shift_admin_period(shift_id):
     return {"shift_kind": kind, "period_id": period_id}
 
 
-async def safe_sync_shift_admin_period(shift_id):
+async def safe_sync_shift_admin_period(shift_id, previous_start_at=None):
     """Best-effort admin-метаданные не должны ломать уже сохранённую смену."""
     try:
-        return await sync_shift_admin_period(shift_id)
+        return await sync_shift_admin_period(
+            shift_id, previous_start_at=previous_start_at
+        )
     except Exception as exc:
         logger.error(
             f"Смена {shift_id} сохранена, но admin-декада не синхронизирована: {exc}"
@@ -2571,7 +2635,10 @@ async def capture_manual_report(message: Message, city):
              message_time.isoformat(), event_time.isoformat())
         )
         await db.commit()
-    await safe_sync_shift_admin_period(shift_id)
+    await safe_sync_shift_admin_period(
+        shift_id,
+        previous_start_at=old_start_at.isoformat() if old_start_at else None,
+    )
     await freeze_earned(shift_id)
     if target_source == "manual_signal" and target_report_msg_id:
         await safe_flush_report_update(shift_id)
@@ -4304,7 +4371,10 @@ async def approve_manual_report(report_id, start_time, end_time, expected_update
             (shift_id, pay_type, pay_amount, datetime.now(_city_tz(city)).isoformat(), report_id)
         )
         await db.commit()
-    await safe_sync_shift_admin_period(shift_id)
+    await safe_sync_shift_admin_period(
+        shift_id,
+        previous_start_at=(target_shift["start_at"] if target_shift else None),
+    )
     try:
         await freeze_earned(shift_id)
     except Exception as exc:
@@ -4419,7 +4489,6 @@ async def api_admin_dashboard(request):
                 status=403,
             )
 
-    await ensure_city_metrics_current(city_id)
     now = datetime.now(_city_tz(city))
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
@@ -4457,27 +4526,6 @@ async def api_admin_dashboard(request):
             "SELECT * FROM monthly_aggregates WHERE city_id = ? AND month = ? "
             "ORDER BY full_name", (city_id, month)
         )).fetchall()
-        kpi_rows = await (await db.execute(
-            "SELECT k.user_id, k.snapshot_hour, k.actions_count, k.worked_minutes, "
-            "k.efficiency, COALESCE(NULLIF(u.full_name, ''), "
-            "(SELECT s.full_name FROM shifts s WHERE s.city_id = k.city_id "
-            "AND s.user_id = k.user_id ORDER BY s.id DESC LIMIT 1), 'Сотрудник') AS full_name, "
-            "COALESCE(NULLIF(u.role, ''), (SELECT s.role FROM shifts s WHERE s.city_id = k.city_id "
-            "AND s.user_id = k.user_id ORDER BY s.id DESC LIMIT 1), '') AS role "
-            "FROM kpi_snapshots k JOIN (SELECT user_id, MAX(snapshot_hour) AS snapshot_hour "
-            "FROM kpi_snapshots WHERE city_id = ? AND snapshot_hour >= ? AND snapshot_hour < ? "
-            "GROUP BY user_id) latest "
-            "ON latest.user_id = k.user_id AND latest.snapshot_hour = k.snapshot_hour "
-            "LEFT JOIN users u ON u.user_id = k.user_id WHERE k.city_id = ? "
-            "ORDER BY full_name",
-            (city_id, day_start.isoformat(), day_end.isoformat(), city_id)
-        )).fetchall()
-        latest = await (await db.execute(
-            "SELECT MAX(snapshot_hour) FROM kpi_snapshots WHERE city_id = ? "
-            "AND snapshot_hour >= ? AND snapshot_hour < ?",
-            (city_id, day_start.isoformat(), day_end.isoformat())
-        )).fetchone()
-
         # База возвращает по одной агрегированной строке на сотрудника, а не
         # всю многолетнюю историю при каждом автообновлении админки.
         employee_shift_rows = await (await db.execute(
@@ -4555,11 +4603,6 @@ async def api_admin_dashboard(request):
             (item.get("name") or "").casefold(),
         ),
     )
-    kpi_by_user = {row["user_id"]: row["efficiency"] for row in kpi_rows}
-    for item in open_items + closed_today_items:
-        if item["user_id"] in kpi_by_user:
-            item["efficiency"] = kpi_by_user[item["user_id"]]
-
     open_today = []
     for raw, item in zip(open_rows, open_items):
         start_at = _parse_datetime(raw["start_at"])
@@ -4643,7 +4686,9 @@ async def api_admin_dashboard(request):
     return web.json_response({
         "city": {"id": city["id"], "name": city["name"]},
         "generated_at": now.isoformat(),
-        "kpi_updated_at": latest[0] if latest else None,
+        # Старые клиенты ещё ожидают эти ключи, но КПД из админки удалён.
+        # Пустые значения сохраняют формат API без фоновых KPI-расчётов.
+        "kpi_updated_at": None,
         "open": open_items,
         "closed_today": closed_today_items,
         # Оставлено для совместимости со старой версией Mini App.
@@ -4661,11 +4706,7 @@ async def api_admin_dashboard(request):
             "shifts": row["shifts_count"], "worked_minutes": row["worked_minutes"],
             "actions": row["actions_count"]
         } for row in monthly],
-        "kpi": [{
-            "user_id": row["user_id"], "name": row["full_name"], "role": row["role"],
-            "snapshot_hour": row["snapshot_hour"], "actions": row["actions_count"],
-            "worked_minutes": row["worked_minutes"], "efficiency": row["efficiency"]
-        } for row in kpi_rows],
+        "kpi": [],
     })
 
 
@@ -5029,7 +5070,9 @@ async def api_admin_shift_update(request):
             )
         await db.commit()
 
-    await safe_sync_shift_admin_period(shift_id)
+    await safe_sync_shift_admin_period(
+        shift_id, previous_start_at=old_start.isoformat()
+    )
     if not is_active:
         await freeze_earned(shift_id)
     if shift.get("report_msg_id"):
@@ -5063,48 +5106,61 @@ async def api_admin_shift_delete(request):
         return web.json_response({"error": "shift_id"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         raw = await (await db.execute(
             "SELECT * FROM shifts WHERE id = ? AND city_id = ?",
             (shift_id, city["id"]),
         )).fetchone()
-    if not raw:
-        return web.json_response(
-            {"error": "not_found", "message": "Смена не найдена."}, status=404
-        )
-    shift = dict(raw)
-    if shift.get("is_active"):
-        return web.json_response(
-            {"error": "active", "message": "Сначала закройте активную смену."}, status=400
-        )
+        if not raw:
+            await db.rollback()
+            return web.json_response(
+                {"error": "not_found", "message": "Смена не найдена."}, status=404
+            )
+        shift = dict(raw)
+        if shift.get("is_active"):
+            await db.rollback()
+            return web.json_response(
+                {"error": "active", "message": "Сначала закройте активную смену."}, status=400
+            )
+        try:
+            await db.execute(
+                "DELETE FROM actions WHERE shift_id = ? AND city_id = ?",
+                (shift_id, city["id"]),
+            )
+            await db.execute(
+                "DELETE FROM manual_reports WHERE shift_id = ? AND city_id = ?",
+                (shift_id, city["id"]),
+            )
+            await db.execute(
+                "DELETE FROM work_message_links WHERE shift_id = ? AND city_id = ?",
+                (shift_id, city["id"]),
+            )
+            cursor = await db.execute(
+                "DELETE FROM shifts WHERE id = ? AND city_id = ? AND is_active = 0",
+                (shift_id, city["id"]),
+            )
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return web.json_response(
+                    {"error": "not_found", "message": "Смена не найдена."}, status=404
+                )
+            await db.commit()
+        except aiosqlite.Error as exc:
+            await db.rollback()
+            logger.error(f"Не удалось удалить смену {shift_id} из БД: {exc}")
+            return web.json_response(
+                {"error": "database", "message": "Смена не удалена. Повторите позже."},
+                status=500,
+            )
+
+    # Telegram — вторичное хранилище. Сначала атомарно удаляем смену из БД,
+    # и только после commit трогаем живое сообщение. Иначе ошибка SQLite оставляла
+    # бы смену в базе уже без её Telegram-отчёта.
     if shift.get("report_msg_id"):
         try:
             await bot.delete_message(city["group_id"], shift["report_msg_id"])
         except Exception as exc:
             logger.warning(f"Не удалось удалить отчёт смены {shift_id} из группы: {exc}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
-        await db.execute(
-            "DELETE FROM actions WHERE shift_id = ? AND city_id = ?",
-            (shift_id, city["id"]),
-        )
-        await db.execute(
-            "DELETE FROM manual_reports WHERE shift_id = ? AND city_id = ?",
-            (shift_id, city["id"]),
-        )
-        await db.execute(
-            "DELETE FROM work_message_links WHERE shift_id = ? AND city_id = ?",
-            (shift_id, city["id"]),
-        )
-        cursor = await db.execute(
-            "DELETE FROM shifts WHERE id = ? AND city_id = ? AND is_active = 0",
-            (shift_id, city["id"]),
-        )
-        if cursor.rowcount != 1:
-            await db.rollback()
-            return web.json_response(
-                {"error": "not_found", "message": "Смена не найдена."}, status=404
-            )
-        await db.commit()
     started = _parse_datetime(shift.get("start_at"))
     if started:
         await refresh_monthly_aggregate(
@@ -5198,6 +5254,16 @@ async def serve_index(request):
         })
     return web.Response(text="BibiBike API ok")
 
+
+async def api_health(request):
+    """Лёгкая проверка доступности контейнера для reverse proxy BotHost."""
+    return web.json_response({
+        "ok": True,
+        "service": "bibibike-bot",
+        "build_version": BUILD_VERSION,
+        "index_html": os.path.isfile(INDEX_PATH),
+    })
+
 async def start_api_server():
     try:
         app = web.Application(middlewares=[cors_mw])
@@ -5218,6 +5284,8 @@ async def start_api_server():
         app.router.add_post("/api/admin/shift/delete", api_admin_shift_delete)
         app.router.add_post("/api/admin/period/new", api_admin_period_new)
         app.router.add_post("/api/admin/manual/approve", api_admin_manual_approve)
+        app.router.add_get("/health", api_health)
+        app.router.add_get("/index.html", serve_index)
         app.router.add_get("/", serve_index)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -5236,7 +5304,6 @@ async def main():
     await init_db()
     await rebuild_monthly_aggregates()
     await start_api_server()   # === НОВОЕ: поднимаем API рядом с ботом ===
-    kpi_task = asyncio.create_task(kpi_background_worker())
     scheduled_report_task = asyncio.create_task(scheduled_report_status_worker())
     auto_close_task = asyncio.create_task(auto_close_worker())
     dp = Dispatcher()
@@ -5256,11 +5323,10 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
-        kpi_task.cancel()
         scheduled_report_task.cancel()
         auto_close_task.cancel()
         try:
-            await asyncio.gather(kpi_task, scheduled_report_task, auto_close_task)
+            await asyncio.gather(scheduled_report_task, auto_close_task)
         except asyncio.CancelledError:
             pass
 

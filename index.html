@@ -273,7 +273,6 @@
   .admin-lunch{margin-top:7px;padding:7px 9px;border-radius:10px;background:#FFF2CF;color:#664600;font-size:12px;font-weight:800}
   .admin-actions{margin-top:9px}
   .admin-force-close{color:var(--red);border-color:var(--red)}
-  .admin-shift-delete{color:var(--red);border-color:var(--red)}
   .admin-row .top{display:flex;justify-content:space-between;gap:8px;font-weight:800}
   .admin-row .meta{margin-top:5px;color:var(--muted);font-size:12px;line-height:1.45}
   .admin-badge{display:inline-block;padding:2px 7px;border-radius:99px;background:var(--line);font-size:10px;font-weight:800}
@@ -285,7 +284,6 @@
   .period-box{margin-top:9px;border:1px solid var(--green-line,#C6EDC8);border-radius:13px;
     background:#EFF9EF;padding:11px 12px}
   .period-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .period-row + .period-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--green-line,#C6EDC8)}
   .period-lbl{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
   .period-val{font-family:'Montserrat';font-weight:800;font-size:15px;margin-top:2px}
   .period-val.overdue{color:var(--orange)}
@@ -297,13 +295,6 @@
   .admin-history-box{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
   .admin-history-box .admin-head{margin-bottom:10px}
   .admin-history-actions{margin-top:5px;color:var(--green-deep);font-size:11px;font-weight:700;line-height:1.45}
-  .admin-kind{display:inline-block;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:900}
-  .admin-kind.day{background:#FFF1BF;color:#725600}.admin-kind.night{background:#E8E9FF;color:#353A86}
-  .admin-period-totals{margin-top:7px;display:grid;gap:4px;color:var(--muted);font-size:11px;font-weight:700}
-  .admin-edit-shift{grid-template-columns:1fr 1fr}
-  .admin-edit-shift .full{grid-column:1/-1}
-  .admin-edit-shift input,.admin-edit-shift textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:9px;font-family:'Inter',sans-serif;font-size:16px;background:#fff;color:var(--ink);scroll-margin-bottom:120px}
-  .admin-edit-shift label{display:grid;gap:4px;color:var(--muted);font-size:11px;font-weight:800}
   .manual-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:7px;margin-top:9px;align-items:end}
   .manual-controls .tinput{min-width:0}
   @media(max-width:420px){.manual-controls{grid-template-columns:1fr 1fr}.manual-controls .mini{grid-column:1/-1}}
@@ -322,13 +313,6 @@
   <div id="autherr" class="center hidden">
     <div class="big">Откройте через бота</div>
     <div class="sm">Это приложение работает только внутри Telegram —<br>по кнопке под отчётом или в закрепе темы.</div>
-  </div>
-
-  <!-- Постоянная ошибка связи: не оставляем пользователя на пустом экране. -->
-  <div id="loaderr" class="center hidden">
-    <div class="big">Не удалось загрузить приложение</div>
-    <div class="sm" id="loadErrText">Сервер временно не отвечает.</div>
-    <button class="save" id="btnRetryLoad" style="max-width:280px;margin:18px auto 0">Повторить</button>
   </div>
 
   <!-- Обязательная регистрация (первый вход) -->
@@ -603,7 +587,7 @@
         <div class="more-list">
           <button class="more-item" id="btnAdminOpen">
             <span class="ic">🛡️</span>
-            <span class="tx"><b>Админка</b><i>Открытые смены и декады по твоему городу</i></span>
+            <span class="tx"><b>Админка</b><i>Смены, КПД и история по твоему городу</i></span>
             <span class="chev">›</span>
           </button>
         </div>
@@ -619,7 +603,7 @@
         </div>
       </div>
 
-      <!-- меню админки -->
+      <!-- меню админки: выбор из трёх окон -->
       <div class="panel hidden" id="adminMenu">
         <div class="admin-head">
           <div class="formhead">Админка</div>
@@ -629,19 +613,12 @@
         <div class="period-box">
           <div class="period-row">
             <div>
-              <div class="period-lbl">Дневная декада · 05:00–16:59</div>
-              <div class="period-val" id="dayPeriodInfo">—</div>
+              <div class="period-lbl">Текущая декада</div>
+              <div class="period-val" id="periodInfo">—</div>
             </div>
-            <button class="mini period-btn" id="btnNewDayPeriod">Новая дневная</button>
+            <button class="mini period-btn" id="btnNewPeriod">Новая декада</button>
           </div>
-          <div class="period-row">
-            <div>
-              <div class="period-lbl">Ночная декада · 17:00–04:59</div>
-              <div class="period-val" id="nightPeriodInfo">—</div>
-            </div>
-            <button class="mini period-btn" id="btnNewNightPeriod">Новая ночная</button>
-          </div>
-          <div class="period-hint" id="periodHint">Тип определяется только временем открытия смены. Смена и история при обнулении не удаляются.</div>
+          <div class="period-hint" id="periodHint">Счётчики часов и заработка считаются с начала декады. История смен сохраняется.</div>
         </div>
         <div class="admin-note" id="adminUpdated"></div>
         <div class="more-list" style="margin-top:12px">
@@ -650,45 +627,64 @@
             <span class="tx"><b>Открытые смены</b><i>Кто сейчас на смене — через бота и без него</i></span>
             <span class="chev">›</span>
           </button>
+          <button class="more-item" data-admin-view="adminViewKpi">
+            <span class="ic">📈</span>
+            <span class="tx"><b>КПД сотрудников</b><i>Действия в час по каждому сотруднику</i></span>
+            <span class="chev">›</span>
+          </button>
           <button class="more-item" data-admin-view="adminViewHistory">
             <span class="ic">🗂️</span>
-            <span class="tx"><b>Смены за декаду</b><i>Дневные и ночные часы сотрудников</i></span>
+            <span class="tx"><b>История смен</b><i>Смены и отработанные часы за текущую декаду</i></span>
             <span class="chev">›</span>
           </button>
         </div>
       </div>
 
-      <!-- окно 1: открытые и завершённые сегодня смены -->
+      <!-- окно 1: сотрудники сегодня и за декаду -->
       <div class="panel hidden" id="adminViewOpen">
         <div class="admin-head">
           <button class="mini admin-back">← Назад</button>
           <div class="formhead">Сотрудники</div>
           <button class="mini admin-reload">Обновить</button>
         </div>
+        <div class="admin-note" id="adminOpenPeriod"></div>
         <div class="admin-section">Сотрудники сегодня · на смене</div>
         <div class="admin-role-groups" id="adminOpen"><div class="hempty">Загружаю…</div></div>
         <div class="admin-section">Сотрудники сегодня · завершили</div>
         <div class="admin-role-groups" id="adminClosed"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">Сотрудники за декаду</div>
+        <div class="admin-role-groups" id="adminPeriodOpen"><div class="hempty">Загружаю…</div></div>
       </div>
 
-      <!-- окно 2: сотрудники и смены двух текущих декад -->
+      <!-- окно 2: КПД сотрудников -->
+      <div class="panel hidden" id="adminViewKpi">
+        <div class="admin-head">
+          <button class="mini admin-back">← Назад</button>
+          <div class="formhead">КПД сотрудников</div>
+          <button class="mini admin-reload">Обновить</button>
+        </div>
+        <div class="admin-role-groups" id="adminKpi"><div class="hempty">Загружаю…</div></div>
+      </div>
+
+      <!-- окно 3: история смен (без сумм денег) -->
       <div class="panel hidden" id="adminViewHistory">
         <div class="admin-head">
           <button class="mini admin-back">← Назад</button>
-          <div class="formhead">Смены за декаду</div>
+          <div class="formhead">История смен</div>
           <button class="mini admin-reload">Обновить</button>
         </div>
-        <p class="hint">Каждый сотрудник показан один раз — в дневном или ночном списке по своей последней смене. Внутри карточки часы разделены и все смены доступны для проверки.</p>
-        <div class="admin-section">Сотрудники за текущие декады</div>
-        <div class="admin-role-groups" id="adminPeriod"><div class="hempty">Загружаю…</div></div>
+        <p class="hint">Смены и отработанные часы за текущую декаду. Суммы заработка здесь не показываются — зарплата считается как часы × ставка.</p>
+        <div class="admin-section">Сотрудники</div>
+        <div class="admin-role-groups" id="adminEmployees"><div class="hempty">Загружаю…</div></div>
         <div class="admin-history-box hidden" id="adminHistoryBox">
           <div class="admin-head">
-            <div class="formhead" id="adminHistoryTitle">Смены за декаду</div>
+            <div class="formhead" id="adminHistoryTitle">История смен</div>
             <button class="mini" id="adminHistoryClose">Закрыть</button>
           </div>
-          <div class="admin-period-totals" id="adminHistoryTotals"></div>
           <div class="admin-list" id="adminHistory"><div class="hempty">Загружаю…</div></div>
         </div>
+        <div class="admin-section">Сотрудники за декаду</div>
+        <div class="admin-role-groups" id="adminPeriod"><div class="hempty">Загружаю…</div></div>
       </div>
     </div>
 
@@ -730,11 +726,9 @@ let histLoaded = false;
 let stateLoadedAt = Date.now();
 let adminToken = localStorage.getItem('bb_admin_token') || "";
 let adminCityCache = localStorage.getItem('bb_admin_city') || "";
-let adminDashboardRequest = 0;
 let adminHistoryRequest = 0;
 let adminHistoryUserId = null;
 let adminHistoryOffset = 0;
-let adminHistoryItems = new Map();
 let stateRevision = 0;
 let stateMutationDepth = 0;
 let lunchRequestPending = false;
@@ -795,7 +789,7 @@ async function api(path, opts={}){
   const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
   if(mutating){ stateMutationDepth++; stateRevision++; }
   try{
-    const res = await fetchApi(API_BASE + path, {
+    const res = await fetch(API_BASE + path, {
       ...opts,
       headers: { 'Authorization':'tma '+initData, 'Content-Type':'application/json', ...(opts.headers||{}) }
     });
@@ -812,7 +806,7 @@ async function adminApi(path, opts={}){
   const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
   if(mutating){ stateMutationDepth++; stateRevision++; }
   try{
-    const res = await fetchApi(path, {
+    const res = await fetch(path, {
       ...opts,
       headers: {
         'Authorization':'tma '+initData, 'Content-Type':'application/json',
@@ -825,26 +819,6 @@ async function adminApi(path, opts={}){
     return data;
   }finally{
     if(mutating){ stateMutationDepth=Math.max(0,stateMutationDepth-1); stateRevision++; }
-  }
-}
-
-async function fetchApi(url, opts={}){
-  /* GET-загрузки можно безопасно повторить после таймаута. POST не прерываем:
-     сервер мог уже выполнить действие, и повтор создал бы дубль. Если вызывающий
-     код передал собственный signal, он сам управляет отменой запроса. */
-  const method = String(opts.method || 'GET').toUpperCase();
-  if(method !== 'GET' || opts.signal) return fetch(url, opts);
-  const controller = new AbortController();
-  const timeout = setTimeout(()=>controller.abort(), 15000);
-  try{
-    return await fetch(url, {...opts, signal:controller.signal});
-  }catch(e){
-    if(e && e.name === 'AbortError'){
-      throw {message:'Сервер не ответил за 15 секунд. Проверьте BotHost и повторите.'};
-    }
-    throw e;
-  }finally{
-    clearTimeout(timeout);
   }
 }
 
@@ -1002,7 +976,6 @@ async function load({background=false}={}){
     if(cityChanged && !$('tab-rating').classList.contains('hidden')) await loadHistory();
     $('loading').classList.add('hidden');
     $('autherr').classList.add('hidden');
-    $('loaderr').classList.add('hidden');
     // Обязательная регистрация: пока нет имени+роли — показываем только экран знакомства
     if(!STATE.registered){
       clearInterval(tick);
@@ -1024,24 +997,13 @@ async function load({background=false}={}){
     if(e.auth){
       $('app').classList.add('hidden');
       $('tabbar').classList.add('hidden');
-      $('loaderr').classList.add('hidden');
       $('autherr').classList.remove('hidden');
     } else {
-      $('app').classList.add('hidden');
-      $('tabbar').classList.add('hidden');
-      $('autherr').classList.add('hidden');
-      $('loadErrText').textContent = e.message || 'Нет связи с ботом';
-      $('loaderr').classList.remove('hidden');
+      toast(e.message || 'Нет связи с ботом');
     }
     return false;
   }
 }
-
-$('btnRetryLoad').onclick = ()=>{
-  $('loaderr').classList.add('hidden');
-  $('loading').classList.remove('hidden');
-  load();
-};
 
 /* ---------- вкладки ---------- */
 document.querySelectorAll('.tab').forEach(t=>{
@@ -1323,32 +1285,25 @@ $('saveSettings').onclick = async ()=>{
 };
 
 /* ---------- админка (живёт во вкладке «Ещё») ---------- */
-const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory'];
-
-function clearAdminHistorySelection(){
-  adminHistoryRequest++;
-  adminHistoryUserId = null;
-  adminHistoryOffset = 0;
-  adminHistoryItems.clear();
-  $('adminHistoryBox').classList.add('hidden');
-}
+const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewKpi','adminViewHistory'];
 
 function showAdminScreen(id){
   /* id = null → показать обычный экран «Ещё» */
-  if(id!=='adminViewHistory') clearAdminHistorySelection();
   $('morePanel').classList.toggle('hidden', !!id);
   ADMIN_SCREENS.forEach(v=>$(v).classList.toggle('hidden', v!==id));
   window.scrollTo(0,0);
 }
 
 function closeAdmin(){
-  adminDashboardRequest++;
   adminToken = '';
   localStorage.removeItem('bb_admin_token');
   localStorage.removeItem('bb_admin_city');
   adminCityCache = '';
-  clearAdminHistorySelection();
+  adminHistoryRequest++;
+  adminHistoryUserId = null;
+  adminHistoryOffset = 0;
   $('adminLogin').classList.add('hidden');
+  $('adminHistoryBox').classList.add('hidden');
   $('adminCityName').textContent = '—';
   $('adminPassword').value = '';
   showAdminScreen(null);
@@ -1395,14 +1350,10 @@ $('adminLoginBtn').onclick = async ()=>{
 };
 
 $('adminLogout').onclick = ()=>{ closeAdmin(); toast('Вышел из админки.'); };
-/* Две независимые декады — каждая всегда с отдельным подтверждением */
-$('btnNewDayPeriod').onclick = ()=> confirmAction(
-  'Начать новую дневную декаду? Обнулятся только дневные итоги сотрудников вашего города. Ночная декада и история сохранятся.',
-  ()=>startNewPeriod('day')
-);
-$('btnNewNightPeriod').onclick = ()=> confirmAction(
-  'Начать новую ночную декаду? Обнулятся только ночные итоги сотрудников вашего города. Дневная декада и история сохранятся.',
-  ()=>startNewPeriod('night')
+/* Новая декада — всегда с подтверждением */
+$('btnNewPeriod').onclick = ()=> confirmAction(
+  'Начать новую декаду? Счётчики часов и заработка обнулятся у всех сотрудников города. История смен сохранится.',
+  startNewPeriod
 );
 
 /* три окна админки */
@@ -1413,12 +1364,7 @@ document.querySelectorAll('.admin-back').forEach(b=>{
   b.onclick = ()=>showAdminScreen('adminMenu');
 });
 document.querySelectorAll('.admin-reload').forEach(b=>{
-  b.onclick = async()=>{
-    await loadAdmin();
-    if(b.closest('#adminViewHistory') && adminHistoryUserId!==null){
-      await loadAdminHistory(adminHistoryUserId,false);
-    }
-  };
+  b.onclick = ()=>loadAdmin();
 });
 
 const ADMIN_ROLE_GROUPS = [
@@ -1476,34 +1422,6 @@ function renderAdminEmployee(item){
     <button class="mini admin-history-open" data-user-id="${Number(item.user_id)}">Отчёты</button></div>
     <div class="meta">${status} · завершённых смен ${Number(item.closed_shifts)||0}</div></div>`;
 }
-function renderAdminPeriodEmployees(items){
-  const unique=new Map();
-  (items||[]).forEach(item=>{
-    const uid=Number(item.user_id);
-    const previous=unique.get(uid);
-    if(!previous || String(item.latest_shift_at||'')>=String(previous.latest_shift_at||'')) unique.set(uid,item);
-  });
-  const rows=[...unique.values()];
-  if(!rows.length) return '<div class="hempty">За текущие декады данных пока нет.</div>';
-  const renderItem=item=>{
-    const totals=item.totals||{};
-    const day=totals.day||{};
-    const night=totals.night||{};
-    const kind=item.shift_kind==='night'?'night':'day';
-    const kindLabel=kind==='day'?'☀️ День':'🌙 Ночь';
-    return `<div class="admin-row${item.open_now?' active':''}"><div class="top"><span>${item.open_now?'🟢 ':''}${esc(item.name)}</span>
-      <button class="mini admin-history-open" data-user-id="${Number(item.user_id)}">Смены</button></div>
-      <div class="meta"><span class="admin-kind ${kind}">${kindLabel}</span> · список определён по последней смене</div>
-      <div class="admin-period-totals"><span>☀️ Дневные: ${hm(day.worked_minutes||0)} · смен ${Number(day.shifts)||0} · действий ${Number(day.actions)||0}</span>
-      <span>🌙 Ночные: ${hm(night.worked_minutes||0)} · смен ${Number(night.shifts)||0} · действий ${Number(night.actions)||0}</span></div></div>`;
-  };
-  return ['day','night'].map(kind=>{
-    const part=rows.filter(item=>(item.shift_kind==='night'?'night':'day')===kind);
-    if(!part.length) return '';
-    const label=kind==='day'?'☀️ Дневные сотрудники':'🌙 Ночные сотрудники';
-    return `<div class="admin-section">${label} · ${part.length}</div>${renderAdminRoleGroups(part,renderItem,'')}`;
-  }).join('');
-}
 function renderAdminHistoryItems(items){
   const actionNames={move:'перемещено',fix:'поправлено',repair:'ремонт',battery:'АКБ',to_sc:'на СЦ',from_sc:'из СЦ'};
   return items.map(item=>{
@@ -1512,19 +1430,10 @@ function renderAdminHistoryItems(items){
       .map(([type,count])=>`${actionNames[type]||type}: ${Number(count)}`).join(' · ');
     const district=item.district?' · '+esc(item.district):'';
     const comment=item.comment?`<br>Комментарий: ${esc(item.comment)}`:'';
-    const kind=item.shift_kind==='night'?'night':'day';
-    const kindLabel=kind==='day'?'☀️ День':'🌙 Ночь';
-    const status=item.status==='closed'?'закрыта':(item.status==='scheduled'?'ожидает начала':'активна');
-    const close=item.status!=='closed'
-      ? `<button class="mini admin-force-close" data-sid="${Number(item.shift_id)}">Закрыть</button>`:'';
-    const del=item.status==='closed'
-      ? `<button class="mini admin-shift-delete" data-sid="${Number(item.shift_id)}">Удалить</button>`:'';
-    const rowClass=item.status==='closed'?'closed':(item.status==='scheduled'?'wait':'active');
-    const lunch=item.on_lunch?'<div class="admin-lunch">🍽 Сейчас на обеде</div>':'';
-    return `<div class="admin-row ${rowClass}" id="admin-history-row-${Number(item.shift_id)}"><div class="top"><span>${esc(item.date)}</span><span>${hm(item.worked_minutes||0)}</span></div>
-      <div class="meta"><span class="admin-kind ${kind}">${kindLabel}</span> <span class="admin-badge">${source}</span> ${esc(status)} · ${esc(item.start||'—')}–${esc(item.end||'—')}${district}${comment}</div>
-      ${lunch}<div class="admin-history-actions">${actions||'Действий нет'}</div>
-      <div class="admin-actions"><button class="mini admin-shift-edit" data-sid="${Number(item.shift_id)}">Редактировать</button> ${close} ${del}</div></div>`;
+    /* без сумм денег — справа отработанные часы */
+    return `<div class="admin-row"><div class="top"><span>${esc(item.date)}</span><span>${hm(item.worked_minutes||0)}</span></div>
+      <div class="meta"><span class="admin-badge">${source}</span> ${esc(item.start||'—')}–${esc(item.end||'—')}${district}${comment}</div>
+      <div class="admin-history-actions">${actions||'Действий нет'}</div></div>`;
   }).join('');
 }
 async function loadAdminHistory(userId, append=false){
@@ -1533,30 +1442,23 @@ async function loadAdminHistory(userId, append=false){
   if(!append){
     adminHistoryUserId=userId;
     adminHistoryOffset=0;
-    adminHistoryItems.clear();
   }
   const offset=append?adminHistoryOffset:0;
   const requestId=++adminHistoryRequest;
   const box=$('adminHistoryBox');
   box.classList.remove('hidden');
   if(!append){
-    $('adminHistoryTitle').textContent='Смены за декаду';
-    $('adminHistoryTotals').textContent='';
+    $('adminHistoryTitle').textContent='История смен';
     $('adminHistory').innerHTML='<div class="hempty">Загружаю…</div>';
   }else{
     const more=$('adminHistory').querySelector('.admin-history-more');
     if(more){more.disabled=true;more.textContent='Загружаю…';}
   }
   try{
-    const data=await adminApi('/api/admin/history?user_id='+encodeURIComponent(userId)+'&scope=admin_periods&limit=50&offset='+offset);
+    const data=await adminApi('/api/admin/history?user_id='+encodeURIComponent(userId)+'&limit=50&offset='+offset);
     if(requestId!==adminHistoryRequest) return;
-    $('adminHistoryTitle').textContent='Смены: '+data.employee.name;
-    const day=(data.totals&&data.totals.day)||{};
-    const night=(data.totals&&data.totals.night)||{};
-    $('adminHistoryTotals').innerHTML=`<span>☀️ Дневные: ${hm(day.worked_minutes||0)} · смен ${Number(day.shifts)||0}</span>
-      <span>🌙 Ночные: ${hm(night.worked_minutes||0)} · смен ${Number(night.shifts)||0}</span>`;
+    $('adminHistoryTitle').textContent='История: '+data.employee.name;
     const list=$('adminHistory');
-    (data.items||[]).forEach(item=>adminHistoryItems.set(Number(item.shift_id),item));
     const rows=renderAdminHistoryItems(data.items||[]);
     if(append){
       const oldMore=list.querySelector('.admin-history-more');
@@ -1570,7 +1472,6 @@ async function loadAdminHistory(userId, append=false){
       list.insertAdjacentHTML('beforeend','<button class="mini admin-history-more">Показать ещё</button>');
       list.querySelector('.admin-history-more').onclick=()=>loadAdminHistory(userId,true);
     }
-    wireAdminHistoryActions();
     if(!append) box.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(e){
     if(requestId!==adminHistoryRequest) return;
@@ -1584,75 +1485,11 @@ async function loadAdminHistory(userId, append=false){
   }
 }
 $('adminHistoryClose').onclick=()=>{
-  clearAdminHistorySelection();
+  adminHistoryRequest++;
+  adminHistoryUserId=null;
+  adminHistoryOffset=0;
+  $('adminHistoryBox').classList.add('hidden');
 };
-
-function adminTimeValue(value){
-  const parts=String(value||'').split(':');
-  if(parts.length<2) return '';
-  return parts[0].padStart(2,'0')+':'+parts[1].padStart(2,'0');
-}
-function wireAdminHistoryActions(){
-  document.querySelectorAll('#adminHistory .admin-shift-edit').forEach(btn=>{
-    btn.onclick=()=>openAdminShiftEditor(adminHistoryItems.get(Number(btn.dataset.sid)));
-  });
-  document.querySelectorAll('#adminHistory .admin-shift-delete').forEach(btn=>{
-    const sid=Number(btn.dataset.sid);
-    btn.onclick=()=>confirmAction('Удалить эту закрытую смену и её отчёт? Действие нельзя отменить.',()=>deleteAdminShift(sid));
-  });
-  document.querySelectorAll('#adminHistory .admin-force-close').forEach(btn=>{
-    btn.onclick=()=>confirmAction('Закрыть смену этого сотрудника сейчас?',()=>forceCloseShift(Number(btn.dataset.sid),btn));
-  });
-}
-function openAdminShiftEditor(item){
-  if(!item) return;
-  const sid=Number(item.shift_id);
-  const row=$('admin-history-row-'+sid);
-  if(!row || $('admin-shift-editor-'+sid)) return;
-  const box=document.createElement('div');
-  box.className='edit-cmt admin-edit-shift';
-  box.id='admin-shift-editor-'+sid;
-  const endField=item.status==='closed'
-    ? `<label>Окончание<input class="admin-edit-end" type="time" value="${esc(adminTimeValue(item.end))}"></label>`:'';
-  box.innerHTML=`<label>Начало<input class="admin-edit-start" type="time" value="${esc(adminTimeValue(item.start))}"></label>${endField}
-    <label class="full">Район<input class="admin-edit-district" maxlength="100" value="${esc(item.district||'')}"></label>
-    <label class="full">Комментарий<textarea class="admin-edit-comment" maxlength="500">${esc(item.comment||'')}</textarea></label>
-    <div class="btns full"><button class="cancel-c">Отмена</button><button class="save-c">Сохранить</button></div>`;
-  row.after(box);
-  box.querySelector('.cancel-c').onclick=()=>box.remove();
-  box.querySelector('.save-c').onclick=async()=>{
-    const btn=box.querySelector('.save-c');
-    const start=box.querySelector('.admin-edit-start').value;
-    const endInput=box.querySelector('.admin-edit-end');
-    if(!start || (endInput && !endInput.value)) return toast('Укажите время смены.');
-    btn.disabled=true;btn.textContent='Сохраняю…';
-    try{
-      await adminApi('/api/admin/shift/update',{method:'POST',body:JSON.stringify({
-        shift_id:sid,start_time:start,end_time:endInput?endInput.value:null,
-        district:box.querySelector('.admin-edit-district').value.trim(),
-        comment:box.querySelector('.admin-edit-comment').value.trim(),
-      })});
-      toast('Смена обновлена.');
-      await loadAdmin(true);
-      if(adminHistoryUserId!==null) await loadAdminHistory(adminHistoryUserId,false);
-    }catch(e){
-      if(e.status===401) closeAdmin();
-      toast(e.message||'Не удалось обновить смену.');
-      btn.disabled=false;btn.textContent='Сохранить';
-    }
-  };
-}
-async function deleteAdminShift(sid){
-  try{
-    await adminApi('/api/admin/shift/delete',{method:'POST',body:JSON.stringify({shift_id:Number(sid)})});
-    toast('Смена удалена.');
-    await loadAdmin(true);
-    if(adminHistoryUserId!==null) await loadAdminHistory(adminHistoryUserId,false);
-  }catch(e){
-    if(e.status===401) closeAdmin();
-    toast(e.message||'Не удалось удалить смену.');
-  }
-}
 
 async function forceCloseShift(sid, btn){
   btn.disabled=true; btn.textContent='Закрываю…';
@@ -1660,7 +1497,6 @@ async function forceCloseShift(sid, btn){
     await adminApi('/api/admin/force-close', {method:'POST', body:JSON.stringify({shift_id:sid})});
     toast('Смена закрыта.');
     await loadAdmin(true);
-    if(adminHistoryUserId!==null) await loadAdminHistory(adminHistoryUserId,false);
   }catch(e){
     if(e.status===401) closeAdmin();
     toast(e.message || 'Не удалось закрыть смену.');
@@ -1668,54 +1504,47 @@ async function forceCloseShift(sid, btn){
   }
 }
 
-function renderAdminPeriods(dayPi,nightPi){
-  [[dayPi,'dayPeriodInfo'],[nightPi,'nightPeriodInfo']].forEach(([pi,id])=>{
-    const box=$(id);
-    box.textContent=pi?`с ${pi.started_label} · идёт ${pi.day_number}-й день`:'—';
-    box.classList.toggle('overdue',!!(pi&&pi.overdue));
-  });
-  const overdue=(dayPi&&dayPi.overdue)||(nightPi&&nightPi.overdue);
-  $('periodHint').textContent=overdue
-    ? 'Одна из декад идёт больше 10 дней. Закройте нужную отдельной кнопкой.'
-    : 'Тип определяется только временем открытия смены. Смена и история при обнулении не удаляются.';
+function renderPeriodInfo(pi){
+  const box = $('periodInfo');
+  if(!pi){ box.textContent = '—'; return; }
+  box.textContent = `с ${pi.started_label} · идёт ${pi.day_number}-й день`;
+  box.classList.toggle('overdue', !!pi.overdue);
+  $('periodHint').textContent = pi.overdue
+    ? 'Идёт больше 10 дней — пора закрывать декаду.'
+    : 'Счётчики часов и заработка считаются с начала декады. История смен сохраняется.';
 }
 
-async function startNewPeriod(kind){
-  const isDay=kind==='day';
-  const btn=$(isDay?'btnNewDayPeriod':'btnNewNightPeriod');
-  const initialText=isDay?'Новая дневная':'Новая ночная';
+async function startNewPeriod(){
+  const btn = $('btnNewPeriod');
   btn.disabled = true; btn.textContent = 'Открываю…';
   try{
-    await adminApi('/api/admin/period/new', {method:'POST', body:JSON.stringify({confirm:true,shift_kind:kind})});
+    await adminApi('/api/admin/period/new', {method:'POST', body:JSON.stringify({confirm:true})});
     if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-    toast(isDay?'Новая дневная декада открыта.':'Новая ночная декада открыта.');
+    toast('Новая декада открыта. Счётчики обнулены.');
     await loadAdmin(true);
   }catch(e){
     if(e.status===401) closeAdmin();
     toast(e.message || 'Не удалось открыть декаду.');
   }finally{
-    btn.disabled = false; btn.textContent = initialText;
+    btn.disabled = false; btn.textContent = 'Новая декада';
   }
 }
 
-async function loadAdmin(silent=false,background=false){
+async function loadAdmin(silent=false){
   if(!adminToken) return;
-  if(background && (isTypingNow() || isFormOpen())) return false;
-  const requestId=++adminDashboardRequest;
   if(!silent){
     $('adminOpen').innerHTML='<div class="hempty">Загружаю…</div>';
     $('adminClosed').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminEmployees').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminKpi').innerHTML='<div class="hempty">Загружаю…</div>';
     $('adminPeriod').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminPeriodOpen').innerHTML='<div class="hempty">Загружаю…</div>';
   }
   try{
     const data = await adminApi('/api/admin/dashboard');
-    if(requestId!==adminDashboardRequest) return false;
-    /* Telegram Android может начать IME-сессию, пока сетевой запрос уже в
-       полёте. Фоновый ответ в этот момент нельзя применять к DOM. */
-    if(background && (isTypingNow() || isFormOpen())) return false;
     $('adminCityName').textContent=(data.city && data.city.name)||'—';
     $('adminUpdated').textContent = 'Обновлено: '+new Date(data.generated_at).toLocaleString('ru-RU');
-    renderAdminPeriods(data.day_period_info,data.night_period_info);
+    renderPeriodInfo(data.period_info);
     $('adminOpen').innerHTML=renderAdminRoleGroups(
       data.open||[], renderAdminShift, 'Открытых смен сейчас нет.'
     );
@@ -1726,16 +1555,34 @@ async function loadAdmin(silent=false,background=false){
       btn.onclick=()=>confirmAction('Закрыть смену этого сотрудника сейчас?',
         ()=>forceCloseShift(Number(btn.dataset.sid), btn));
     });
-    $('adminPeriod').innerHTML=renderAdminPeriodEmployees(data.period_employees||data.period||[]);
-    document.querySelectorAll('#adminPeriod .admin-history-open').forEach(btn=>{
+    $('adminEmployees').innerHTML=renderAdminRoleGroups(
+      data.employees||[], renderAdminEmployee, 'Сотрудники пока не найдены.'
+    );
+    document.querySelectorAll('#adminEmployees .admin-history-open').forEach(btn=>{
       btn.onclick=()=>loadAdminHistory(Number(btn.dataset.userId));
     });
-    return true;
+    const kpi=data.kpi||[];
+    $('adminKpi').innerHTML=renderAdminRoleGroups(kpi, item=>{
+      const value=Number(item.efficiency||0).toLocaleString('ru-RU')+' дейст./ч';
+      return `<div class="admin-row"><div class="top"><span>${esc(item.name)}</span><span>${esc(value)}</span></div>
+        <div class="meta">${hm(item.worked_minutes||0)} · действий ${Number(item.actions)||0}</div></div>`;
+    }, 'КПД появится после первой учтённой смены.');
+    /* Декада — часы и действия (без денег) */
+    const periodRows = data.period || [];
+    const periodHtml = renderAdminRoleGroups(periodRows, item=>{
+      const dot = item.open_now ? '🟢 ' : '';
+      return `<div class="admin-row${item.open_now?' active':''}"><div class="top"><span>${dot}${esc(item.name)}</span><span>${hm(item.worked_minutes||0)}</span></div>
+       <div class="meta">смен ${Number(item.shifts)||0} · действий ${Number(item.actions)||0}</div></div>`;
+    }, 'За текущую декаду данных пока нет.');
+    $('adminPeriod').innerHTML = periodHtml;
+    $('adminPeriodOpen').innerHTML = periodHtml;
+    const pi = data.period_info;
+    $('adminOpenPeriod').textContent = pi
+      ? `Декада с ${pi.started_label} · идёт ${pi.day_number}-й день`
+      : '';
   }catch(e){
-    if(requestId!==adminDashboardRequest) return false;
     if(e.status===401) closeAdmin();
     toast(e.message || 'Не удалось загрузить админку');
-    return false;
   }
 }
 
@@ -1890,7 +1737,7 @@ setInterval(async ()=>{
   try{
     const applied = await load({background:true});
     if(!applied || isTypingNow() || isFormOpen()) return;
-    if(adminToken && !$('tab-more').classList.contains('hidden')) await loadAdmin(true,true);
+    if(adminToken && !$('tab-more').classList.contains('hidden')) await loadAdmin(true);
   }finally{
     periodicLoadRunning=false;
   }

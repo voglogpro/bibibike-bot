@@ -129,7 +129,7 @@ WEBAPP_SHORTNAME = os.getenv("WEBAPP_SHORTNAME", "zp")
 # Публичный адрес нужен как ориентир для настройки приложения в BotFather.
 # Ссылка из группового отчёта идёт через t.me/бот/shortname, а фактический URL
 # этого short-name хранится на стороне Telegram и должен указывать на этот домен.
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://bot-1784566310-4749-voglogpro.bothost.tech")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://bot-1784566310-4749-voglogpro.bothost.tech/")
 
 # Домен, с которого открывается сама страница мини-приложения (GitHub Pages).
 # Нужен для CORS, чтобы браузер разрешил запросы к API бота.

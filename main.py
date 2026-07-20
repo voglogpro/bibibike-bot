@@ -130,7 +130,7 @@ WEBAPP_SHORTNAME = os.getenv("WEBAPP_SHORTNAME", "zp")
 # Нужен для web_app-кнопки, которая открывает Mini App в один тап прямо из отчёта.
 # Если пусто — кнопка откатится на старую url-ссылку t.me/бот/shortname.
 # Задавать ТОЛЬКО через переменную окружения, дефолт — публичный адрес бота. ===
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://bot-1783532208-8771-voglogpro.bothost.tech/")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://bot-1784566310-4749-voglogpro.bothost.tech/")
 
 # Домен, с которого открывается сама страница мини-приложения (GitHub Pages).
 # Нужен для CORS, чтобы браузер разрешил запросы к API бота.

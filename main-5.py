@@ -119,7 +119,7 @@ DEBOUNCE_SEC = 20
 # Дефолт 3000 сохранён из рабочей версии; на хостинге WEB_PORT должен совпадать
 # с портом, выделенным для Mini App.
 # Этот же порт нужно указать в поле «Порт веб-приложения» при создании бота.
-WEBAPP_PORT = int(os.getenv("WEB_PORT", "3000"))
+WEBAPP_PORT = int(os.getenv("PORT") or os.getenv("WEB_PORT") or "3000")
 
 # Имя бота (без @) и short-name Mini App из BotFather (/newapp) —
 # нужны, чтобы под отчётом появилась кнопка «Моя зарплата».

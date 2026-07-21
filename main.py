@@ -146,7 +146,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-20 · ОТКАТ: стабильный ввод + Обед + PORT"
+BUILD_VERSION = "2026-07-21 · стабильный ввод + Обед + BotHost runtime fix"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4411,6 +4411,14 @@ async def serve_index(request):
         })
     return web.Response(text="BibiBike API ok")
 
+async def api_health(request):
+    return web.json_response({
+        "ok": True,
+        "service": "bibibike-bot",
+        "build_version": BUILD_VERSION,
+        "index_html": os.path.exists(INDEX_PATH),
+    })
+
 async def start_api_server():
     try:
         app = web.Application(middlewares=[cors_mw])
@@ -4429,6 +4437,8 @@ async def start_api_server():
         app.router.add_post("/api/admin/force-close", api_admin_force_close)
         app.router.add_post("/api/admin/period/new", api_admin_period_new)
         app.router.add_post("/api/admin/manual/approve", api_admin_manual_approve)
+        app.router.add_get("/health", api_health)
+        app.router.add_get("/index.html", serve_index)
         app.router.add_get("/", serve_index)
         runner = web.AppRunner(app)
         await runner.setup()

@@ -2352,13 +2352,13 @@ def build_report_text(shift, stats):
 
     has_any = False
     if stats['move'] > 0:
-        report += f"🟩 Перемещено: {stats['move']}\n"; has_any = True
+        report += f"🛵 Перемещено: {stats['move']}\n"; has_any = True
     if stats['fix'] > 0:
-        report += f"🟩 Поправлено: {stats['fix']}\n"; has_any = True
+        report += f"💚 Поправлено: {stats['fix']}\n"; has_any = True
     if stats['repair'] > 0:
-        report += f"🟩 Ремонт: {stats['repair']}\n"; has_any = True
+        report += f"🔧 Ремонт: {stats['repair']}\n"; has_any = True
     if stats['battery'] > 0:
-        report += f"Поменял АКБ: {stats['battery']}\n"; has_any = True
+        report += f"🔋 Поменял АКБ: {stats['battery']}\n"; has_any = True
     if stats['to_sc'] > 0:
         report += f"Привез на СЦ: {stats['to_sc']}\n"; has_any = True
     if stats['from_sc'] > 0:

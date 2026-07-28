@@ -163,7 +163,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-21 · стабильный ввод + Обед + BotHost runtime fix"
+BUILD_VERSION = "2026-07-28 · FIX Химки + диагностика города смены"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -297,7 +297,7 @@ def _configured_cities():
         "name": "Химки",
         "group_id": KHIMKI_SCOUTS_GROUP_ID,
         "topic_tasks": KHIMKI_SCOUTS_TOPIC_MOVES,
-        "topic_moves": None,   # единый парсер, как в Краснодаре
+        "topic_moves": KHIMKI_SCOUTS_TOPIC_MOVES,
         "topic_npb": NO_TOPIC,          # темы АКБ в Химках нет
         "topic_reports": KHIMKI_SCOUTS_TOPIC_REPORTS,
         "timezone_offset": 3,
@@ -306,7 +306,7 @@ def _configured_cities():
                 "role": "Скаут",
                 "group_id": KHIMKI_SCOUTS_GROUP_ID,
                 "topic_tasks": KHIMKI_SCOUTS_TOPIC_MOVES,
-                "topic_moves": None,   # единый парсер, как в Краснодаре
+                "topic_moves": KHIMKI_SCOUTS_TOPIC_MOVES,
                 "topic_npb": NO_TOPIC,
                 "topic_reports": KHIMKI_SCOUTS_TOPIC_REPORTS,
             },
@@ -314,7 +314,7 @@ def _configured_cities():
                 "role": "Водитель",
                 "group_id": KHIMKI_DRIVERS_GROUP_ID,
                 "topic_tasks": KHIMKI_DRIVERS_TOPIC_MOVES,
-                "topic_moves": None,   # единый парсер, как в Краснодаре
+                "topic_moves": KHIMKI_DRIVERS_TOPIC_MOVES,
                 "topic_npb": NO_TOPIC,
                 "topic_reports": KHIMKI_DRIVERS_TOPIC_REPORTS,
             },
@@ -332,13 +332,15 @@ def _configured_cities():
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            city = dict(item)
-            key = str(city.get("key") or "").strip().lower()
+            key = str(item.get("key") or "").strip().lower()
+            # Переменная хостинга может менять отдельные поля города, но не
+            # должна стирать встроенные role_groups Химок. Для нового города,
+            # которого нет в коде, по-прежнему требуется полный набор полей.
+            city = {**by_key.get(key, {}), **dict(item), "key": key}
             required = ("name", "group_id", "topic_tasks", "topic_npb", "topic_reports")
             if not key or any(city.get(field) is None for field in required):
                 logger.warning("Пропущена неполная запись города в CITIES_CONFIG_JSON")
                 continue
-            city["key"] = key
             if city.get("topic_moves") is not None:
                 try:
                     city["topic_moves"] = int(city["topic_moves"])
@@ -425,7 +427,9 @@ def city_for_role(city_id, role):
     groups = city_role_groups(city_id)
     if not groups:
         return city
-    return groups.get(_norm_role(role)) or city
+    # Для ролевого города неизвестная роль не должна молча отправлять отчёт в
+    # основную (скаутскую) группу. Лучше понятная ошибка, чем чужой отчёт.
+    return groups.get(_norm_role(role))
 
 
 def city_requires_role(city_id):
@@ -2049,13 +2053,18 @@ def parse_npb_message(text):
 
 # === НОВОЕ: парсер темы «Перемещения»/«Подвозы» (Химки) ===
 def parse_moves_message(text):
-    """Голые 4-значные номера = перемещения.
+    """Действия разбираются эталонным парсером, голые номера = перемещения.
 
     Работает по образцу NPB, только результат — 'move', а не 'battery'.
     Применяется ТОЛЬКО в теме, указанной как topic_moves у города
     (Химки: «Перемещения» у скаутов, «Подвозы» у водителей).
-    Слова-глаголы здесь не нужны: достаточно самих номеров.
+    Если в сообщении есть «ремонт», «поправил», «привёз на СЦ» и другие
+    знакомые слова, сначала работает прежний parse_message. Только когда он
+    ничего не нашёл, все 4-значные номера считаются перемещениями.
     """
+    parsed = parse_message(text)
+    if parsed:
+        return parsed
     codes = re.findall(r'\b(\d{4})\b', text)
     if not codes:
         return []
@@ -2069,9 +2078,11 @@ def topic_parser_kind(city, thread_id):
     'npb'    — голые номера считаются заменами АКБ (тема topic_npb);
     'tasks'  — обычный парсер по глаголам, как во всех остальных темах.
     """
-    # Единый парсер для ВСЕХ городов — эталонный краснодарский разбор по словам.
-    # Отдельно живёт только тема NPB (голые номера = замены АКБ), она есть
-    # в Краснодаре и отсутствует в Химках.
+    # Специальная тема перемещений используется только там, где она явно
+    # настроена (сейчас это ролевые группы Химок). Краснодар не затрагивается:
+    # у него topic_moves=NULL, поэтому остаётся прежний parse_message.
+    if city.get("topic_moves") is not None and thread_id == city.get("topic_moves"):
+        return "moves"
     if thread_id == city.get("topic_npb"):
         return "npb"
     return "tasks"
@@ -2752,14 +2763,44 @@ class CityTopicFilter(BaseFilter):
 
     async def __call__(self, message: Message):
         city = get_city_by_group(message.chat.id)
+        # Диагностика выполняется в первом (reports) фильтре и не меняет
+        # маршрутизацию. Если этой строки нет в логах, Telegram вообще не отдал
+        # сообщение боту: нужно проверять права администратора/Privacy Mode.
+        if (self.topic_kind == "reports"
+                and message.chat.id in {
+                    KHIMKI_SCOUTS_GROUP_ID, KHIMKI_DRIVERS_GROUP_ID
+                }):
+            sender = getattr(message, "from_user", None)
+            logger.info(
+                "ВХОД ХИМКИ: chat=%s тема=%s msg=%s uid=%s sender_bot=%s "
+                "маршрут=%s текст=%r",
+                message.chat.id,
+                message.message_thread_id,
+                message.message_id,
+                getattr(sender, "id", None),
+                getattr(sender, "is_bot", None),
+                "найден" if city else "НЕ НАЙДЕН",
+                ((message.text or message.caption or "")[:160]),
+            )
         if not city:
             return False
         thread_id = message.message_thread_id
         if self.topic_kind == "reports":
             matches = thread_id == city["topic_reports"]
+        elif city.get("role_group"):
+            # В Химках не читаем General, штрафы, срочные задачи и остальные
+            # темы. Только явно настроенная рабочая тема конкретной роли.
+            allowed_topics = {
+                topic_id for topic_id in (
+                    city.get("topic_tasks"),
+                    city.get("topic_moves"),
+                    city.get("topic_npb"),
+                ) if topic_id is not None and topic_id != NO_TOPIC
+            }
+            matches = thread_id in allowed_topics
         else:
             # Сохраняем рабочий контрак бота: слушать все темы группы
-            # города, кроме «ОТЧЁТОВ». NPB всё ещё определяется отдельно.
+            # обычного города, кроме «ОТЧЁТОВ». Краснодар работает как раньше.
             matches = thread_id != city["topic_reports"]
         return {"city": city} if matches else False
 
@@ -2797,17 +2838,54 @@ async def process_work_message(message: Message, city, npb=False, edited=False, 
                 if lower_bound and message_date + timedelta(minutes=2) >= lower_bound:
                     shift = candidate
     else:
-    # Сначала пытаемся найти активную смену в этом городе
-    shift = await get_active_shift(uid, city["id"])
-    # Если нет смены в этом городе, ищем любую активную смену пользователя
+        shift = await get_active_shift(uid, city["id"])
     if not shift:
-        shift = await get_active_shift(uid)
-        if shift and shift.get("city_id") != city["id"]:
-            logger.info(f"У пользователя {uid} смена открыта в другом городе (id={shift.get('city_id')}), но сообщение обработано как рабочее.")
-    if not shift:
+        # Не смешиваем действия разных городов, но явно объясняем ситуацию в
+        # логах. Раньше активная смена в Химках и сообщение из краснодарской
+        # группы выглядели как обычное «нет активной смены».
+        active_elsewhere = await get_active_shift(uid)
+        if active_elsewhere:
+            shift_city = get_city(active_elsewhere.get("city_id")) or {}
+            logger.warning(
+                "ПРОПУЩЕНО: сообщение из одного города, а активная смена в другом. "
+                "uid=%s чат_город=%s(%s) смена_город=%s(%s) chat=%s title=%r "
+                "тема=%s msg=%s смена=%s",
+                uid,
+                city.get("name") or "неизвестен",
+                city.get("id"),
+                shift_city.get("name") or "неизвестен",
+                active_elsewhere.get("city_id"),
+                chat_id,
+                getattr(message.chat, "title", None),
+                message.message_thread_id,
+                message.message_id,
+                active_elsewhere.get("id"),
+            )
+        else:
+            logger.info(
+                "ПРОПУЩЕНО: у пользователя действительно нет активной смены. "
+                "uid=%s город_чата=%s(%s) chat=%s title=%r тема=%s msg=%s",
+                uid,
+                city.get("name") or "неизвестен",
+                city.get("id"),
+                chat_id,
+                getattr(message.chat, "title", None),
+                message.message_thread_id,
+                message.message_id,
+            )
+        return
+    expected_role = city.get("role_group")
+    if expected_role and _norm_role(shift.get("role")) != _norm_role(expected_role):
         logger.info(
-            f"ПРОПУЩЕНО: нет активной смены. uid={uid} город={city['name']} "
-            f"chat={chat_id} тема={message.message_thread_id} msg={message.message_id}"
+            "ПРОПУЩЕНО: роль смены не совпадает с группой. uid=%s город=%s "
+            "chat=%s тема=%s роль_смены=%s роль_группы=%s msg=%s",
+            uid,
+            city["name"],
+            chat_id,
+            message.message_thread_id,
+            shift.get("role") or "не указана",
+            expected_role,
+            message.message_id,
         )
         return
 
@@ -2891,7 +2969,7 @@ async def process_work_message(message: Message, city, npb=False, edited=False, 
 @work_router.message(CityTopicFilter("work"))
 async def work_chat(message: Message, city):
     # === НОВОЕ: /topicid — узнать ID темы (для настройки конфига) ===
-    if (message.text or "") == "/topicid":
+    if re.fullmatch(r"/topicid(?:@\w+)?", (message.text or "").strip(), re.IGNORECASE):
         msg = await message.answer(
             f"chat_id: {message.chat.id}\nmessage_thread_id: {message.message_thread_id}"
         )
@@ -2964,7 +3042,7 @@ async def cmd_chat(message: Message, city):
         return
 
     # === НОВОЕ: /topicid и в теме отчётов ===
-    if text == "/topicid":
+    if re.fullmatch(r"/topicid(?:@\w+)?", text, re.IGNORECASE):
         try:
             await message.delete()
         except:
@@ -3019,6 +3097,23 @@ async def cmd_chat(message: Message, city):
                     asyncio.create_task(auto_delete(msg))
                     return
                 new_name = " ".join(args[:-1])
+                group_role = city.get("role_group")
+                if group_role and _norm_role(new_role) != _norm_role(group_role):
+                    msg = await message.answer(
+                        f"Эта группа предназначена для роли «{group_role}». "
+                        "Выберите роль в своей рабочей группе."
+                    )
+                    asyncio.create_task(auto_delete(msg))
+                    return
+                current_shift = await get_active_shift(user_id)
+                if (current_shift
+                        and (_norm_role(new_role) != _norm_role(current_shift.get("role"))
+                             or city["id"] != current_shift.get("city_id"))):
+                    msg = await message.answer(
+                        "Сначала закройте активную смену, затем меняйте город или роль."
+                    )
+                    asyncio.create_task(auto_delete(msg))
+                    return
                 await add_user(user_id, new_name, new_role, city["id"])
                 msg = await message.answer(f"Сохранено: {new_name} | {new_role}")
             else:
@@ -3262,6 +3357,7 @@ async def _auth_user(request):
 
 
 _city_membership_cache = {}
+_city_role_membership_cache = {}
 
 
 async def _is_city_member(uid, city_id):
@@ -3299,6 +3395,36 @@ async def _is_city_member(uid, city_id):
             break
     ttl = max(30, CITY_MEMBERSHIP_TTL_SEC if allowed else min(60, CITY_MEMBERSHIP_TTL_SEC))
     _city_membership_cache[(uid, city_id)] = (allowed, now_ts + ttl)
+    return allowed
+
+
+async def _is_city_role_member(uid, city_id, role):
+    """Для ролевого города проверяет именно группу выбранной роли."""
+    if not city_requires_role(city_id):
+        return await _is_city_member(uid, city_id)
+    variant = city_for_role(city_id, role)
+    if not variant:
+        return False
+    cache_key = (uid, city_id, _norm_role(role))
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cached = _city_role_membership_cache.get(cache_key)
+    if cached and cached[1] > now_ts:
+        return cached[0]
+    allowed = False
+    try:
+        member = await bot.get_chat_member(variant["group_id"], uid)
+        status = getattr(member.status, "value", str(member.status)).lower().split(".")[-1]
+        if status == "restricted":
+            allowed = bool(getattr(member, "is_member", False))
+        else:
+            allowed = status in {"creator", "administrator", "member"}
+    except Exception as exc:
+        logger.warning(
+            "Не удалось проверить uid=%s в группе роли %s города %s: %s",
+            uid, role, city_id, exc,
+        )
+    ttl = max(30, CITY_MEMBERSHIP_TTL_SEC if allowed else min(60, CITY_MEMBERSHIP_TTL_SEC))
+    _city_role_membership_cache[cache_key] = (allowed, now_ts + ttl)
     return allowed
 
 
@@ -3445,21 +3571,75 @@ async def api_settings(request):
     if body is None:
         return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
 
-    city_id = body.get("city_id")
-    if city_id is not None:
-        if not isinstance(city_id, int) or not get_city(city_id):
-            return web.json_response({"error": "city_id", "message": "Неизвестный город."}, status=400)
-        if not await _is_city_member(uid, city_id):
+    current_user = await get_user(uid) or {}
+    active_shift = await get_active_shift(uid)
+    city_was_sent = "city_id" in body and body.get("city_id") is not None
+    city_id = body.get("city_id") if city_was_sent else (
+        current_user.get("city_id") or (get_default_city() or {}).get("id")
+    )
+    if not isinstance(city_id, int) or not get_city(city_id):
+        return web.json_response({"error": "city_id", "message": "Неизвестный город."}, status=400)
+
+    # Имя и роль — необязательно (можно зарегистрироваться прямо в приложении).
+    name = (body.get("name") or "").strip()
+    role_raw = (body.get("role") or "").strip().lower()
+    role_map = {"скаут": "Скаут", "водитель": "Водитель", "чарджер": "Чарджер"}
+    if role_raw and role_raw not in role_map:
+        return web.json_response(
+            {"error": "role", "message": "Выберите роль: скаут, водитель или чарджер."},
+            status=400,
+        )
+    requested_role = role_map.get(role_raw)
+    effective_role = requested_role or current_user.get("role") or ""
+
+    # Во время активной смены профиль не должен «переезжать» в другой город
+    # или роль: действия иначе окажутся отделены от открытого отчёта.
+    if active_shift:
+        if city_id != active_shift.get("city_id"):
             return web.json_response(
-                {"error": "city_membership", "message": "Вы не состоите в рабочей группе этого города."},
-                status=403)
-        await set_user_city(uid, city_id)
-    else:
-        current_user = await get_user(uid)
-        city_id = (current_user or {}).get("city_id") or (get_default_city() or {}).get("id")
+                {"error": "active_city_change",
+                 "message": "Сначала закройте активную смену, затем меняйте город."},
+                status=409,
+            )
+        if (requested_role
+                and _norm_role(requested_role) != _norm_role(active_shift.get("role"))):
+            return web.json_response(
+                {"error": "active_role_change",
+                 "message": "Сначала закройте активную смену, затем меняйте роль."},
+                status=409,
+            )
+
+    if city_requires_role(city_id):
+        supported = city_supported_roles(city_id)
+        if not effective_role:
+            return web.json_response(
+                {"error": "role_required",
+                 "message": "В Химках выберите роль: скаут или водитель."},
+                status=400,
+            )
+        if _norm_role(effective_role) not in {_norm_role(item) for item in supported}:
+            return web.json_response(
+                {"error": "role_unsupported",
+                 "message": "Для этой роли в Химках пока нет рабочей группы. "
+                            f"Доступны: {', '.join(supported)}."},
+                status=400,
+            )
+        if (city_was_sent or requested_role) and not await _is_city_role_member(
+                uid, city_id, effective_role):
+            return web.json_response(
+                {"error": "role_membership",
+                 "message": f"Вы не состоите в группе роли «{effective_role}» города Химки."},
+                status=403,
+            )
+    elif city_was_sent and not await _is_city_member(uid, city_id):
+        return web.json_response(
+            {"error": "city_membership", "message": "Вы не состоите в рабочей группе этого города."},
+            status=403,
+        )
 
     # Оплату сохраняем только если реально передана (регистрация шлёт лишь имя+роль,
     # иначе у нового сотрудника остались бы DEFAULT'ы, а не обнуление).
+    pay_update = None
     if "pay_type" in body or "pay_amount" in body:
         pay_type = body.get("pay_type", DEFAULT_PAY_TYPE)
         if pay_type not in ("hourly", "salary", "piece"):
@@ -3471,37 +3651,19 @@ async def api_settings(request):
         if not math.isfinite(pay_amount) or pay_amount < 0 or pay_amount > 10_000_000:
             return web.json_response(
                 {"error": "pay_amount", "message": "Укажи корректную ставку."}, status=400)
-        await set_user_pay(uid, pay_type, pay_amount)
+        pay_update = (pay_type, pay_amount)
 
-    # === НОВОЕ: тумблер «Режим редактирования» — сохраняем, если передан ===
+    # Все проверки завершены — только теперь применяем изменения, чтобы при
+    # ошибке одного поля город/роль не сохранились частично.
+    if city_was_sent:
+        await set_user_city(uid, city_id)
+    if pay_update:
+        await set_user_pay(uid, *pay_update)
     if "edit_mode" in body:
         await set_user_edit_mode(uid, bool(body.get("edit_mode")))
 
-    # Имя и роль — необязательно (можно зарегистрироваться прямо в приложении)
-    name = (body.get("name") or "").strip()
-    role = (body.get("role") or "").strip().lower()
-    role_map = {"скаут": "Скаут", "водитель": "Водитель", "чарджер": "Чарджер"}
-
-    # В городах, где у каждой роли своя группа (Химки), роль обязательна:
-    # без неё бот не знает, в какую группу писать смену.
-    if city_requires_role(city_id):
-        current_user = await get_user(uid)
-        effective_role = role_map.get(role) or (current_user or {}).get("role") or ""
-        if not effective_role:
-            return web.json_response(
-                {"error": "role_required",
-                 "message": "В этом городе укажи роль — у каждой роли своя рабочая группа."},
-                status=400)
-        supported = city_supported_roles(city_id)
-        if _norm_role(effective_role) not in {_norm_role(item) for item in supported}:
-            return web.json_response(
-                {"error": "role_unsupported",
-                 "message": "В этом городе нет группы для роли "
-                            f"«{effective_role}». Доступны: {', '.join(supported)}."},
-                status=400)
-
-    if name and role in role_map:
-        await add_user(uid, name, role_map[role], city_id)
+    if name and requested_role:
+        await add_user(uid, name, requested_role, city_id)
 
     return web.json_response({"ok": True})
 
@@ -3534,10 +3696,6 @@ async def api_shift_start(request):
     city_id = body.get("city_id", user.get("city_id"))
     if not isinstance(city_id, int) or not get_city(city_id):
         return web.json_response({"error": "city_id", "message": "Выбери город."}, status=400)
-    if not await _is_city_member(uid, city_id):
-        return web.json_response(
-            {"error": "city_membership", "message": "Вы не состоите в рабочей группе этого города."},
-            status=403)
     # В городах с ролевыми группами (Химки) без подходящей роли смену
     # открыть нельзя — иначе непонятно, в какую группу писать отчёт.
     if city_requires_role(city_id):
@@ -3549,6 +3707,16 @@ async def api_shift_start(request):
                  "message": "Укажи роль в Настройках — в этом городе у каждой роли "
                             f"своя группа. Доступны: {', '.join(supported)}."},
                 status=400)
+        if not await _is_city_role_member(uid, city_id, user_role):
+            return web.json_response(
+                {"error": "role_membership",
+                 "message": f"Вы не состоите в группе роли «{user_role}» города Химки."},
+                status=403,
+            )
+    elif not await _is_city_member(uid, city_id):
+        return web.json_response(
+            {"error": "city_membership", "message": "Вы не состоите в рабочей группе этого города."},
+            status=403)
     if await get_active_shift(uid):
         return web.json_response(
             {"error": "already_active", "message": "Смена уже открыта."}, status=400)
@@ -3578,7 +3746,17 @@ async def api_shift_start(request):
             {"error": "already_active", "message": "Смена уже открыта."}, status=400)
     await set_user_city(uid, city_id)
     report_ok = await safe_flush_report_update(sid)
-    logger.info(f"Смена начата (из приложения): {user['full_name']}, {time_str}, {district or '—'}")
+    selected_city = get_city(city_id) or {}
+    logger.info(
+        "Смена начата (из приложения): %s, %s, %s; uid=%s город=%s(%s) роль=%s",
+        user["full_name"],
+        time_str,
+        district or "—",
+        uid,
+        selected_city.get("name") or "неизвестен",
+        city_id,
+        user.get("role") or "не указана",
+    )
     shift = await get_shift_by_id(sid)
     return web.json_response({
         "ok": True, "scheduled": _shift_is_scheduled(shift), "report_updated": report_ok
@@ -4951,6 +5129,15 @@ async def main():
             f"задачи {city['topic_tasks']}, NPB {city['topic_npb']}, "
             f"перемещения {city.get('topic_moves') or '—'}, отчёты {city['topic_reports']}"
         )
+        for role_city in city_role_groups(city["id"]).values():
+            logger.info(
+                "  Роль %s: группа %s, рабочая тема %s, перемещения %s, отчёты %s",
+                role_city.get("role_group") or "—",
+                role_city["group_id"],
+                role_city["topic_tasks"],
+                role_city.get("topic_moves") or "—",
+                role_city["topic_reports"],
+            )
     logger.info("=" * 50)
 
     try:

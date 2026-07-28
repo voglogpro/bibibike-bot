@@ -36,7 +36,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qsl
 from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.filters import BaseFilter
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.exceptions import TelegramBadRequest
 
@@ -76,32 +76,24 @@ DEFAULT_CITY_NAME = "Краснодар"
 CITIES_CONFIG_JSON = os.getenv("CITIES_CONFIG_JSON", "").strip()
 
 # ============================================================
-# ГОРОДА-ЗАГЛУШКИ: Ставрополь, Красная Поляна, Химки
+# ГОРОДА TELEGRAM
 # ============================================================
-# Такие же разделы, как у Краснодара выше. Пока стоят ЗАГЛУШКИ —
-# когда получишь доступ к группе города, впиши реальные ID группы
-# и тем (узнать: команда /topicid в нужной теме), и город заработает
-# полностью: бот начнёт слушать и писать в его группе.
-#
-# Пока стоят заглушки: города видны в приложении (выбор города,
-# регистрация, открытие смены), но отчёт в Telegram-группу города
-# не постится — группы с таким ID не существует, ошибка уходит в лог,
-# смена при этом сохраняется нормально (safe_flush_report_update).
-#
-# ВАЖНО: заглушки group_id обязаны быть РАЗНЫМИ у разных городов —
-# в базе на group_id стоит UNIQUE. Не копируй одно значение в два города.
+# NO_TOPIC означает, что отдельной темы у города нет. При отправке отчёта
+# такой ID не передаётся Telegram: сообщение публикуется в общем чате.
+NO_TOPIC = -1
 
-# --- Ставрополь (ЗАГЛУШКИ — заменить на реальные ID) ---
-STAVROPOL_GROUP_ID      = -1000000000002   # ID группы «Логистика Ставрополь»
-STAVROPOL_TOPIC_TASKS   = 1                # ID темы «Тех. Задания»
-STAVROPOL_TOPIC_NPB     = 2                # ID темы «NPB»
-STAVROPOL_TOPIC_REPORTS = 3                # ID темы «ОТЧЕТЫ»
+# --- Ставрополь: одна обычная группа БЕЗ тем ---
+# web.telegram.org/k/#-4456873256 -> Bot API chat_id -1004456873256.
+STAVROPOL_GROUP_ID      = -1004456873256
+STAVROPOL_TOPIC_TASKS   = NO_TOPIC
+STAVROPOL_TOPIC_NPB     = NO_TOPIC
+STAVROPOL_TOPIC_REPORTS = NO_TOPIC
 
-# --- Красная Поляна (ЗАГЛУШКИ — заменить на реальные ID) ---
-POLYANA_GROUP_ID        = -1000000000003   # ID группы «Логистика Красная Поляна»
-POLYANA_TOPIC_TASKS     = 1                # ID темы «Тех. Задания»
-POLYANA_TOPIC_NPB       = 2                # ID темы «NPB»
-POLYANA_TOPIC_REPORTS   = 3                # ID темы «ОТЧЕТЫ»
+# --- Красная Поляна: одна группа с отдельными темами ---
+POLYANA_GROUP_ID        = -1002866630249   # t.me/c/2866630249
+POLYANA_TOPIC_TASKS     = 1                # рабочая тема: тех. задания
+POLYANA_TOPIC_NPB       = NO_TOPIC         # отдельная тема NPB не указана
+POLYANA_TOPIC_REPORTS   = 3127             # тема отчётов
 
 # --- Химки: ОДИН город, но у каждой роли своя телеграм-группа ---
 # В приложении сотрудник выбирает просто «Химки», а роль решает, в какую
@@ -109,10 +101,6 @@ POLYANA_TOPIC_REPORTS   = 3                # ID темы «ОТЧЕТЫ»
 # админка, история, КПД и месячные итоги видят весь город целиком —
 # и скаутов, и водителей — без каких-либо изменений в запросах.
 #
-# NO_TOPIC — заглушка для темы, которой в группе нет (в Химках нет АКБ).
-# Ни одно сообщение с таким thread_id не придёт, тема просто не сработает.
-NO_TOPIC = -1
-
 # Скауты Химки (t.me/c/3951407451)
 KHIMKI_SCOUTS_GROUP_ID       = -1003951407451
 KHIMKI_SCOUTS_TOPIC_MOVES    = 2            # «Перемещения»: 4-значные номера = перемещения
@@ -163,7 +151,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-28 · FIX Химки + диагностика города смены"
+BUILD_VERSION = "2026-07-28 · Химки + Красная Поляна + Ставрополь"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -405,6 +393,30 @@ def _norm_role(role):
 
 def get_city(city_id):
     return CITIES_BY_ID.get(city_id)
+
+
+def _city_key(city):
+    """Ключ города одинаково читается из конфига и строки таблицы cities."""
+    return (city or {}).get("city_key") or (city or {}).get("key") or ""
+
+
+def _is_single_chat_city(city):
+    """Город без тем: управление сменой, отчёт и действия в одном чате."""
+    return _city_key(city) == "stavropol"
+
+
+def _uses_strict_work_topics(city):
+    """Города, где парсер слушает только явно указанные рабочие темы."""
+    return bool((city or {}).get("role_group")) or _city_key(city) == "krasnaya_polyana"
+
+
+def _telegram_thread_id(value):
+    """Преобразует NO_TOPIC/0/None в отсутствие message_thread_id."""
+    try:
+        thread_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return thread_id if thread_id > 0 else None
 
 
 def city_role_groups(city_id):
@@ -2691,8 +2703,11 @@ async def _update_report_message_locked(shift_id, force_new=False):
             # сообщение удалили вручную — пришлём новое ниже
 
     msg = await bot.send_message(
-        city["group_id"], text, message_thread_id=city["topic_reports"],
-        parse_mode="HTML", reply_markup=markup
+        city["group_id"],
+        text,
+        message_thread_id=_telegram_thread_id(city.get("topic_reports")),
+        parse_mode="HTML",
+        reply_markup=markup,
     )
     await set_report_msg_id(shift_id, msg.message_id)
 
@@ -2757,6 +2772,15 @@ async def post_app_button(message: Message):
 # ============================================================
 # ОБРАБОТКА РАБОЧЕГО СООБЩЕНИЯ  (оригинальная + триггер живого отчёта)
 # ============================================================
+@cmd_router.message(Command("topicid"))
+async def topic_id_any_chat(message: Message):
+    """Показывает реальные ID даже в ещё не настроенной группе или теме."""
+    msg = await message.answer(
+        f"chat_id: {message.chat.id}\nmessage_thread_id: {message.message_thread_id}"
+    )
+    asyncio.create_task(auto_delete(msg))
+
+
 class CityTopicFilter(BaseFilter):
     def __init__(self, topic_kind):
         self.topic_kind = topic_kind
@@ -2766,30 +2790,32 @@ class CityTopicFilter(BaseFilter):
         # Диагностика выполняется в первом (reports) фильтре и не меняет
         # маршрутизацию. Если этой строки нет в логах, Telegram вообще не отдал
         # сообщение боту: нужно проверять права администратора/Privacy Mode.
-        if (self.topic_kind == "reports"
-                and message.chat.id in {
-                    KHIMKI_SCOUTS_GROUP_ID, KHIMKI_DRIVERS_GROUP_ID
-                }):
+        if (self.topic_kind == "reports" and city
+                and _city_key(city) != DEFAULT_CITY_KEY):
             sender = getattr(message, "from_user", None)
             logger.info(
-                "ВХОД ХИМКИ: chat=%s тема=%s msg=%s uid=%s sender_bot=%s "
-                "маршрут=%s текст=%r",
+                "ВХОД ГОРОДА: город=%s chat=%s тема=%s msg=%s uid=%s "
+                "sender_bot=%s текст=%r",
+                city.get("name") or _city_key(city),
                 message.chat.id,
                 message.message_thread_id,
                 message.message_id,
                 getattr(sender, "id", None),
                 getattr(sender, "is_bot", None),
-                "найден" if city else "НЕ НАЙДЕН",
                 ((message.text or message.caption or "")[:160]),
             )
         if not city:
             return False
         thread_id = message.message_thread_id
-        if self.topic_kind == "reports":
+        if self.topic_kind == "reports" and _is_single_chat_city(city):
+            # В Ставрополе один общий чат: этот обработчик сам различит
+            # команды/ручное начало смены и обычные рабочие действия.
+            matches = True
+        elif self.topic_kind == "reports":
             matches = thread_id == city["topic_reports"]
-        elif city.get("role_group"):
-            # В Химках не читаем General, штрафы, срочные задачи и остальные
-            # темы. Только явно настроенная рабочая тема конкретной роли.
+        elif _uses_strict_work_topics(city):
+            # В Химках и Красной Поляне не читаем General, штрафы, срочные
+            # задачи и остальные темы. Только явно настроенные рабочие темы.
             allowed_topics = {
                 topic_id for topic_id in (
                     city.get("topic_tasks"),
@@ -3014,7 +3040,16 @@ async def cmd_chat(message: Message, city):
     if not text.startswith('/'):
         if await handle_manual_shift_signal(message, city):
             return
-        await capture_manual_report(message, city)
+        if _is_single_chat_city(city):
+            # Ставрополь: в одном чате находятся и отчёты, и рабочие действия.
+            # После проверки ручного начала/конца смены запускаем тот же
+            # эталонный парсер действий, что используется в Краснодаре.
+            kind = topic_parser_kind(city, message.message_thread_id)
+            await process_work_message(
+                message, city, npb=(kind == "npb"), moves=(kind == "moves")
+            )
+        else:
+            await capture_manual_report(message, city)
         return
 
     # === НОВОЕ: /app — закрепить кнопку приложения и в теме ОТЧЁТЫ ===
@@ -3203,7 +3238,17 @@ async def cmd_chat_edit(message: Message, city):
     if not text.startswith('/'):
         if await handle_manual_shift_signal(message, city):
             return
-        await capture_manual_report(message, city)
+        if _is_single_chat_city(city):
+            kind = topic_parser_kind(city, message.message_thread_id)
+            await process_work_message(
+                message,
+                city,
+                npb=(kind == "npb"),
+                moves=(kind == "moves"),
+                edited=True,
+            )
+        else:
+            await capture_manual_report(message, city)
 
 # ============================================================
 # === НОВОЕ: HTTP API ДЛЯ МИНИ-ПРИЛОЖЕНИЯ ===================

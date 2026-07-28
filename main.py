@@ -2797,7 +2797,13 @@ async def process_work_message(message: Message, city, npb=False, edited=False, 
                 if lower_bound and message_date + timedelta(minutes=2) >= lower_bound:
                     shift = candidate
     else:
-        shift = await get_active_shift(uid, city["id"])
+    # Сначала пытаемся найти активную смену в этом городе
+    shift = await get_active_shift(uid, city["id"])
+    # Если нет смены в этом городе, ищем любую активную смену пользователя
+    if not shift:
+        shift = await get_active_shift(uid)
+        if shift and shift.get("city_id") != city["id"]:
+            logger.info(f"У пользователя {uid} смена открыта в другом городе (id={shift.get('city_id')}), но сообщение обработано как рабочее.")
     if not shift:
         logger.info(
             f"ПРОПУЩЕНО: нет активной смены. uid={uid} город={city['name']} "

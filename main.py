@@ -154,7 +154,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-28 · Красная Поляна + тема чарджеров"
+BUILD_VERSION = "2026-07-28 · +перемещения Поляны + строгие количества"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -2038,24 +2038,132 @@ def _parse_message_fuzzy(text):
     return results
 
 
-def parse_message(text):
-    """Три слоя: эталон → расширения → опечатки.
+def _enforce_quantity_policy(actions):
+    """Количество без кодов разрешено только для поправок.
 
-    Старые распознанные сообщения всегда проходят через исходную функцию.
-    Каждый следующий слой включается, только если предыдущий не нашёл ничего,
-    поэтому результат прежних сообщений не меняется.
+    Четырёхзначные номера байков сохраняются для всех действий. Значения
+    quantity у перемещений, ремонта, АКБ, привоза и вывоза отбрасываются —
+    такие действия теперь обязательно подтверждаются номерами байков.
+    """
+    cleaned = []
+    for action in actions or []:
+        item = dict(action)
+        codes = list(dict.fromkeys(item.get("bike_codes") or []))
+        try:
+            quantity = int(item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if item.get("action_type") != "fix":
+            quantity = 0
+        if not codes and quantity <= 0:
+            continue
+        item["bike_codes"] = codes
+        item["quantity"] = quantity
+        cleaned.append(item)
+    return cleaned
+
+
+def parse_message(text):
+    """Три слоя распознавания и единая политика количества.
+
+    Старые сообщения с четырёхзначными кодами проходят через исходную функцию.
+    Каждый следующий слой включается, только если предыдущий не нашёл ничего.
+    После распознавания количество без кодов сохраняется только у поправок.
     """
     if not isinstance(text, str):
         return []
     legacy = _parse_message_github(text)
     if legacy:
-        return legacy
+        return _enforce_quantity_policy(legacy)
     additions = _parse_message_extensions(text)
     if not additions and '\n' in text:
         additions = _parse_message_extensions(re.sub(r"\s*\n+\s*", " ", text))
     if additions:
-        return additions
-    return _parse_message_fuzzy(text)
+        return _enforce_quantity_policy(additions)
+    return _enforce_quantity_policy(_parse_message_fuzzy(text))
+
+
+def _codes_only_line(line):
+    """Возвращает коды из строки, если кроме кодов и разделителей в ней нет текста."""
+    codes = re.findall(r"(?<!\d)(\d{4})(?!\d)", line or "")
+    if not codes:
+        return []
+    remainder = re.sub(r"(?<!\d)\d{4}(?!\d)", "", line or "")
+    remainder = re.sub(r"[\s,;|]+", "", remainder)
+    return list(dict.fromkeys(codes)) if not remainder else []
+
+
+def _merge_parsed_actions(actions):
+    """Объединяет одинаковые типы действий без повторов кодов."""
+    totals = {}
+    for action in actions or []:
+        atype = action.get("action_type")
+        if not atype:
+            continue
+        item = totals.setdefault(atype, {"bike_codes": [], "quantity": 0})
+        for code in action.get("bike_codes") or []:
+            if code not in item["bike_codes"]:
+                item["bike_codes"].append(code)
+        item["quantity"] += int(action.get("quantity") or 0)
+    order = ("move", "fix", "repair", "battery", "to_sc", "from_sc")
+    return [
+        {"action_type": atype, "bike_codes": totals[atype]["bike_codes"],
+         "quantity": totals[atype]["quantity"]}
+        for atype in order if atype in totals
+    ]
+
+
+def parse_polyana_message(text):
+    """Дополнительный синтаксис Красной Поляны: ``+N`` и список кодов.
+
+    ``+3`` служит маркером перемещения и контрольным количеством. Фактически
+    засчитываются только перечисленные после него четырёхзначные номера. После
+    следующей текстовой строки снова работает обычный эталонный парсер.
+    """
+    if not isinstance(text, str):
+        return []
+    lines = text.splitlines()
+    consumed = set()
+    move_codes = []
+    index = 0
+    while index < len(lines):
+        marker = re.fullmatch(r"\s*\+\s*(\d{1,3})?\s*", lines[index])
+        if not marker:
+            index += 1
+            continue
+        consumed.add(index)
+        declared = int(marker.group(1)) if marker.group(1) else None
+        block_codes = []
+        cursor = index + 1
+        while cursor < len(lines):
+            codes = _codes_only_line(lines[cursor])
+            if not codes:
+                break
+            consumed.add(cursor)
+            for code in codes:
+                if code not in block_codes:
+                    block_codes.append(code)
+            cursor += 1
+        if declared is not None and declared != len(block_codes):
+            logger.warning(
+                "Красная Поляна: после +%s перечислено кодов: %s; "
+                "засчитываю только перечисленные коды",
+                declared,
+                len(block_codes),
+            )
+        for code in block_codes:
+            if code not in move_codes:
+                move_codes.append(code)
+        index = max(cursor, index + 1)
+
+    remainder = "\n".join(
+        "" if line_index in consumed else line
+        for line_index, line in enumerate(lines)
+    )
+    parsed = parse_message(remainder)
+    if move_codes:
+        parsed.append({"action_type": "move", "bike_codes": move_codes, "quantity": 0})
+    return _merge_parsed_actions(parsed)
 
 # === НОВОЕ: парсер темы NPB — голые 4-значные номера = замены АКБ ===
 def parse_npb_message(text):
@@ -2961,6 +3069,8 @@ async def process_work_message(message: Message, city, npb=False, edited=False, 
         actions = parse_moves_message(text)   # тема перемещений: голые номера
     elif npb:
         actions = parse_npb_message(text)
+    elif _city_key(city) == "krasnaya_polyana":
+        actions = parse_polyana_message(text)
     else:
         actions = parse_message(text)
     logger.info(

@@ -81,6 +81,9 @@ CITIES_CONFIG_JSON = os.getenv("CITIES_CONFIG_JSON", "").strip()
 # NO_TOPIC означает, что отдельной темы у города нет. При отправке отчёта
 # такой ID не передаётся Telegram: сообщение публикуется в общем чате.
 NO_TOPIC = -1
+# GENERAL_TOPIC — сообщения общего раздела форума: Bot API присылает для них
+# message_thread_id=None. В базе храним 0, чтобы отличать от «темы нет совсем».
+GENERAL_TOPIC = 0
 
 # --- Ставрополь: одна обычная группа БЕЗ тем ---
 # web.telegram.org/k/#-4456873256 -> Bot API chat_id -1004456873256.
@@ -91,7 +94,7 @@ STAVROPOL_TOPIC_REPORTS = NO_TOPIC
 
 # --- Красная Поляна: одна группа с отдельными темами ---
 POLYANA_GROUP_ID        = -1002866630249   # t.me/c/2866630249
-POLYANA_TOPIC_TASKS     = 1                # рабочая тема: тех. задания
+POLYANA_TOPIC_TASKS     = GENERAL_TOPIC    # рабочий раздел приходит как thread_id=None
 POLYANA_TOPIC_NPB       = NO_TOPIC         # отдельная тема NPB не указана
 POLYANA_TOPIC_REPORTS   = 3127             # тема отчётов
 
@@ -151,7 +154,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-28 · Химки + Красная Поляна + Ставрополь"
+BUILD_VERSION = "2026-07-28 · FIX общего раздела Красной Поляны"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -2807,12 +2810,15 @@ class CityTopicFilter(BaseFilter):
         if not city:
             return False
         thread_id = message.message_thread_id
+        # Telegram присылает сообщения общего раздела форума с thread_id=None.
+        # В конфигурации/БД этот раздел обозначается GENERAL_TOPIC (0).
+        route_thread_id = GENERAL_TOPIC if thread_id is None else thread_id
         if self.topic_kind == "reports" and _is_single_chat_city(city):
             # В Ставрополе один общий чат: этот обработчик сам различит
             # команды/ручное начало смены и обычные рабочие действия.
             matches = True
         elif self.topic_kind == "reports":
-            matches = thread_id == city["topic_reports"]
+            matches = route_thread_id == city["topic_reports"]
         elif _uses_strict_work_topics(city):
             # В Химках и Красной Поляне не читаем General, штрафы, срочные
             # задачи и остальные темы. Только явно настроенные рабочие темы.
@@ -2823,7 +2829,7 @@ class CityTopicFilter(BaseFilter):
                     city.get("topic_npb"),
                 ) if topic_id is not None and topic_id != NO_TOPIC
             }
-            matches = thread_id in allowed_topics
+            matches = route_thread_id in allowed_topics
         else:
             # Сохраняем рабочий контрак бота: слушать все темы группы
             # обычного города, кроме «ОТЧЁТОВ». Краснодар работает как раньше.

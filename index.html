@@ -384,7 +384,7 @@
             <div class="sub" id="earnSub"></div>
           </div>
 
-          <!-- 6 счётчиков; в режиме редактирования появляются кнопки −/+ -->
+          <!-- Счётчики; «Оклейка» показывается только для смены в Химках. -->
           <div class="grid" id="countersGrid">
             <div class="tile">
               <div class="n" id="cMove">0</div><div class="t">Перемещения</div>
@@ -401,6 +401,10 @@
             <div class="tile o">
               <div class="n" id="cRep">0</div><div class="t">Ремонт</div>
               <div class="editctl"><button class="minus" data-act="repair">−</button><button class="plus" data-act="repair">+</button></div>
+            </div>
+            <div class="tile hidden" id="stickerTile">
+              <div class="n" id="cSticker">0</div><div class="t">Оклейка</div>
+              <div class="editctl"><button class="minus" data-act="sticker">−</button><button class="plus" data-act="sticker">+</button></div>
             </div>
             <div class="tile">
               <div class="n" id="cToSc">0</div><div class="t">Привёз на СЦ</div>
@@ -905,6 +909,9 @@ function render(){
     $('cFix').textContent  = s.fix || 0;
     $('cBat').textContent  = s.battery || 0;
     $('cRep').textContent  = s.repair || 0;
+    $('cSticker').textContent = s.sticker || 0;
+    const shiftCityName=(STATE.shift.city&&STATE.shift.city.name)||STATE.city.name||'';
+    $('stickerTile').classList.toggle('hidden', shiftCityName!=='Химки');
     $('cToSc').textContent = s.to_sc || 0;
     $('cFromSc').textContent = s.from_sc || 0;
     // Режим редактирования: показать/скрыть кнопки −/+ и обновить их доступность
@@ -1155,11 +1162,11 @@ $('btnStop').onclick = async ()=>{
 // Подписи и id ячеек по типу действия
 const COUNTER_LABELS = {
   move:'Перемещения', fix:'Поправки', repair:'Ремонт',
-  battery:'Замены АКБ', to_sc:'Привёз на СЦ', from_sc:'Вывез с СЦ'
+  battery:'Замены АКБ', sticker:'Оклейка', to_sc:'Привёз на СЦ', from_sc:'Вывез с СЦ'
 };
 const COUNTER_ELS = {
   move:'cMove', fix:'cFix', repair:'cRep',
-  battery:'cBat', to_sc:'cToSc', from_sc:'cFromSc'
+  battery:'cBat', sticker:'cSticker', to_sc:'cToSc', from_sc:'cFromSc'
 };
 
 // Нативное подтверждение Telegram (с откатом на обычный confirm вне Telegram)
@@ -1493,7 +1500,8 @@ function renderAdminShift(item){
     <span>Перемещения ${Number(s.move)||0}</span>
     <span>АКБ ${Number(s.battery)||0}</span>
     <span>Ремонт ${Number(s.repair)||0}</span>
-    <span>Поправки ${Number(s.fix)||0}</span></div>`;
+    <span>Поправки ${Number(s.fix)||0}</span>
+    ${Number(s.sticker)>0?`<span>Оклейка ${Number(s.sticker)}</span>`:''}</div>`;
   const lunch = item.on_lunch ? '<div class="admin-lunch">🍽 Сейчас на обеде</div>' : '';
   const closeBtn = st!=='closed'
     ? `<div class="admin-actions"><button class="mini admin-force-close" data-sid="${Number(item.shift_id)}">Закрыть смену</button></div>`
@@ -1510,7 +1518,7 @@ function renderAdminEmployee(item){
     <div class="meta">${status} · завершённых смен ${Number(item.closed_shifts)||0}</div></div>`;
 }
 function renderAdminHistoryItems(items){
-  const actionNames={move:'перемещено',fix:'поправлено',repair:'ремонт',battery:'АКБ',to_sc:'на СЦ',from_sc:'из СЦ'};
+  const actionNames={move:'перемещено',fix:'поправлено',repair:'ремонт',battery:'АКБ',sticker:'оклейка',to_sc:'на СЦ',from_sc:'из СЦ'};
   return items.map(item=>{
     const source=adminSourceLabel(item.source);
     const actions=Object.entries(item.actions||{}).filter(([,count])=>Number(count)>0)

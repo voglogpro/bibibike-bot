@@ -108,6 +108,8 @@ POLYANA_TOPIC_REPORTS   = 3127             # тема отчётов
 KHIMKI_SCOUTS_GROUP_ID       = -1003951407451
 KHIMKI_SCOUTS_TOPIC_MOVES    = 2            # «Перемещения»: 4-значные номера = перемещения
 KHIMKI_SCOUTS_TOPIC_REPORTS  = 3            # «Отчёты»: начало и конец смены
+KHIMKI_SCOUTS_TOPIC_REPAIR   = 4485         # «Ремонт»: только голые 4-значные номера
+KHIMKI_SCOUTS_TOPIC_STICKER  = 2290         # «Оклейка»: номер + слово об оклейке
 
 # Водители Химки (t.me/c/4375614106)
 KHIMKI_DRIVERS_GROUP_ID      = -1004375614106
@@ -116,10 +118,13 @@ KHIMKI_DRIVERS_TOPIC_REPORTS = 2            # «Отчёты»: начало и 
 KHIMKI_DRIVERS_TOPIC_REPAIR  = 365          # «Ремонт»: обычный парсер по словам
 
 # Дополнительные рабочие темы, которые бот слушает сверх основных.
-# Разбираются ОБЫЧНЫМ парсером по словам («ремонт», «поправил», «переместил»),
-# голые номера здесь не считаются — нужно писать слово.
+# Тип парсера каждой темы выбирается отдельными таблицами ниже.
 # Формат: {chat_id группы: (id темы, ...)}. Добавить тему — одна цифра сюда.
 EXTRA_WORK_TOPICS = {
+    KHIMKI_SCOUTS_GROUP_ID: (
+        KHIMKI_SCOUTS_TOPIC_REPAIR,
+        KHIMKI_SCOUTS_TOPIC_STICKER,
+    ),
     KHIMKI_DRIVERS_GROUP_ID: (KHIMKI_DRIVERS_TOPIC_REPAIR,),
 }
 
@@ -127,6 +132,16 @@ EXTRA_WORK_TOPICS = {
 # Формат: {chat_id группы: (id темы, ...)}.
 REPAIR_TOPICS = {
     KHIMKI_DRIVERS_GROUP_ID: (KHIMKI_DRIVERS_TOPIC_REPAIR,),
+}
+
+# Тема ремонта скаутов: сообщение должно состоять только из 4-значных номеров.
+BARE_REPAIR_TOPICS = {
+    KHIMKI_SCOUTS_GROUP_ID: (KHIMKI_SCOUTS_TOPIC_REPAIR,),
+}
+
+# Тема оклейки скаутов: 4-значный номер + слово об оклейке.
+STICKER_TOPICS = {
+    KHIMKI_SCOUTS_GROUP_ID: (KHIMKI_SCOUTS_TOPIC_STICKER,),
 }
 
 # Чарджеров в Химках нет. Появятся — добавь сюда третий блок и запись
@@ -169,7 +184,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-28 · +перемещения Поляны + строгие количества"
+BUILD_VERSION = "2026-07-31 · ремонт и оклейка скаутов Химок"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1601,8 +1616,9 @@ async def get_stats(sid):
             (sid,)
         )
         rows = await c.fetchall()
-        # === НОВОЕ: добавлен счётчик 'battery' (замены АКБ из темы NPB) ===
-        s = {'move': 0, 'fix': 0, 'repair': 0, 'to_sc': 0, 'from_sc': 0, 'battery': 0}
+        # sticker используется только сменами Химок, остальные города получают 0.
+        s = {'move': 0, 'fix': 0, 'repair': 0, 'to_sc': 0, 'from_sc': 0,
+             'battery': 0, 'sticker': 0}
         for r in rows:
             atype = r['action_type']
             if atype in s:
@@ -2227,6 +2243,53 @@ _REPAIR_TOPIC_HINT = re.compile(
 )
 
 
+def parse_bare_repair_message(text):
+    """Ремонт скаутов Химок: только голые четырёхзначные номера.
+
+    Любое слово или число другой длины делает сообщение неподходящим. Это
+    правило действует исключительно в теме 4485 группы скаутов Химок.
+    """
+    if not isinstance(text, str):
+        return []
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    codes = []
+    for line in lines:
+        line_codes = _codes_only_line(line)
+        if not line_codes:
+            return []
+        for code in line_codes:
+            if code not in codes:
+                codes.append(code)
+    return [{"action_type": "repair", "bike_codes": codes, "quantity": 0}]
+
+
+_STICKER_TOPIC_HINT = re.compile(
+    r"\b(?:оклеил(?:а|и)?|поклеил(?:а|и)?|"
+    r"нан(?:е|ё)с(?:ла|ли)?|наклеил(?:а|и)?)\b",
+    re.IGNORECASE,
+)
+
+
+def parse_sticker_message(text):
+    """Оклейка Химок: слово об оклейке и минимум один 4-значный номер."""
+    if not isinstance(text, str):
+        return []
+    completed = False
+    for match in _STICKER_TOPIC_HINT.finditer(text):
+        prefix = text[max(0, match.start() - 24):match.start()]
+        if not re.search(r"\bне\s*$", prefix, re.IGNORECASE):
+            completed = True
+            break
+    if not completed:
+        return []
+    codes = list(dict.fromkeys(re.findall(r"(?<!\d)(\d{4})(?!\d)", text)))
+    if not codes:
+        return []
+    return [{"action_type": "sticker", "bike_codes": codes, "quantity": 0}]
+
+
 # === НОВОЕ: парсер темы «Перемещения»/«Подвозы» (Химки) ===
 def parse_moves_message(text):
     """Действия разбираются эталонным парсером, голые номера = перемещения.
@@ -2261,6 +2324,12 @@ def topic_parser_kind(city, thread_id):
         return "moves"
     if thread_id == city.get("topic_npb"):
         return "npb"
+    # Скауты Химок: голые номера в теме 4485 = ремонт.
+    if thread_id in BARE_REPAIR_TOPICS.get(city.get("group_id"), ()):
+        return "bare_repair"
+    # Скауты Химок: номер + слово об оклейке в теме 2290 = оклейка.
+    if thread_id in STICKER_TOPICS.get(city.get("group_id"), ()):
+        return "sticker"
     # Тема «Ремонт»: номера столбиком + подпись словом ниже.
     if thread_id in REPAIR_TOPICS.get(city.get("group_id"), ()):
         return "repair"
@@ -2799,6 +2868,9 @@ def build_report_text(shift, stats):
         report += f"🔧 Ремонт: {stats['repair']}\n"; has_any = True
     if stats['battery'] > 0:
         report += f"🔋 Поменял АКБ: {stats['battery']}\n"; has_any = True
+    report_city = get_city(shift.get("city_id")) or {}
+    if _city_key(report_city) == "khimki" and stats.get('sticker', 0) > 0:
+        report += f"🏷 Оклейка: {stats['sticker']}\n"; has_any = True
     if stats['to_sc'] > 0:
         report += f"Привез на СЦ: {stats['to_sc']}\n"; has_any = True
     if stats['from_sc'] > 0:
@@ -3008,7 +3080,8 @@ class CityTopicFilter(BaseFilter):
 
 
 async def process_work_message(message: Message, city, npb=False, edited=False,
-                               moves=False, repair_topic=False):
+                               moves=False, repair_topic=False,
+                               bare_repair_topic=False, sticker_topic=False):
     text = message.text or message.caption or ""
     if not message.from_user or getattr(message.from_user, "is_bot", False):
         return
@@ -3128,7 +3201,11 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
     )
 
     # === НОВОЕ: в теме NPB считаем голые номера как замены АКБ ===
-    if repair_topic:
+    if bare_repair_topic:
+        actions = parse_bare_repair_message(text)  # тема 4485: только голые номера
+    elif sticker_topic:
+        actions = parse_sticker_message(text)      # тема 2290: номер + слово
+    elif repair_topic:
         actions = parse_repair_message(text)  # тема ремонта: номера + подпись
     elif moves:
         actions = parse_moves_message(text)   # тема перемещений: голые номера
@@ -3191,7 +3268,9 @@ async def work_chat(message: Message, city):
     # === НОВОЕ: у каждой темы свой парсер (перемещения / NPB / обычный) ===
     kind = topic_parser_kind(city, message.message_thread_id)
     await process_work_message(message, city, npb=(kind == "npb"),
-                               moves=(kind == "moves"), repair_topic=(kind == "repair"))
+                               moves=(kind == "moves"), repair_topic=(kind == "repair"),
+                               bare_repair_topic=(kind == "bare_repair"),
+                               sticker_topic=(kind == "sticker"))
 
 # ============================================================
 # РЕДАКТИРОВАННЫЕ РАБОЧИЕ СООБЩЕНИЯ  (оригинал + NPB)
@@ -3202,7 +3281,9 @@ async def work_chat_edit(message: Message, city):
     kind = topic_parser_kind(city, message.message_thread_id)
     await process_work_message(message, city, npb=(kind == "npb"),
                                moves=(kind == "moves"),
-                               repair_topic=(kind == "repair"), edited=True)
+                               repair_topic=(kind == "repair"),
+                               bare_repair_topic=(kind == "bare_repair"),
+                               sticker_topic=(kind == "sticker"), edited=True)
 
 # ============================================================
 # ЧАТ 2 — УПРАВЛЕНИЕ СМЕНАМИ И ОТЧЕТАМИ
@@ -3230,7 +3311,9 @@ async def cmd_chat(message: Message, city):
             kind = topic_parser_kind(city, message.message_thread_id)
             await process_work_message(
                 message, city, npb=(kind == "npb"), moves=(kind == "moves"),
-                repair_topic=(kind == "repair")
+                repair_topic=(kind == "repair"),
+                bare_repair_topic=(kind == "bare_repair"),
+                sticker_topic=(kind == "sticker")
             )
         else:
             await capture_manual_report(message, city)
@@ -3429,6 +3512,8 @@ async def cmd_chat_edit(message: Message, city):
                 city,
                 npb=(kind == "npb"),
                 repair_topic=(kind == "repair"),
+                bare_repair_topic=(kind == "bare_repair"),
+                sticker_topic=(kind == "sticker"),
                 moves=(kind == "moves"),
                 edited=True,
             )
@@ -3448,6 +3533,7 @@ XP_WEIGHTS = {
     "repair": 5,
     "battery": 5,
     "fix": 3,
+    "sticker": 3,
 }
 
 # Звание каждые 10 уровней + тир (цвет бейджа в приложении)
@@ -4077,9 +4163,9 @@ async def api_shift_lunch(request):
         "ok": True, "on_lunch": active, "report_updated": report_ok
     })
 
-# === НОВОЕ: изменить любой из 6 счётчиков на ±1 из приложения (режим редактирования) ===
+# === НОВОЕ: изменить счётчики на ±1 из приложения (режим редактирования) ===
 # Разрешённые типы действий, которые можно править из приложения.
-EDITABLE_ACTIONS = ("move", "fix", "repair", "battery", "to_sc", "from_sc")
+EDITABLE_ACTIONS = ("move", "fix", "repair", "battery", "sticker", "to_sc", "from_sc")
 
 async def api_action_add(request):
     tg_user = await _auth_user(request)
@@ -4102,6 +4188,11 @@ async def api_action_add(request):
     atype = body.get("action_type")
     if atype not in EDITABLE_ACTIONS:
         return web.json_response({"error": "action_type"}, status=400)
+    if atype == "sticker" and _city_key(get_city(shift.get("city_id")) or {}) != "khimki":
+        return web.json_response(
+            {"error": "action_type", "message": "Оклейка доступна только в Химках."},
+            status=400,
+        )
 
     # delta: +1 (добавить) или -1 (убрать). По умолчанию +1.
     # Приводим к int строго: bool/float/строку "1" не принимаем как валидные.
@@ -4791,7 +4882,8 @@ async def _admin_shift_payload(shift, city, now, db):
         (shift["id"],),
     )).fetchall()
     # Разбивка действий по типам (без денег — админ видит только работу и время).
-    stats = {"move": 0, "fix": 0, "repair": 0, "battery": 0, "to_sc": 0, "from_sc": 0}
+    stats = {"move": 0, "fix": 0, "repair": 0, "battery": 0, "sticker": 0,
+             "to_sc": 0, "from_sc": 0}
     for row in action_rows:
         t = row["action_type"]
         if t in stats:
@@ -5149,7 +5241,7 @@ async def api_admin_history(request):
 
     stats_by_shift = {
         shift_id: {"move": 0, "fix": 0, "repair": 0, "battery": 0,
-                   "to_sc": 0, "from_sc": 0}
+                   "sticker": 0, "to_sc": 0, "from_sc": 0}
         for shift_id in shift_ids
     }
     for row in action_rows:

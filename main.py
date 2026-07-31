@@ -108,7 +108,7 @@ POLYANA_TOPIC_REPORTS   = 3127             # тема отчётов
 KHIMKI_SCOUTS_GROUP_ID       = -1003951407451
 KHIMKI_SCOUTS_TOPIC_MOVES    = 2            # «Перемещения»: 4-значные номера = перемещения
 KHIMKI_SCOUTS_TOPIC_REPORTS  = 3            # «Отчёты»: начало и конец смены
-KHIMKI_SCOUTS_TOPIC_REPAIR   = 4485         # «Ремонт»: только голые 4-значные номера
+KHIMKI_SCOUTS_TOPIC_REPAIR   = 4485         # «Ремонт»: 4-значные номера с любым текстом
 KHIMKI_SCOUTS_TOPIC_STICKER  = 2290         # «Оклейка»: номер + слово об оклейке
 
 # Водители Химки (t.me/c/4375614106)
@@ -134,7 +134,7 @@ REPAIR_TOPICS = {
     KHIMKI_DRIVERS_GROUP_ID: (KHIMKI_DRIVERS_TOPIC_REPAIR,),
 }
 
-# Тема ремонта скаутов: сообщение должно состоять только из 4-значных номеров.
+# Тема ремонта скаутов: берём все 4-значные номера, текст описания не мешает.
 BARE_REPAIR_TOPICS = {
     KHIMKI_SCOUTS_GROUP_ID: (KHIMKI_SCOUTS_TOPIC_REPAIR,),
 }
@@ -184,7 +184,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-31 · ремонт и оклейка скаутов Химок"
+BUILD_VERSION = "2026-07-31 · свободный ремонт + слово Оклейка в Химках"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -2244,29 +2244,21 @@ _REPAIR_TOPIC_HINT = re.compile(
 
 
 def parse_bare_repair_message(text):
-    """Ремонт скаутов Химок: только голые четырёхзначные номера.
+    """Ремонт скаутов Химок: все четырёхзначные номера сообщения.
 
-    Любое слово или число другой длины делает сообщение неподходящим. Это
-    правило действует исключительно в теме 4485 группы скаутов Химок.
+    Описание неисправности, фото с подписью и остальные числа не мешают.
+    Правило действует исключительно в теме 4485 группы скаутов Химок.
     """
     if not isinstance(text, str):
         return []
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
+    codes = list(dict.fromkeys(re.findall(r"(?<!\d)(\d{4})(?!\d)", text)))
+    if not codes:
         return []
-    codes = []
-    for line in lines:
-        line_codes = _codes_only_line(line)
-        if not line_codes:
-            return []
-        for code in line_codes:
-            if code not in codes:
-                codes.append(code)
     return [{"action_type": "repair", "bike_codes": codes, "quantity": 0}]
 
 
 _STICKER_TOPIC_HINT = re.compile(
-    r"\b(?:оклеил(?:а|и)?|поклеил(?:а|и)?|"
+    r"\b(?:оклейк\w*|оклеил(?:а|и)?|поклеил(?:а|и)?|"
     r"нан(?:е|ё)с(?:ла|ли)?|наклеил(?:а|и)?)\b",
     re.IGNORECASE,
 )
@@ -2324,7 +2316,7 @@ def topic_parser_kind(city, thread_id):
         return "moves"
     if thread_id == city.get("topic_npb"):
         return "npb"
-    # Скауты Химок: голые номера в теме 4485 = ремонт.
+    # Скауты Химок: любые 4-значные номера в теме 4485 = ремонт.
     if thread_id in BARE_REPAIR_TOPICS.get(city.get("group_id"), ()):
         return "bare_repair"
     # Скауты Химок: номер + слово об оклейке в теме 2290 = оклейка.
@@ -3202,7 +3194,7 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
 
     # === НОВОЕ: в теме NPB считаем голые номера как замены АКБ ===
     if bare_repair_topic:
-        actions = parse_bare_repair_message(text)  # тема 4485: только голые номера
+        actions = parse_bare_repair_message(text)  # тема 4485: номера с любым описанием
     elif sticker_topic:
         actions = parse_sticker_message(text)      # тема 2290: номер + слово
     elif repair_topic:

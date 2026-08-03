@@ -77,8 +77,6 @@ crm.html                        CRM руководителя
 requirements.txt                зависимости Python
 tests/regression_check.py        регрессия парсера и Telegram-маршрутизации
 tests/crm_backend_check.py       интеграционные проверки CRM и прав доступа
-tests/check_crm.mjs              проверка HTML/JavaScript CRM
-tests/check_employee_tasks.mjs   проверка заданий в приложении сотрудника
 ```
 
 `main.py` остаётся одним запускаемым файлом, но разбит на размеченные разделы. Быстрая навигация через `Ctrl+F`:
@@ -194,8 +192,6 @@ python main.py
 python -m py_compile main.py
 python tests\regression_check.py
 python tests\crm_backend_check.py
-node tests\check_crm.mjs
-node tests\check_employee_tasks.mjs
 git diff --check
 ```
 

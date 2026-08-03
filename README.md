@@ -75,8 +75,6 @@ main.py                         бот, база данных, парсер и H
 index.html                      Mini App сотрудника
 crm.html                        CRM руководителя
 requirements.txt                зависимости Python
-CRM-PRE-RELEASE.md              инструкция по проверке релиза
-CRM-FINAL-DESIGN-PLAN.md         продуктовая и UX-спецификация CRM
 tests/regression_check.py        регрессия парсера и Telegram-маршрутизации
 tests/crm_backend_check.py       интеграционные проверки CRM и прав доступа
 tests/check_crm.mjs              проверка HTML/JavaScript CRM

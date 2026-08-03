@@ -631,15 +631,15 @@
             <span class="chev">›</span>
           </button>
           <button class="more-item" id="btnAdminOpen">
-            <span class="ic">🛡️</span>
-            <span class="tx"><b>Админка</b><i>Смены, КПД и история по твоему городу</i></span>
+            <span class="ic">📊</span>
+            <span class="tx"><b>CRM руководителя</b><i>Анализ, календарь, задания и команда</i></span>
             <span class="chev">›</span>
           </button>
         </div>
         <div class="admin-login hidden" id="adminLogin">
           <div class="err" id="adminErr"></div>
           <input class="tinput" id="adminPassword" type="password" autocomplete="current-password" placeholder="Пароль админки">
-          <button class="save" id="adminLoginBtn" style="margin-top:9px">Войти</button>
+          <button class="save" id="adminLoginBtn" style="margin-top:9px">Открыть CRM</button>
         </div>
         <p class="hint" style="margin-top:16px">Скоро добавим ещё:</p>
         <div class="soon">
@@ -1440,10 +1440,9 @@ function closeAdmin(){
 }
 
 $('btnAdminOpen').onclick = ()=>{
-  if(adminToken){                       /* сессия жива — сразу в меню */
-    if(adminCityCache) $('adminCityName').textContent = adminCityCache;
-    showAdminScreen('adminMenu');
-    loadAdmin(true);
+  if(adminToken){
+    localStorage.setItem('bb_crm_admin_token', adminToken);
+    window.location.href='/crm.html';
     return;
   }
   $('adminErr').classList.remove('show');
@@ -1469,13 +1468,13 @@ $('adminLoginBtn').onclick = async ()=>{
     $('adminPassword').value = '';
     $('adminLogin').classList.add('hidden');
     $('adminCityName').textContent = (result.city && result.city.name) || '—';
-    showAdminScreen('adminMenu');
-    await loadAdmin();
+    localStorage.setItem('bb_crm_admin_token', adminToken);
+    window.location.href='/crm.html';
   }catch(e){
     $('adminPassword').value = '';
     showErr('adminErr', e.message || 'Не удалось войти.');
   }finally{
-    btn.disabled=false; btn.textContent='Войти';
+    btn.disabled=false; btn.textContent='Открыть CRM';
   }
 };
 

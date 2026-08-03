@@ -7,8 +7,9 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from urllib.parse import urlencode
 
 
@@ -186,6 +187,102 @@ async def run():
         )).fetchone())[0]
     assert frozen == len(assignee_ids)
 
+    # Период, несколько адресатов и обратная совместимость work_date.
+    range_from = (datetime.fromisoformat(today) + timedelta(days=10)).date()
+    range_to = range_from + timedelta(days=2)
+    range_task_response = await bot.api_crm_task_create(Request(
+        900002, body={"city_id": city["id"], "date_from": range_from.isoformat(),
+                      "date_to": range_to.isoformat(), "title": "Задание на период",
+                      "district": "Центр", "completion_mode": "manual",
+                      "target_user_ids": [910001, 910003], "publish": True},
+        admin_token=scout_token,
+    ))
+    assert range_task_response.status == 201
+    range_task = payload(range_task_response)["task"]
+    assert range_task["date_from"] == range_from.isoformat()
+    assert {item["user_id"] for item in range_task["assignees"]} == {910001, 910003}
+    middle_mine = await bot.api_employee_tasks_mine(Request(
+        910003, query={"from": (range_from + timedelta(days=1)).isoformat(),
+                       "to": (range_from + timedelta(days=1)).isoformat()}
+    ))
+    assert any(item["task_id"] == range_task["task_id"] for item in payload(middle_mine)["items"])
+    incompatible = await bot.api_crm_task_create(Request(
+        900002, body={"city_id": city["id"], "work_date": today, "title": "Нельзя",
+                      "target_type": "user", "target_user_id": 910001,
+                      "completion_mode": "shift_end", "requires_photo": True},
+        admin_token=scout_token,
+    ))
+    assert incompatible.status == 400
+
+    # Пакет 2/1: дата начала — первый рабочий день, повтор ключа ничего не создаёт.
+    batch_from = range_to + timedelta(days=10); batch_to = batch_from + timedelta(days=5)
+    batch_body = {"city_id": city["id"], "user_ids": [910001, 910003],
+                  "date_from": batch_from.isoformat(), "date_to": batch_to.isoformat(),
+                  "work_days": 2, "rest_days": 1, "start_time": "08:00", "end_time": "16:00",
+                  "district": "Север", "idempotency_key": "crm-test-batch-2-1"}
+    batch = await bot.api_crm_planned_shifts_batch(Request(
+        900002, body=batch_body, admin_token=scout_token,
+    ))
+    assert batch.status == 201 and payload(batch)["created"] == 8
+    batch_replay = await bot.api_crm_planned_shifts_batch(Request(
+        900002, body=batch_body, admin_token=scout_token,
+    ))
+    assert batch_replay.status == 200 and payload(batch_replay)["idempotent_replay"] is True
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        batch_plan_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_planned_shifts WHERE batch_id=?", (payload(batch)["batch_id"],)
+        )).fetchone())[0]
+        batch_notice_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_notification_outbox WHERE kind='plan_batch' AND entity_id=?",
+            (payload(batch)["batch_id"],)
+        )).fetchone())[0]
+    assert batch_plan_count == 8 and batch_notice_count == 2
+
+    # Фото задания доставляется через outbox; повторная публикация не создаёт дубль.
+    photo_task_response = await bot.api_crm_task_create(Request(
+        900002, body={"city_id": city["id"], "work_date": today, "title": "Задание с фото",
+                      "target_type": "user", "target_user_id": 910001}, admin_token=scout_token,
+    ))
+    photo_task_id = payload(photo_task_response)["task"]["task_id"]
+    brief = await bot.api_crm_task_upload(Request(
+        900002, match={"task_id": str(photo_task_id)}, admin_token=scout_token,
+        files=[("brief.jpg", b"\xff\xd8\xffbrief")],
+    ))
+    assert brief.status == 201
+    published_photo_task = await bot.api_crm_task_publish(Request(
+        900002, match={"task_id": str(photo_task_id)}, admin_token=scout_token,
+    ))
+    republished_photo_task = await bot.api_crm_task_publish(Request(
+        900002, match={"task_id": str(photo_task_id)}, admin_token=scout_token,
+    ))
+    assert published_photo_task.status == 200 and payload(republished_photo_task)["already_published"]
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        photo_outbox_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_notification_outbox WHERE kind='task_assigned' AND entity_id=?",
+            (photo_task_id,),
+        )).fetchone())[0]
+    assert photo_outbox_count == 1
+    notification_text = bot._crm_notification_text("task_assigned", {
+        "title": "Задание с фото", "date_from": today, "date_to": today,
+        "district": "Центр", "description": "Стянуть байки по отмеченной карте",
+    })
+    assert "Центр" in notification_text and "Стянуть байки" in notification_text
+    send_message = AsyncMock(); send_photo = AsyncMock()
+    with patch.object(bot.bot, "send_message", send_message), patch.object(bot.bot, "send_photo", send_photo):
+        delivered = await bot.deliver_crm_notifications_once(limit=100)
+    assert delivered > 0 and send_photo.await_count >= 1
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "UPDATE crm_notification_outbox SET status='retry',next_attempt_at=? "
+            "WHERE kind='task_assigned' AND entity_id=?",
+            (datetime.now(timezone.utc).isoformat(), photo_task_id),
+        )
+        await db.commit()
+    fallback_message = AsyncMock(); failed_photo = AsyncMock(side_effect=RuntimeError("photo failure"))
+    with patch.object(bot.bot, "send_message", fallback_message), patch.object(bot.bot, "send_photo", failed_photo):
+        fallback_delivered = await bot.deliver_crm_notifications_once(limit=100)
+    assert fallback_delivered == 1 and fallback_message.await_count == 1
+
     # Строгие переходы и обязательное result photo.
     started = await bot.api_employee_task_progress(Request(
         910001, body={"status": "in_progress"}, match={"task_id": str(task_id)}
@@ -254,6 +351,39 @@ async def run():
     assert driver_started.status == 200 and driver_submitted.status == 200
     assert return_without_reason.status == 400 and returned.status == 200
 
+    # shift_end автоматически и ровно один раз закрывает подходящее задание.
+    auto_task_response = await bot.api_crm_task_create(Request(
+        900002, body={"city_id": city["id"], "work_date": today, "title": "Авто по смене",
+                      "district": "Автозона", "completion_mode": "shift_end",
+                      "target_type": "user", "target_user_id": 910003, "publish": True},
+        admin_token=scout_token,
+    ))
+    auto_task_id = payload(auto_task_response)["task"]["task_id"]
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,district,is_active,created_at,"
+            "city_id,start_at,end_at,source) VALUES (?,?,?,?,?,?,0,?,?,?,?, 'bot')",
+            (910003, "Новый скаут", "Скаут", "09:00", "17:00", "  АВТОЗОНА ",
+             start_at, city["id"], start_at, end_at),
+        )
+        auto_shift_id = cur.lastrowid
+        await db.commit()
+    await bot.sync_closed_shift_tasks_once(limit=100)
+    await bot.sync_closed_shift_tasks_once(limit=100)
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        auto_status = (await (await db.execute(
+            "SELECT status FROM crm_task_assignees WHERE task_id=? AND user_id=910003",
+            (auto_task_id,),
+        )).fetchone())[0]
+        auto_events = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_task_events WHERE task_id=? AND event_type='auto_completed.shift_end'",
+            (auto_task_id,),
+        )).fetchone())[0]
+        sync_rows = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_shift_task_sync WHERE shift_id=?", (auto_shift_id,)
+        )).fetchone())[0]
+    assert auto_status == "accepted" and auto_events == 1 and sync_rows == 1
+
     # Фото: проверка типов и orphan cleanup без публичной раздачи.
     assert bot._crm_image_type(b"\xff\xd8\xffrest")[0] == "image/jpeg"
     assert bot._crm_image_type(b"not-image")[0] is None
@@ -264,14 +394,14 @@ async def run():
     await bot.cleanup_crm_uploads()
     assert not orphan.exists()
 
-    # CRM не изменила существующие смены/действия; добавился только fixture user.
+    # CRM не изменила существующие действия; добавилась только тестовая закрытая смена.
     final_counts = await counts()
-    assert final_counts[1:] == base_counts[1:]
+    assert final_counts[1] == base_counts[1] + 1 and final_counts[2] == base_counts[2]
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         audit_count = (await (await db.execute("SELECT COUNT(*) FROM admin_audit_log")).fetchone())[0]
         event_count = (await (await db.execute("SELECT COUNT(*) FROM crm_task_events")).fetchone())[0]
     assert audit_count >= 3 and event_count >= 4
-    print("PASS CRM: RBAC, role scope, analytics, calendar, task snapshot/review, audit, storage")
+    print("PASS CRM: RBAC, outbox, batch planning, ranges, shift sync, audit, storage")
 
 
 try:

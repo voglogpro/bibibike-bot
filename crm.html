@@ -32,7 +32,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 .nav{display:grid;gap:6px}.nav-btn{width:100%;border:0;background:transparent;color:#a8b9ad;border-radius:12px;padding:11px 12px;display:flex;align-items:center;gap:11px;text-align:left;font-weight:750}.nav-btn:hover{background:#102d1b;color:#fff}.nav-btn.active{background:#173a24;color:#fff;box-shadow:inset 3px 0 var(--green)}
 .side-profile{margin-top:auto;border-top:1px solid #1b3825;padding:15px 8px 0}.side-profile b{font-size:12px}.side-profile span{display:block;color:#91a797;font-size:10px;margin-top:3px}.side-actions{display:flex;gap:6px;margin-top:10px}.side-actions .btn{min-height:36px;padding:7px 9px;color:#c6d4ca;border-color:#294634;background:transparent;font-size:11px}
 .workspace{min-width:0;padding:20px 24px 48px}.topbar{display:flex;align-items:center;gap:14px;justify-content:space-between;margin-bottom:20px}.top-title{min-width:0}.top-title h1{font-size:25px;line-height:1.1;margin:0}.top-title p{font-size:12px;color:var(--muted);margin:5px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-tools{display:flex;gap:9px;align-items:center}.scope-select{border:1px solid var(--line);background:#fff;border-radius:12px;min-height:42px;padding:9px 34px 9px 12px;font-weight:750;max-width:210px}.updated{font-size:11px;color:var(--muted);white-space:nowrap}.icon-btn{width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:#fff;display:grid;place-items:center}.mobile-more{display:none}
-.content{max-width:1480px;margin:0 auto}.page{display:none}.page.active{display:block}.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}.page-head h2{margin:0;font-size:19px}.page-head p{margin:4px 0 0;font-size:12px;color:var(--muted)}
+.content{width:100%;max-width:1600px;margin:0 auto}.page{display:none}.page.active{display:block}.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}.page-head h2{margin:0;font-size:19px}.page-head p{margin:4px 0 0;font-size:12px;color:var(--muted)}
 .grid{display:grid;gap:14px}.kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:14px}.kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:15px;box-shadow:var(--shadow);min-width:0}.kpi-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:800}.kpi-value{font-size:27px;font-weight:900;margin:10px 0 4px;font-variant-numeric:tabular-nums}.kpi-sub{font-size:11px;color:var(--muted);line-height:1.35}.kpi.action{cursor:pointer}.kpi.alert{border-color:#efc6c9}.kpi.alert .kpi-value{color:var(--red)}
 .two-col{grid-template-columns:minmax(0,1.55fr) minmax(300px,.8fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:17px;box-shadow:var(--shadow);min-width:0}.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.card-head h3{font-size:15px;margin:0}.card-head p{font-size:11px;color:var(--muted);margin:4px 0 0}.text-btn{border:0;background:transparent;color:var(--green-700);font-size:12px;font-weight:800;padding:3px}
 .role-list,.stack{display:grid;gap:9px}.role-row{display:grid;grid-template-columns:minmax(90px,1fr) auto;gap:10px;padding:10px 0;border-bottom:1px solid #edf0eb}.role-row:last-child{border-bottom:0}.role-row b{font-size:12px}.role-row span{display:block;font-size:11px;color:var(--muted);margin-top:2px}.role-numbers{text-align:right}.role-numbers strong{font-size:13px;display:block}
@@ -49,13 +49,14 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 .loading-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.loading-grid .skeleton{height:110px}.stale{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--amber-50);border:1px solid #f0d79c;color:#805400;border-radius:13px;padding:10px 12px;font-size:11px;margin-bottom:12px}
 .mobile-nav{display:none}.sheet-backdrop,.modal-backdrop{position:fixed;inset:0;background:rgba(5,20,11,.45);z-index:80;display:none}.sheet-backdrop.open,.modal-backdrop.open{display:block}.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg);border-radius:24px 24px 0 0;max-height:88dvh;overflow:auto;padding:18px 14px calc(18px + env(safe-area-inset-bottom));box-shadow:0 -20px 60px rgba(0,0,0,.2)}.sheet-grab{width:40px;height:4px;background:#ccd4cc;border-radius:99px;margin:-7px auto 15px}.sheet h2{font-size:19px;margin:0 0 14px}.more-menu{display:grid;gap:8px}.more-item{border:1px solid var(--line);background:#fff;border-radius:14px;padding:13px;display:flex;align-items:center;gap:11px;text-align:left;font-weight:800}.more-item .icon{color:var(--green-700)}
 .modal-backdrop{place-items:center;padding:20px}.modal-backdrop.open{display:grid}.modal{width:min(620px,100%);max-height:92dvh;overflow:auto;background:var(--bg);border-radius:22px;padding:18px;box-shadow:0 30px 90px rgba(0,0,0,.28)}.modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:15px}.modal-head h2{font-size:19px;margin:0}.modal-close{width:38px;height:38px;border:0;border-radius:11px;background:#e8ede6;font-size:22px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .wide{grid-column:1/-1}.form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.form-hint{font-size:10px;color:var(--muted);line-height:1.4}.seg{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;background:#e8ede5;border-radius:12px;padding:4px}.seg button{border:0;background:transparent;border-radius:9px;padding:9px;font-size:11px;font-weight:800}.seg button.active{background:#fff;box-shadow:0 2px 7px rgba(0,0,0,.07)}
+.modal.modal-wide{width:min(760px,100%)}.editor-tabs{display:flex;gap:6px;margin:-4px 0 14px}.editor-tabs .chip{flex:1}.pattern-chips{display:flex;gap:7px;flex-wrap:wrap}.date-preview{display:flex;gap:6px;flex-wrap:wrap;max-height:94px;overflow:auto;padding:9px;border:1px dashed var(--line);border-radius:12px;background:#fbfcf9}.date-preview span{padding:5px 7px;border-radius:8px;background:var(--green-50);color:var(--green-700);font-size:10px;font-weight:800}.analysis-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(280px,.75fr);gap:14px}.metric-bars{display:grid;gap:10px}.metric-bar{display:grid;grid-template-columns:110px minmax(80px,1fr) 52px;align-items:center;gap:9px;font-size:11px}.metric-bar span{color:var(--muted)}.metric-bar b{text-align:right}.trend-chart{height:180px;display:flex;align-items:flex-end;gap:6px;border-bottom:1px solid var(--line);padding:10px 2px 0}.trend-col{flex:1;min-width:7px;height:100%;display:flex;align-items:flex-end;position:relative}.trend-col i{display:block;width:100%;min-height:3px;border-radius:7px 7px 2px 2px;background:linear-gradient(180deg,var(--green),#159229)}.trend-col span{position:absolute;left:50%;transform:translateX(-50%);bottom:-18px;font-size:8px;color:var(--muted)}.trend-wrap{padding-bottom:18px}.empty-full{grid-column:1/-1}.quick-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.quick-actions .btn{flex:1}.more-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.more-grid .card{height:100%}.fullscreen-only{display:grid}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--deep);color:#fff;border-radius:12px;padding:11px 15px;font-size:12px;font-weight:750;opacity:0;pointer-events:none;transition:.2s;z-index:120;max-width:min(440px,calc(100vw - 24px));box-shadow:0 16px 40px rgba(0,0,0,.3)}.toast.show{opacity:1;transform:translate(-50%,0)}
-@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.two-col,.calendar-shell{grid-template-columns:1fr}.day-panel{position:static}.sidebar{padding-left:10px;padding-right:10px}.app{--sidebar:82px}.brand{padding-left:7px}.brand-text,.nav-label,.side-profile{display:none}.nav-btn{justify-content:center}.nav-btn.active{box-shadow:inset 0 3px var(--green)}}
+@media(max-width:1199px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.two-col,.calendar-shell,.analysis-grid{grid-template-columns:1fr}.day-panel{position:static}.sidebar{padding-left:10px;padding-right:10px}.app{--sidebar:82px}.brand{padding-left:7px}.brand-text,.nav-label,.side-profile{display:none}.nav-btn{justify-content:center}.nav-btn.active{box-shadow:inset 0 3px var(--green)}}
 @media(max-width:720px){
   .app{display:block}.sidebar{display:none}.workspace{padding:14px 12px calc(var(--bottom) + 22px + env(safe-area-inset-bottom))}.topbar{position:sticky;top:0;z-index:25;background:rgba(243,245,239,.94);backdrop-filter:blur(12px);margin:-14px -12px 14px;padding:12px}.top-title h1{font-size:20px}.top-title p{display:none}.updated,.scope-select{display:none}.mobile-more{display:grid}.content{width:100%}
   .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));left:0;right:0;bottom:0;z-index:45;background:rgba(7,27,16,.97);padding:7px 5px calc(7px + env(safe-area-inset-bottom));min-height:var(--bottom)}.mobile-nav .nav-btn{display:grid;justify-items:center;gap:3px;padding:6px 1px;border-radius:11px;font-size:9px;text-align:center;color:#9fb1a4}.mobile-nav .nav-btn.active{color:#fff;background:#173a24;box-shadow:inset 0 3px var(--green)}.mobile-nav .icon{width:19px;height:19px}
-  .page-head{align-items:flex-start}.page-head h2{font-size:17px}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.kpi{padding:13px;min-height:104px}.kpi-value{font-size:23px}.two-col{grid-template-columns:1fr}.card{padding:14px}.search{width:100%;min-width:0}.toolbar{align-items:stretch}.filters{width:100%;flex-wrap:nowrap;overflow:auto;padding-bottom:3px}.chip{flex:none}.desktop-table{display:none}.mobile-cards{display:grid;gap:8px}.loading-grid{grid-template-columns:repeat(2,1fr)}
-  .calendar-shell{display:block}.calendar-card{box-shadow:none}.calendar-toolbar{padding:12px}.weekdays{padding-left:4px;padding-right:4px}.month-grid{padding:4px;gap:3px}.day-tile{min-height:66px;border-radius:9px;padding:5px;gap:2px}.day-number{width:21px;height:21px;font-size:10px}.day-stat{font-size:8px}.day-stat.detail,.day-alert{display:none}.day-panel{margin-top:10px}.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.modal-backdrop{align-items:end;padding:0}.modal{width:100%;max-height:92dvh;border-radius:24px 24px 0 0;padding:17px 14px calc(17px + env(safe-area-inset-bottom))}.form-actions{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding-top:12px}.form-actions .btn{flex:1}.toast{bottom:calc(var(--bottom) + 18px + env(safe-area-inset-bottom))}
+  .page-head{align-items:flex-start}.page-head h2{font-size:17px}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.kpi{padding:13px;min-height:104px}.kpi-value{font-size:23px}.two-col{grid-template-columns:1fr}.card{padding:14px}.search{width:100%;min-width:0}.toolbar{align-items:stretch}.filters{width:100%;flex-wrap:nowrap;overflow:auto;padding-bottom:3px}.chip{flex:none}.desktop-table{display:none}.mobile-cards{display:grid;gap:8px}.loading-grid{grid-template-columns:repeat(2,1fr)}.more-grid{grid-template-columns:1fr}.fullscreen-only{display:none}
+  .calendar-shell{display:block}.calendar-card{box-shadow:none}.calendar-toolbar{padding:12px}.weekdays{padding-left:4px;padding-right:4px}.month-grid{padding:4px;gap:3px}.day-tile{min-height:66px;border-radius:9px;padding:5px;gap:2px}.day-number{width:21px;height:21px;font-size:10px}.day-stat{font-size:8px}.day-stat.detail,.day-alert{display:none}.day-panel{margin-top:10px}.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.modal-backdrop{align-items:end;padding:0}.modal{width:100%;max-height:96dvh;border-radius:24px 24px 0 0;padding:17px 14px calc(17px + env(safe-area-inset-bottom))}.form-actions{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding-top:12px}.form-actions .btn{flex:1}.toast{bottom:calc(var(--bottom) + 18px + env(safe-area-inset-bottom))}.metric-bar{grid-template-columns:92px minmax(70px,1fr) 44px}.quick-actions{display:grid;grid-template-columns:1fr}.editor-tabs{position:sticky;top:0;background:var(--bg);z-index:2;padding-top:2px}
 }
 @media(max-width:370px){.workspace{padding-left:9px;padding-right:9px}.topbar{margin-left:-9px;margin-right:-9px}.kpi-grid{gap:7px}.kpi{padding:11px}.kpi-label{font-size:9px}.kpi-value{font-size:21px}.card{padding:12px}.mobile-nav .nav-btn{font-size:8px}.day-tile{min-height:60px}.day-stat{font-size:7px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
@@ -76,6 +77,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
   <symbol id="i-empty" viewBox="0 0 24 24"><path d="M4 7h16v13H4zM8 4h8M8 12h8"/></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 15v5h14v-5"/></symbol>
+  <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5m13 5h5v-5"/></symbol>
 </defs></svg>
 
 <div id="bootScreen" class="screen-center"><div class="boot-copy"><div class="spinner"></div><p>Проверяем доступ…</p></div></div>
@@ -95,11 +97,10 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
   <aside class="sidebar">
     <div class="brand"><div class="brand-mark">bb.</div><div class="brand-text"><b>BibiBike CRM</b><span>Управление операциями</span></div></div>
     <nav class="nav" aria-label="Разделы CRM">
-      <button type="button" class="nav-btn active" data-route="today"><svg class="icon"><use href="#i-today"/></svg><span class="nav-label">Сегодня</span></button>
+      <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span class="nav-label">Анализ</span></button>
       <button type="button" class="nav-btn" data-route="calendar"><svg class="icon"><use href="#i-calendar"/></svg><span class="nav-label">Календарь</span></button>
       <button type="button" class="nav-btn" data-route="tasks"><svg class="icon"><use href="#i-task"/></svg><span class="nav-label">Задания</span></button>
       <button type="button" class="nav-btn" data-route="team"><svg class="icon"><use href="#i-team"/></svg><span class="nav-label">Команда</span></button>
-      <button type="button" class="nav-btn" data-route="control"><svg class="icon"><use href="#i-control"/></svg><span class="nav-label">Контроль</span></button>
       <button type="button" class="nav-btn" data-route="more"><svg class="icon"><use href="#i-more"/></svg><span class="nav-label">Ещё</span></button>
     </nav>
     <div class="side-profile"><b id="sideUser">—</b><span id="sideRole">—</span><div class="side-actions"><button type="button" class="btn btn-secondary" id="employeeAppButton">Моя смена</button><button type="button" class="btn btn-secondary" id="logoutButton">Выйти</button></div></div>
@@ -107,66 +108,88 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 
   <main class="workspace">
     <header class="topbar">
-      <div class="top-title"><h1 id="pageTitle">Сегодня</h1><p id="pageSubtitle">Оперативная картина по разрешённой команде</p></div>
+      <div class="top-title"><h1 id="pageTitle">Анализ</h1><p id="pageSubtitle">Смены, действия и качество работы команды</p></div>
       <div class="top-tools">
         <span class="updated" id="updatedAt"></span>
         <select class="scope-select" id="scopeSelect" aria-label="Город"></select>
         <button type="button" class="icon-btn" id="refreshButton" title="Обновить" aria-label="Обновить"><svg class="icon"><use href="#i-refresh"/></svg></button>
+        <button type="button" class="icon-btn fullscreen-only" id="fullscreenButton" title="На весь экран" aria-label="На весь экран"><svg class="icon"><use href="#i-fullscreen"/></svg></button>
         <button type="button" class="icon-btn mobile-more" id="mobileMoreButton" title="Ещё" aria-label="Ещё"><svg class="icon"><use href="#i-more"/></svg></button>
       </div>
     </header>
     <div class="content">
       <div id="staleBanner" class="stale hidden"><span>Показаны сохранённые данные. Соединение с сервером потеряно.</span><button type="button" class="btn btn-secondary" id="staleRetry">Повторить</button></div>
-      <section class="page active" id="page-today" aria-label="Сегодня"><div id="todayRoot"></div></section>
+      <section class="page active" id="page-analysis" aria-label="Анализ"><div id="todayRoot"></div></section>
       <section class="page" id="page-calendar" aria-label="Календарь"><div id="calendarRoot"></div></section>
       <section class="page" id="page-tasks" aria-label="Задания"><div id="tasksRoot"></div></section>
       <section class="page" id="page-team" aria-label="Команда"><div id="teamRoot"></div></section>
-      <section class="page" id="page-control" aria-label="Контроль"><div id="controlRoot"></div></section>
       <section class="page" id="page-more" aria-label="Ещё"><div id="moreRoot"></div></section>
     </div>
   </main>
 
   <nav class="mobile-nav" aria-label="Основная навигация">
-    <button type="button" class="nav-btn active" data-route="today"><svg class="icon"><use href="#i-today"/></svg><span>Сегодня</span></button>
+    <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span>Анализ</span></button>
     <button type="button" class="nav-btn" data-route="calendar"><svg class="icon"><use href="#i-calendar"/></svg><span>Календарь</span></button>
     <button type="button" class="nav-btn" data-route="tasks"><svg class="icon"><use href="#i-task"/></svg><span>Задания</span></button>
     <button type="button" class="nav-btn" data-route="team"><svg class="icon"><use href="#i-team"/></svg><span>Команда</span></button>
-    <button type="button" class="nav-btn" data-route="control"><svg class="icon"><use href="#i-control"/></svg><span>Контроль</span></button>
+    <button type="button" class="nav-btn" data-route="more"><svg class="icon"><use href="#i-more"/></svg><span>Ещё</span></button>
   </nav>
 </div>
 
 <div class="sheet-backdrop" id="moreSheet"><div class="sheet"><div class="sheet-grab"></div><h2>Ещё</h2><div class="more-menu"><button type="button" class="more-item" data-route="more"><svg class="icon"><use href="#i-report"/></svg>Аналитика и отчёты</button><button type="button" class="more-item" id="mobileEmployeeApp"><svg class="icon"><use href="#i-today"/></svg>Вернуться к моей смене</button><button type="button" class="more-item" id="mobileLogout"><svg class="icon"><use href="#i-close"/></svg>Выйти</button></div></div></div>
 
-<div class="modal-backdrop" id="planModal"><form class="modal" id="planForm"><div class="modal-head"><h2>Запланировать смену</h2><button class="modal-close" type="button" data-close="planModal" aria-label="Закрыть">×</button></div><div id="planError" class="form-error hidden"></div><div class="form-grid">
-  <div class="field wide"><label for="planEmployee">Сотрудник</label><select class="select" id="planEmployee" required></select><div class="form-hint" id="planScopeHint"></div></div>
-  <div class="field"><label for="planDate">Дата</label><input class="input" id="planDate" type="date" required></div>
-  <div class="field"><label>Смена</label><div class="seg" id="planSegment"><button type="button" class="active" data-value="day">Дневная</button><button type="button" data-value="night">Ночная</button></div></div>
-  <div class="field"><label for="planStart">Начало</label><input class="input" id="planStart" type="time" required value="08:00"></div>
-  <div class="field"><label for="planEnd">Окончание</label><input class="input" id="planEnd" type="time" required value="18:00"></div>
-  <div class="field"><label for="planDistrict">Район / зона</label><input class="input" id="planDistrict" type="text" maxlength="120"></div>
-  <div class="field wide"><label for="planNote">Комментарий</label><textarea class="textarea" id="planNote" maxlength="1000"></textarea></div>
-</div><div class="form-actions"><button class="btn btn-secondary" type="button" data-close="planModal">Отмена</button><button class="btn btn-primary" id="planSubmit" type="submit">Запланировать</button></div></form></div>
+<div class="modal-backdrop" id="planModal"><form class="modal modal-wide" id="planForm"><div class="modal-head"><h2>Запланировать смены</h2><button class="modal-close" type="button" data-close="planModal" aria-label="Закрыть">×</button></div><div id="planError" class="form-error hidden"></div>
+  <div class="editor-tabs" id="planMode"><button type="button" class="chip active" data-value="single">Одна смена</button><button type="button" class="chip" data-value="batch">График на период</button></div>
+  <div class="form-grid" id="planSingleFields">
+    <div class="field wide"><label for="planEmployee">Сотрудник</label><select class="select" id="planEmployee"></select><div class="form-hint" id="planScopeHint"></div></div>
+    <div class="field"><label for="planDate">Дата</label><input class="input" id="planDate" type="date"></div>
+    <div class="field"><label>Смена</label><div class="seg" id="planSegment"><button type="button" class="active" data-value="day">Дневная</button><button type="button" data-value="night">Ночная</button></div></div>
+    <div class="field"><label for="planStart">Начало</label><input class="input" id="planStart" type="time" value="08:00"></div>
+    <div class="field"><label for="planEnd">Окончание</label><input class="input" id="planEnd" type="time" value="18:00"></div>
+    <div class="field"><label for="planDistrict">Район / зона</label><input class="input" id="planDistrict" type="text" maxlength="120" list="districtSuggestions"></div>
+    <div class="field wide"><label for="planNote">Комментарий</label><textarea class="textarea" id="planNote" maxlength="1000"></textarea></div>
+  </div>
+  <div class="form-grid hidden" id="planBatchFields">
+    <div class="field wide"><label>Сотрудники</label><div class="assignee-list" id="batchEmployees"></div></div>
+    <div class="field wide"><label>Быстрый выбор декады</label><div class="pattern-chips" id="batchDecadePreset"><button class="chip" type="button" data-decade="1">1–10</button><button class="chip" type="button" data-decade="2">11–20</button><button class="chip" type="button" data-decade="3">21–конец месяца</button></div><div class="form-hint">После выбора начало и окончание можно изменить вручную.</div></div>
+    <div class="field"><label for="batchFrom">С даты</label><input class="input" id="batchFrom" type="date"></div>
+    <div class="field"><label for="batchTo">По дату</label><input class="input" id="batchTo" type="date"></div>
+    <div class="field wide"><label>График работы / отдыха</label><div class="pattern-chips" id="batchPattern"><button class="chip active" type="button" data-work="2" data-rest="1">2 / 1</button><button class="chip" type="button" data-work="2" data-rest="2">2 / 2</button><button class="chip" type="button" data-work="3" data-rest="1">3 / 1</button></div></div>
+    <div class="field"><label for="batchStart">Начало</label><input class="input" id="batchStart" type="time" value="08:00"></div>
+    <div class="field"><label for="batchEnd">Окончание</label><input class="input" id="batchEnd" type="time" value="18:00"></div>
+    <div class="field"><label for="batchDistrict">Район / зона</label><input class="input" id="batchDistrict" maxlength="120" list="districtSuggestions"></div>
+    <div class="field"><label for="batchNote">Комментарий</label><input class="input" id="batchNote" maxlength="1000"></div>
+    <div class="field wide"><label>Предварительный график</label><div class="date-preview" id="batchPreview"><span>Выберите период</span></div></div>
+  </div>
+  <div class="form-actions"><button class="btn btn-secondary" type="button" data-close="planModal">Отмена</button><button class="btn btn-primary" id="planSubmit" type="submit">Запланировать</button></div></form></div>
 
 <div class="modal-backdrop" id="taskModal"><form class="modal" id="taskForm"><div class="modal-head"><h2>Новое задание</h2><button class="modal-close" type="button" data-close="taskModal" aria-label="Закрыть">×</button></div><div id="taskError" class="form-error hidden"></div><div class="form-grid">
   <div class="field wide"><label for="taskTitle">Название</label><input class="input" id="taskTitle" type="text" maxlength="120" required placeholder="Что нужно сделать"></div>
   <div class="field wide"><label for="taskDescription">Описание</label><textarea class="textarea" id="taskDescription" maxlength="4000" placeholder="Подробности, адрес, ожидаемый результат"></textarea></div>
-  <div class="field"><label for="taskDate">Дата</label><input class="input" id="taskDate" type="date" required></div>
+  <div class="field"><label for="taskDateFrom">С даты</label><input class="input" id="taskDateFrom" type="date" required></div>
+  <div class="field"><label for="taskDateTo">По дату</label><input class="input" id="taskDateTo" type="date" required></div>
+  <div class="field"><label for="taskDistrict">Район / зона</label><input class="input" id="taskDistrict" maxlength="120" list="districtSuggestions" placeholder="Необязательно"></div>
   <div class="field"><label for="taskPriority">Приоритет</label><select class="select" id="taskPriority"><option value="normal">Обычный</option><option value="high">Высокий</option><option value="urgent">Срочный</option><option value="low">Низкий</option></select></div>
+  <div class="field wide"><label>Завершение</label><div class="seg" id="taskCompletion"><button type="button" class="active" data-value="manual">Сотрудник отправит</button><button type="button" data-value="shift_end">При закрытии смены</button></div><div class="form-hint">Автозавершение подходит для заданий, которые должны закончиться вместе со сменой.</div></div>
   <div class="field wide"><label>Кому</label><div class="seg" id="taskTargetMode"><button type="button" class="active" data-value="role">Роли</button><button type="button" data-value="users">Сотрудникам</button></div></div>
   <div class="field wide" id="taskRoleField"><label for="taskRole">Роль</label><select class="select" id="taskRole"></select></div>
   <div class="field wide hidden" id="taskUsersField"><label>Исполнители</label><div class="assignee-list" id="taskAssignees"></div></div>
   <div class="wide preview-count" id="assigneePreview">Исполнители ещё не выбраны</div>
   <div class="field wide"><label class="check-row" for="taskRequiresPhoto"><input id="taskRequiresPhoto" type="checkbox"><span>Обязательный фотоотчёт<small>Сотрудник не сможет отправить результат без фотографии</small></span></label></div>
-  <div class="field wide"><label for="taskPhotos">Фото (до 5)</label><input class="input" id="taskPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple><div class="form-hint">Фото загрузятся вместе с заданием. Не закрывайте приложение до завершения.</div><div class="uploads" id="uploadPreview"></div></div>
+  <div class="field wide"><label for="taskPhotos">Фото / карта к заданию (до 5)</label><input class="input" id="taskPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple><div class="form-hint">Это исходные материалы для сотрудника. Фото результата он приложит отдельно.</div><div class="uploads" id="uploadPreview"></div></div>
 </div><div class="form-actions"><button class="btn btn-secondary" type="button" data-close="taskModal">Отмена</button><button class="btn btn-primary" id="taskSubmit" type="submit">Опубликовать</button></div></form></div>
 
 <div class="modal-backdrop" id="detailModal"><div class="modal"><div class="modal-head"><h2 id="detailTitle">Подробнее</h2><button class="modal-close" type="button" data-close="detailModal" aria-label="Закрыть">×</button></div><div id="detailRoot"></div></div></div>
+<datalist id="districtSuggestions"></datalist>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
 "use strict";
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-if(tg){ try{tg.ready();tg.expand();}catch(_){} }
+if(tg){
+  try{tg.ready();tg.expand();}catch(_){}
+  try{ if(tg.requestFullscreen) tg.requestFullscreen(); }catch(_){}
+}
 const initData = tg ? tg.initData : "";
 const $ = id => document.getElementById(id);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
@@ -175,26 +198,26 @@ const CONTEXT_KEY = "bb_crm_context";
 const API = {
   login:"/api/admin/login", context:"/api/admin/crm/context",
   overview:"/api/admin/crm/overview", calendar:"/api/admin/crm/calendar",
-  plans:"/api/admin/crm/planned-shifts", tasks:"/api/admin/crm/tasks",
+  plans:"/api/admin/crm/planned-shifts", planBatch:"/api/admin/crm/planned-shifts/batch", tasks:"/api/admin/crm/tasks",
   preview:"/api/admin/crm/tasks/assignee-preview", employees:"/api/admin/crm/employees",
   shifts:"/api/admin/crm/shifts", quality:"/api/admin/crm/data-quality",
   trends:"/api/admin/crm/trends"
 };
 const ROUTES = {
-  today:["Сегодня","Оперативная картина по разрешённой команде"],
+  analysis:["Анализ","Смены, действия и качество работы команды"],
   calendar:["Календарь","Плановые и фактические смены рядом"],
   tasks:["Задания","Индивидуальный прогресс каждого исполнителя"],
   team:["Команда","Сотрудники, смены и действия"],
-  control:["Контроль","Только реальные события, требующие проверки"],
-  more:["Ещё","Аналитика по фактическим данным"]
+  more:["Ещё","Качество данных, отчёты и доступ"]
 };
 const ACTION_LABELS={move:"Перемещения",fix:"Поправки",repair:"Ремонт",battery:"АКБ",sticker:"Оклейка",to_sc:"Привёз на СЦ",from_sc:"Вывез с СЦ"};
 const ROLE_LABELS={city_viewer:"Наблюдатель",city_manager:"Старший скаут",network_admin:"Директор"};
 const TASK_STATUS={draft:"Черновик",published:"Опубликовано",cancelled:"Отменено",assigned:"Назначено",seen:"Просмотрено",in_progress:"В работе",submitted:"На проверке",accepted:"Принято",blocked:"Заблокировано"};
 const state={
-  token:localStorage.getItem(TOKEN_KEY)||"", context:null, route:"today", cityId:null,
+  token:localStorage.getItem(TOKEN_KEY)||"", context:null, route:"analysis", cityId:null,
   cache:{}, month:startOfMonth(new Date()), selectedDate:isoDate(new Date()),
-  taskFilter:"open", teamQuery:"", teamRole:"", taskFiles:[], targetMode:"role",
+  taskFilter:"open", taskDate:isoDate(new Date()), teamQuery:"", teamRole:"", taskFiles:[], targetMode:"role",
+  taskCompletion:"manual", editTaskId:null, planMode:"single", batchWork:2, batchRest:1, batchKey:"",
   requestSeq:{}, online:navigator.onLine
 };
 
@@ -264,55 +287,66 @@ function showApp(){
 }
 function renderScopes(){
   const select=$("scopeSelect"),cities=state.context?.cities||[];select.innerHTML=cities.map(c=>`<option value="${Number(c.id)}">${esc(c.name)}</option>`).join("");
-  select.value=String(state.cityId||"");select.classList.toggle("hidden",cities.length<2);
+  select.value=String(state.cityId||"");select.classList.toggle("hidden",cities.length<2);updateDistrictSuggestions();
+}
+function updateDistrictSuggestions(){
+  const city=selectedCity(),items=city&&city.name==='Краснодар'?['ЦМР','ФМР','ЮМР','ГМР','КМР','ЧМР','СМР','ПМР','ВКР','Энка']:[];
+  $('districtSuggestions').innerHTML=items.map(name=>`<option value="${esc(name)}"></option>`).join('');
 }
 function setRoute(route,force=false){
-  if(!ROUTES[route])route="today";state.route=route;
+  if(!ROUTES[route])route="analysis";state.route=route;
   $$(".page").forEach(p=>p.classList.toggle("active",p.id===`page-${route}`));
   $$("[data-route]").forEach(b=>b.classList.toggle("active",b.dataset.route===route));
   $("pageTitle").textContent=ROUTES[route][0];$("pageSubtitle").textContent=ROUTES[route][1];
   closeMore();if(force||!state.cache[`${route}:${state.cityId}`])loadRoute(route);else renderRoute(route,state.cache[`${route}:${state.cityId}`]);
 }
 async function loadRoute(route=state.route){
-  if(route==="today")return loadToday();if(route==="calendar")return loadCalendar();if(route==="tasks")return loadTasks();if(route==="team")return loadTeam();if(route==="control")return loadControl();return loadMore();
+  if(route==="analysis")return loadToday();if(route==="calendar")return loadCalendar();if(route==="tasks")return loadTasks();if(route==="team")return loadTeam();return loadMore();
 }
-function renderRoute(route,data){if(route==="today")renderToday(data);else if(route==="calendar")renderCalendar(data.calendar,data.tasks);else if(route==="tasks")renderTasks(data);else if(route==="team")renderTeam(data);else if(route==="control")renderControl(data);else renderMore(data)}
+function renderRoute(route,data){if(route==="analysis")renderToday(data);else if(route==="calendar")renderCalendar(data.calendar,data.tasks);else if(route==="tasks")renderTasks(data);else if(route==="team")renderTeam(data);else renderMore(data)}
 function setUpdated(value){$("updatedAt").textContent=value?`Обновлено ${new Date(value).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}`:""}
 
 async function loadToday(){
   const root=$("todayRoot");root.innerHTML=loadingCards();
   try{
-    const city_id=state.cityId, today=isoDate(new Date());
-    const results=await withSeq("today",()=>Promise.allSettled([
+    const city_id=state.cityId, today=isoDate(new Date()),from=isoDate(addDays(new Date(),-9));
+    const results=await withSeq("analysis",()=>Promise.allSettled([
       request(API.overview+query({city_id})),request(API.shifts+query({city_id,from:today,to:today,status:"active",limit:100})),
-      request(API.tasks+query({city_id,from:today,to:today,status:"published",limit:20})),request(API.quality+query({city_id,from:today,to:today}))
+      request(API.tasks+query({city_id,from:today,to:today,status:"published",limit:100})),request(API.quality+query({city_id,from:today,to:today})),
+      request(API.trends+query({city_id,from,to:today,bucket:"day"}))
     ]));
-    const data={overview:valueOf(results[0]),shifts:valueOf(results[1]),tasks:valueOf(results[2]),quality:valueOf(results[3])};state.cache[`today:${city_id}`]=data;renderToday(data);
-  }catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить сегодня",err.message,"today")}
+    const data={overview:valueOf(results[0]),shifts:valueOf(results[1]),tasks:valueOf(results[2]),quality:valueOf(results[3]),trends:valueOf(results[4])};state.cache[`analysis:${city_id}`]=data;renderToday(data);
+  }catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить анализ",err.message,"analysis")}
 }
 function valueOf(result){return result?.status==="fulfilled"?result.value:null}
 function renderToday(data){
   const root=$("todayRoot"),ov=data.overview;
-  if(!ov)return root.innerHTML=stateBlock("Сводка пока недоступна","Сервер не вернул данные обзора.","today");setUpdated(ov.generated_at);
+  if(!ov)return root.innerHTML=stateBlock("Сводка пока недоступна","Сервер не вернул данные обзора.","analysis");setUpdated(ov.generated_at);
   const t=ov.totals||{},cur=ov.current||{},dq=ov.data_quality||{},task=ov.tasks||{};
   const attention=n(dq.manual_reports_waiting)+n(dq.long_open_shifts);
   const shifts=data.shifts?.items||[],tasks=data.tasks?.items||[],issues=data.quality?.items||[];
-  const roles={};shifts.forEach(s=>{const key=s.role||"Без роли";roles[key]=(roles[key]||0)+1});
+  const actions=ov.actions||{},taskDone=n(task.accepted??task.done),taskLeft=Math.max(0,n(task.assignees)-taskDone);
+  const roles={};shifts.forEach(s=>{const key=s.role||"Без роли",item=roles[key]||(roles[key]={people:0,actions:0,minutes:0});item.people++;item.actions+=n(s.actions_total);item.minutes+=n(s.worked_minutes)});
+  const trend=data.trends?.series||[],trendMax=Math.max(1,...trend.map(x=>n(x.actions))),actionMax=Math.max(1,...Object.keys(ACTION_LABELS).map(k=>n(actions[k])));
   root.innerHTML=`
     <div class="kpi-grid">
       ${kpi("На смене",cur.active,"активных сотрудников","team")}
-      ${kpi("Ожидают начала",cur.scheduled,"запланированные открытия","calendar")}
-      ${kpi("Задания",`${n(task.accepted??task.done)} / ${n(task.assignees)}`,"принято / назначено","tasks")}
-      ${kpi("Требует контроля",attention,"реальные события данных","control",attention>0)}
+      ${kpi("Действия",t.actions,"за выбранный период","analysis")}
+      ${kpi("Задачи выполнено",taskDone,"принято руководителем","tasks")}
+      ${kpi("Задачи осталось",taskLeft,`${n(task.assignees)} назначено`,"tasks",taskLeft>0)}
     </div>
-    <div class="grid two-col">
+    <div class="analysis-grid">
       <div class="card"><div class="card-head"><div><h3>Живые смены</h3><p>${fmtNum(shifts.length)} сейчас в выбранном городе</p></div><button class="text-btn" data-go="team">Вся команда →</button></div>${renderShiftCards(shifts.slice(0,8),"Открытых смен сейчас нет.")}</div>
       <div class="stack">
-        <div class="card"><div class="card-head"><div><h3>Состав смены</h3><p>Без сравнения разных ролей</p></div></div>${Object.keys(roles).length?`<div class="role-list">${Object.entries(roles).map(([role,count])=>`<div class="role-row"><div><b>${esc(role)}</b><span>сейчас на смене</span></div><div class="role-numbers"><strong>${fmtNum(count)}</strong></div></div>`).join("")}</div>`:stateBlock("Смена пуста","Сотрудников на активной смене нет.")}</div>
-        <div class="card"><div class="card-head"><div><h3>Контроль</h3><p>Проверяемые события, не искусственный KPI</p></div><button class="text-btn" data-go="control">Все →</button></div>${renderIssueCards(issues.slice(0,4))}</div>
+        <div class="card"><div class="card-head"><div><h3>Команда по ролям</h3><p>Действий на один рабочий час</p></div></div>${Object.keys(roles).length?`<div class="role-list">${Object.entries(roles).map(([role,item])=>`<div class="role-row"><div><b>${esc(role)}</b><span>${fmtNum(item.people)} на смене</span></div><div class="role-numbers"><strong>${item.minutes?Math.round(item.actions*600/item.minutes)/10:'—'}</strong><span>действ./час</span></div></div>`).join("")}</div>`:stateBlock("Смена пуста","Сотрудников на активной смене нет.")}</div>
+        <div class="card"><div class="card-head"><div><h3>Требует внимания</h3><p>${attention} событий качества данных</p></div><button class="text-btn" data-go="more">Все →</button></div>${renderIssueCards(issues.slice(0,3))}</div>
       </div>
     </div>
-    <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Задания на сегодня</h3><p>Прогресс считается по каждому исполнителю</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Задание</button>':""}</div>${renderTaskCards(tasks.slice(0,6))}</div>`;
+    <div class="grid two-col" style="margin-top:14px">
+      <div class="card"><div class="card-head"><div><h3>Динамика действий</h3><p>Последние 10 дней</p></div></div><div class="trend-wrap">${trend.length?`<div class="trend-chart">${trend.map(x=>`<div class="trend-col" title="${esc(fmtDate(x.date))}: ${fmtNum(x.actions)}"><i style="height:${Math.max(3,Math.round(n(x.actions)*100/trendMax))}%"></i><span>${esc(fmtDate(x.date,{day:'numeric'}))}</span></div>`).join('')}</div>`:stateBlock("Данных нет","За период действия не найдены.")}</div></div>
+      <div class="card"><div class="card-head"><div><h3>Типы действий</h3><p>${fmtNum(t.actions)} всего</p></div></div><div class="metric-bars">${Object.entries(ACTION_LABELS).map(([key,label])=>`<div class="metric-bar"><span>${esc(label)}</span><div class="progress"><i style="width:${Math.round(n(actions[key])*100/actionMax)}%"></i></div><b>${fmtNum(actions[key])}</b></div>`).join('')}</div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Задания на сегодня</h3><p>${taskDone} выполнено · ${taskLeft} осталось</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Задание</button>':""}</div>${renderTaskCards(tasks.slice(0,6))}</div>`;
   wireCommon(root);
 }
 function kpi(label,value,sub,route,alert=false){return `<button class="kpi action ${alert?"alert":""}" data-go="${route}"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${value===null||value===undefined?"—":esc(value)}</div><div class="kpi-sub">${esc(sub)}</div></button>`}
@@ -323,77 +357,126 @@ async function loadCalendar(){
   try{const results=await withSeq("calendar",()=>Promise.allSettled([request(API.calendar+query(params)),request(API.tasks+query({...params,limit:200}))]));const data={calendar:valueOf(results[0]),tasks:valueOf(results[1])};if(!data.calendar)throw new Error("Календарь пока недоступен.");state.cache[`calendar:${state.cityId}`]=data;renderCalendar(data.calendar,data.tasks)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить календарь",err.message,"calendar")}
 }
 function calendarCells(month){const first=startOfMonth(month),mondayOffset=(first.getDay()+6)%7,start=addDays(first,-mondayOffset);return Array.from({length:42},(_,i)=>addDays(start,i))}
+function taskCoversDate(task,date){const from=task.date_from||task.work_date,to=task.date_to||from;return !!from&&from<=date&&to>=date}
 function renderCalendar(data,taskData){
   /* В календаре считаются только опубликованные задания: черновики и
      отменённые не должны выглядеть как реальная нагрузка сотрудников. */
   const root=$("calendarRoot"),days=data.days||{},plans=data.planned||[],unplanned=data.actual_unplanned||[],tasks=(taskData?.items||[]).filter(task=>task.status==="published");
   const monthKey=state.month.getMonth(),today=isoDate(new Date()),selected=state.selectedDate;
-  const cells=calendarCells(state.month).map(date=>{const key=isoDate(date),d=days[key]||{},taskCount=tasks.filter(t=>t.work_date===key).length;return `<button class="day-tile ${date.getMonth()!==monthKey?"outside":""} ${key===today?"today":""} ${key===selected?"selected":""}" data-day="${key}"><span class="day-number">${date.getDate()}</span><span class="day-stat"><b>План ${n(d.planned)}</b> · вышли ${n(d.came)}</span><span class="day-stat detail">Вне плана ${n(d.unplanned)} · задач ${taskCount}</span>${n(d.missed)||n(d.ambiguous)?`<span class="day-alert">Проверить ${n(d.missed)+n(d.ambiguous)}</span>`:""}</button>`}).join("");
-  const dayPlans=plans.filter(p=>p.work_date===selected),dayUnplanned=unplanned.filter(s=>s.date===selected),dayTasks=tasks.filter(t=>t.work_date===selected);
-  root.innerHTML=`<div class="calendar-shell"><div class="card calendar-card"><div class="calendar-toolbar"><div class="calendar-actions"><button class="icon-btn" data-month="-1" aria-label="Предыдущий месяц">${icon("i-left")}</button></div><h3>${fmtDate(isoDate(state.month),{month:"long",year:"numeric"})}</h3><div class="calendar-actions"><button class="btn btn-secondary" data-today-calendar>Сегодня</button><button class="icon-btn" data-month="1" aria-label="Следующий месяц">${icon("i-right")}</button></div></div><div class="weekdays">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(x=>`<span>${x}</span>`).join("")}</div><div class="month-grid">${cells}</div></div>
+  const cells=calendarCells(state.month).map(date=>{const key=isoDate(date),d=days[key]||{},taskCount=tasks.filter(t=>taskCoversDate(t,key)).length;return `<button class="day-tile ${date.getMonth()!==monthKey?"outside":""} ${key===today?"today":""} ${key===selected?"selected":""}" data-day="${key}"><span class="day-number">${date.getDate()}</span><span class="day-stat"><b>План ${n(d.planned)}</b> · вышли ${n(d.came)}</span><span class="day-stat detail">Вне плана ${n(d.unplanned)} · задач ${taskCount}</span>${n(d.missed)||n(d.ambiguous)?`<span class="day-alert">Проверить ${n(d.missed)+n(d.ambiguous)}</span>`:""}</button>`}).join("");
+  const dayPlans=plans.filter(p=>p.work_date===selected),dayUnplanned=unplanned.filter(s=>s.date===selected),dayTasks=tasks.filter(t=>taskCoversDate(t,selected));
+  root.innerHTML=`<div class="calendar-shell"><div class="card calendar-card"><div class="calendar-toolbar"><div class="calendar-actions"><button class="icon-btn" data-month="-1" aria-label="Предыдущий месяц">${icon("i-left")}</button></div><h3>${fmtDate(isoDate(state.month),{month:"long",year:"numeric"})}</h3><div class="calendar-actions">${canWrite()?'<button class="btn btn-primary" data-batch-plan>График</button>':''}<button class="btn btn-secondary" data-today-calendar>Сегодня</button><button class="icon-btn" data-month="1" aria-label="Следующий месяц">${icon("i-right")}</button></div></div><div class="weekdays">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(x=>`<span>${x}</span>`).join("")}</div><div class="month-grid">${cells}</div></div>
   <aside class="card day-panel"><div class="card-head"><div><div class="day-panel-date">${fmtDate(selected,{weekday:"long",day:"numeric",month:"long"})}</div><p>План и факт хранятся отдельно</p></div>${canWrite()?`<button class="icon-btn" data-day-add aria-label="Добавить">${icon("i-plus")}</button>`:""}</div>${renderDayPanel(dayPlans,dayUnplanned,dayTasks)}</aside></div>`;
   $$("[data-day]",root).forEach(b=>b.onclick=()=>{state.selectedDate=b.dataset.day;renderCalendar(data,taskData)});
   $$("[data-month]",root).forEach(b=>b.onclick=()=>{state.month=new Date(state.month.getFullYear(),state.month.getMonth()+Number(b.dataset.month),1);state.selectedDate=isoDate(state.month);loadCalendar()});
   const todayBtn=root.querySelector("[data-today-calendar]");if(todayBtn)todayBtn.onclick=()=>{state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());loadCalendar()};
-  const add=root.querySelector("[data-day-add]");if(add)add.onclick=()=>openDayCreate(state.selectedDate);wireCommon(root);
+  const add=root.querySelector("[data-day-add]"),batch=root.querySelector('[data-batch-plan]');if(add)add.onclick=()=>openDayCreate(state.selectedDate);if(batch)batch.onclick=()=>openPlanModal(state.selectedDate,null,'batch');wireCommon(root);
 }
 function renderDayPanel(plans,unplanned,tasks){return `<div class="day-section"><div class="day-section-head"><b>По плану</b><span>${plans.length}</span></div>${plans.length?plans.map(renderPlanFact).join(""):stateBlock("Плана нет","Добавьте плановую смену или оставьте день без плана.")}</div><div class="day-section"><div class="day-section-head"><b>Вышли вне плана</b><span>${unplanned.length}</span></div>${unplanned.length?unplanned.map(s=>`<div class="plan-fact"><div class="pf-name">${esc(s.name)}</div><div class="pf-role">${esc(s.role)}</div><div class="pf-times"><span>Факт</span><b class="pf-fact">${esc(s.start_time||"—")}–${esc(s.end_time||"…")}</b></div></div>`).join(""):stateBlock("Нет","Все фактические смены сопоставлены с планом.")}</div><div class="day-section"><div class="day-section-head"><b>Задания</b><span>${tasks.length}</span></div>${renderTaskCards(tasks)}</div>`}
 function renderPlanFact(p){const actual=p.actual_shifts||[],fact=actual[0];return `<div class="plan-fact"><div class="pf-name">${esc(p.user_name||p.role||"Плановая смена")}</div><div class="pf-role">${esc(p.user_name?p.role||"":p.role?"План на роль":"")} ${badge(p.match_status,p.match_status)}</div><div class="pf-times"><span>План</span><b>${esc(p.start_time)}–${esc(p.end_time)}</b><span>Факт</span><b class="${p.match_status==="не вышел"?"pf-missing":"pf-fact"}">${fact?`${esc(fact.start_time||"—")}–${esc(fact.end_time||"…")}`:p.match_status==="не вышел"?"Не начата":"—"}</b></div>${p.district?`<div class="row-meta">${esc(p.district)}</div>`:""}</div>`}
 function openDayCreate(date){
   if(!canWrite())return;
-  openDetail(`Добавить · ${fmtDate(date)}`,`<div class="stack"><button class="more-item" id="dayCreatePlan">${icon("i-calendar")}<span><b>Запланировать смену</b><span class="row-meta">План не меняет фактические часы</span></span></button><button class="more-item" id="dayCreateTask">${icon("i-task")}<span><b>Создать задание</b><span class="row-meta">Текст, фото и snapshot исполнителей</span></span></button></div>`);
+  openDetail(`Добавить · ${fmtDate(date)}`,`<div class="stack"><button class="more-item" id="dayCreatePlan">${icon("i-calendar")}<span><b>Одна смена</b><span class="row-meta">План не меняет фактические часы</span></span></button><button class="more-item" id="dayCreateBatch">${icon("i-calendar")}<span><b>График на период</b><span class="row-meta">Несколько сотрудников · режим работы/отдыха</span></span></button><button class="more-item" id="dayCreateTask">${icon("i-task")}<span><b>Создать задание</b><span class="row-meta">Текст, фото и исполнители</span></span></button></div>`);
   $("dayCreatePlan").onclick=()=>{closeModal("detailModal");openPlanModal(date)};
+  $("dayCreateBatch").onclick=()=>{closeModal("detailModal");openPlanModal(date,null,'batch')};
   $("dayCreateTask").onclick=()=>{closeModal("detailModal");openTaskModal(date)};
 }
 
-async function openPlanModal(date=state.selectedDate){
-  clearError("planError");$("planDate").value=date;$("planModal").classList.add("open");
-  $("planEmployee").innerHTML='<option value="">Загружаю…</option>';
-  try{const data=await request(API.employees+query({city_id:state.cityId,role:roleScope(),limit:200}));const items=data.items||[];$("planEmployee").innerHTML='<option value="">Выберите сотрудника</option>'+items.map(x=>`<option value="${Number(x.user_id)}">${esc(x.name)} · ${esc(x.role)}</option>`).join("");$("planScopeHint").textContent=roleScope()?"Старший скаут может планировать только скаутов.":"Сотрудники выбранного города."}catch(err){showError("planError",err.message)}
+function setPlanMode(mode){
+  state.planMode=mode;$$('#planMode button').forEach(b=>b.classList.toggle('active',b.dataset.value===mode));
+  $('planSingleFields').classList.toggle('hidden',mode!=='single');$('planBatchFields').classList.toggle('hidden',mode!=='batch');
+  $('planSubmit').textContent=mode==='batch'?'Создать график':'Запланировать';updateBatchPreview();
+}
+function batchDates(){
+  const start=new Date(($('batchFrom').value||isoDate(new Date()))+'T12:00:00'),end=new Date(($('batchTo').value||$('batchFrom').value||isoDate(new Date()))+'T12:00:00'),out=[];
+  if(Number.isNaN(start.getTime())||Number.isNaN(end.getTime())||end<start)return out;
+  const cycle=state.batchWork+state.batchRest;let cursor=new Date(start),index=0;
+  while(cursor<=end&&out.length<120){if(index%cycle<state.batchWork)out.push(isoDate(cursor));cursor=addDays(cursor,1);index++}return out;
+}
+function updateBatchPreview(){
+  if(!$('batchPreview'))return;const dates=batchDates();$('batchPreview').innerHTML=dates.length?dates.slice(0,40).map(d=>`<span>${esc(fmtDate(d,{day:'numeric',month:'short'}))}</span>`).join('')+(dates.length>40?`<span>+${dates.length-40}</span>`:''):'<span>Выберите период</span>';
+}
+function setBatchDecade(number){
+  const anchor=new Date(($('batchFrom').value||state.selectedDate||isoDate(new Date()))+'T12:00:00'),year=anchor.getFullYear(),month=anchor.getMonth();
+  const fromDay=number===1?1:number===2?11:21,toDay=number===1?10:number===2?20:new Date(year,month+1,0).getDate();
+  $('batchFrom').value=isoDate(new Date(year,month,fromDay));$('batchTo').value=isoDate(new Date(year,month,toDay));
+  $$('#batchDecadePreset button').forEach(button=>button.classList.toggle('active',Number(button.dataset.decade)===number));updateBatchPreview();
+}
+async function openPlanModal(date=state.selectedDate,userId=null,mode='single'){
+  clearError('planError');state.batchKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;$('planDate').value=date||isoDate(new Date());$('batchFrom').value=date||isoDate(new Date());$('batchTo').value=isoDate(addDays(new Date((date||isoDate(new Date()))+'T12:00:00'),9));$('planModal').classList.add('open');setPlanMode(mode);
+  $('planEmployee').innerHTML='<option value="">Загружаю…</option>';$('batchEmployees').innerHTML='<div class="check-row">Загружаю…</div>';
+  try{
+    const data=await request(API.employees+query({city_id:state.cityId,role:roleScope(),limit:200})),items=data.items||[];
+    $('planEmployee').innerHTML='<option value="">Выберите сотрудника</option>'+items.map(x=>`<option value="${Number(x.user_id)}">${esc(x.name)} · ${esc(x.role)}</option>`).join('');
+    if(userId)$('planEmployee').value=String(userId);
+    $('batchEmployees').innerHTML=items.length?items.map(x=>`<label class="check-row"><input type="checkbox" name="batchUser" value="${Number(x.user_id)}" ${Number(userId)===Number(x.user_id)?'checked':''}><span>${esc(x.name)}<small>${esc(x.role)}</small></span></label>`).join(''):stateBlock('Сотрудников нет','Для выбранного города список пуст.');
+    $('planScopeHint').textContent=roleScope()?'Можно планировать только сотрудников разрешённой роли.':'Сотрудники выбранного города.';
+  }catch(err){showError('planError',err.message)}
+  updateBatchPreview();
 }
 async function createPlan(event){
-  event.preventDefault();clearError("planError");const button=$("planSubmit"),userId=Number($("planEmployee").value);if(!userId)return showError("planError","Выберите сотрудника.");button.disabled=true;button.textContent="Сохраняем…";
-  const body={city_id:Number(state.cityId),work_date:$("planDate").value,start_time:$("planStart").value,end_time:$("planEnd").value,user_id:userId,role:null,district:$("planDistrict").value.trim(),note:$("planNote").value.trim()};
-  try{await request(API.plans,{method:"POST",body:JSON.stringify(body)});closeModal("planModal");toast("Смена запланирована.");delete state.cache[`calendar:${state.cityId}`];loadCalendar()}
-  catch(err){showError("planError",err.status===409?"У сотрудника уже есть план на эту часть дня.":err.message)}finally{button.disabled=false;button.textContent="Запланировать"}
+  event.preventDefault();clearError('planError');const button=$('planSubmit');button.disabled=true;button.textContent='Сохраняем…';
+  try{
+    if(state.planMode==='batch'){
+      const userIds=$$('input[name="batchUser"]:checked').map(input=>Number(input.value));
+      if(!userIds.length)throw new Error('Выберите хотя бы одного сотрудника.');
+      if(!$('batchFrom').value||!$('batchTo').value)throw new Error('Укажите период графика.');
+      const body={city_id:Number(state.cityId),user_ids:userIds,date_from:$('batchFrom').value,date_to:$('batchTo').value,work_days:state.batchWork,rest_days:state.batchRest,start_time:$('batchStart').value,end_time:$('batchEnd').value,district:$('batchDistrict').value.trim(),note:$('batchNote').value.trim(),idempotency_key:state.batchKey};
+      await request(API.planBatch,{method:'POST',body:JSON.stringify(body)});toast(`График создан: ${userIds.length} ${plural(userIds.length,'сотрудник','сотрудника','сотрудников')}.`);
+    }else{
+      const userId=Number($('planEmployee').value);if(!userId)throw new Error('Выберите сотрудника.');
+      const body={city_id:Number(state.cityId),work_date:$('planDate').value,start_time:$('planStart').value,end_time:$('planEnd').value,user_id:userId,role:null,district:$('planDistrict').value.trim(),note:$('planNote').value.trim()};
+      await request(API.plans,{method:'POST',body:JSON.stringify(body)});toast('Смена запланирована.');
+    }
+    closeModal('planModal');delete state.cache[`calendar:${state.cityId}`];loadCalendar();
+  }catch(err){showError('planError',err.status===409?'Часть смен уже существует. Измените период или сотрудников.':err.message)}finally{button.disabled=false;button.textContent=state.planMode==='batch'?'Создать график':'Запланировать'}
 }
 
-async function loadTasks(){const root=$("tasksRoot");root.innerHTML=loadingCards();try{const today=new Date(),from=isoDate(addDays(today,-31)),to=isoDate(addDays(today,62));const data=await withSeq("tasks",()=>request(API.tasks+query({city_id:state.cityId,from,to,limit:200})));state.cache[`tasks:${state.cityId}`]=data;renderTasks(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить задания",err.message,"tasks")}}
+async function loadTasks(){const root=$("tasksRoot");root.innerHTML=loadingCards();try{const date=state.taskDate||isoDate(new Date()),data=await withSeq("tasks",()=>request(API.tasks+query({city_id:state.cityId,from:date,to:date,limit:200})));state.cache[`tasks:${state.cityId}`]=data;renderTasks(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить задания",err.message,"tasks")}}
 function taskCounts(task){const p=task.progress||{};return {total:n(p.total),accepted:n(p.accepted??p.done),submitted:n(p.submitted),inProgress:n(p.in_progress),blocked:n(p.blocked)}}
 function taskFilterMatch(task){const c=taskCounts(task);if(state.taskFilter==="review")return c.submitted>0;if(state.taskFilter==="done")return c.total>0&&c.accepted===c.total;if(state.taskFilter==="draft")return task.status==="draft";if(state.taskFilter==="open")return task.status==="published"&&c.accepted<c.total;return true}
-function renderTasks(data){const root=$("tasksRoot"),items=(data.items||[]).filter(taskFilterMatch);root.innerHTML=`<div class="page-head"><div><h2>Задания</h2><p>${fmtNum(data.page?.total??data.items?.length??0)} в выбранном диапазоне</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Создать</button>':""}</div><div class="toolbar"><div class="filters">${[["open","Открытые"],["review","На проверке"],["done","Принятые"],["draft","Черновики"],["all","Все"]].map(([v,l])=>`<button class="chip ${state.taskFilter===v?"active":""}" data-task-filter="${v}">${l}</button>`).join("")}</div></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr))">${items.length?items.map(renderTaskCard).join(""):stateBlock("Заданий нет","Для выбранного статуса ничего не найдено.")}</div>`;$$('[data-task-filter]',root).forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTasks(data)});wireCommon(root)}
-function renderTaskCard(task){const c=taskCounts(task),percent=c.total?Math.round(c.accepted*100/c.total):0;return `<article class="task-card clickable" data-task="${Number(task.task_id||task.id)}"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(task.work_date)} · ${esc(task.priority||"normal")}</div></div>${badge(task.status,task.status==="published"?"Опубликовано":TASK_STATUS[task.status])}</div><div class="progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div><div class="task-progress"><span>Принято ${c.accepted} из ${c.total}</span><span>${c.submitted?`На проверке ${c.submitted}`:c.blocked?`Проблем ${c.blocked}`:""}</span></div></article>`}
+function renderTasks(data){const root=$("tasksRoot"),items=(data.items||[]).filter(taskFilterMatch);root.innerHTML=`<div class="page-head"><div><h2>Задания</h2><p>${fmtDate(state.taskDate)} · ${fmtNum(data.page?.total??data.items?.length??0)} заданий</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Создать</button>':""}</div><div class="toolbar"><input class="input" id="taskDayFilter" type="date" value="${esc(state.taskDate)}" aria-label="Дата заданий"><div class="filters">${[["open","Открытые"],["review","На проверке"],["done","Принятые"],["draft","Черновики"],["all","Все"]].map(([v,l])=>`<button class="chip ${state.taskFilter===v?"active":""}" data-task-filter="${v}">${l}</button>`).join("")}</div></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr))">${items.length?items.map(renderTaskCard).join(""):`<div class="empty-full">${stateBlock("Заданий нет","Для выбранной даты и статуса ничего не найдено.")}</div>`}</div>`;$('taskDayFilter').onchange=e=>{state.taskDate=e.target.value||isoDate(new Date());delete state.cache[`tasks:${state.cityId}`];loadTasks()};$$('[data-task-filter]',root).forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTasks(data)});wireCommon(root)}
+function renderTaskCard(task){const c=taskCounts(task),percent=c.total?Math.round(c.accepted*100/c.total):0,from=task.date_from||task.work_date,to=task.date_to||from;return `<article class="task-card clickable" data-task="${Number(task.task_id||task.id)}"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(from)}${to!==from?` — ${fmtDate(to)}`:''}${task.district?` · ${esc(task.district)}`:''} · ${esc(task.priority||"normal")}</div></div>${badge(task.status,task.status==="published"?"Опубликовано":TASK_STATUS[task.status])}</div><div class="progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div><div class="task-progress"><span>Принято ${c.accepted} из ${c.total}</span><span>${c.submitted?`На проверке ${c.submitted}`:c.blocked?`Проблем ${c.blocked}`:""}</span></div></article>`}
 function renderTaskCards(tasks){if(!tasks||!tasks.length)return stateBlock("Заданий нет","На выбранную дату задания не опубликованы.");return `<div class="list">${tasks.map(renderTaskCard).join("")}</div>`}
-async function openTaskModal(date=state.selectedDate){
-  clearError("taskError");state.taskFiles=[];state.targetMode="role";$("taskDate").value=date||isoDate(new Date());$("taskTitle").value="";$("taskDescription").value="";$("taskRequiresPhoto").checked=false;$("taskPhotos").value="";$("uploadPreview").innerHTML="";
-  const roles=roleScope()?[roleScope()]:["Скаут","Водитель","Чарджер"];$("taskRole").innerHTML=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join("");toggleTargetMode("role");$("taskModal").classList.add("open");await refreshAssigneePreview();
+async function openTaskModal(date=state.selectedDate,task=null,presetUserId=null){
+  clearError('taskError');state.taskFiles=[];state.editTaskId=task?Number(task.task_id||task.id):null;state.editTaskTargetIds=(task?.targets||[]).filter(t=>t.target_type==='user').map(t=>Number(t.user_id));if(presetUserId)state.editTaskTargetIds=[Number(presetUserId)];
+  const from=task?.date_from||task?.work_date||date||isoDate(new Date()),to=task?.date_to||task?.work_date||from;
+  $('taskModal').querySelector('.modal-head h2').textContent=task?'Редактировать задание':'Новое задание';$('taskSubmit').textContent=task?'Сохранить':'Опубликовать';
+  $('taskDateFrom').value=from;$('taskDateTo').value=to;$('taskTitle').value=task?.title||'';$('taskDescription').value=task?.description||'';$('taskDistrict').value=task?.district||'';$('taskPriority').value=task?.priority||'normal';$('taskRequiresPhoto').checked=!!task?.requires_photo;$('taskPhotos').value='';$('uploadPreview').innerHTML='';
+  state.taskCompletion=task?.completion_mode||'manual';$$('#taskCompletion button').forEach(b=>b.classList.toggle('active',b.dataset.value===state.taskCompletion));
+  const roles=roleScope()?[roleScope()]:['Скаут','Водитель','Чарджер'];$('taskRole').innerHTML=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  const roleTarget=(task?.targets||[]).find(t=>t.target_type==='role');if(roleTarget&&roleTarget.role)$('taskRole').value=roleTarget.role;
+  toggleTargetMode(state.editTaskTargetIds.length?'users':'role');$('taskModal').classList.add('open');await refreshAssigneePreview();
 }
 function toggleTargetMode(mode){state.targetMode=mode;$$('#taskTargetMode button').forEach(b=>b.classList.toggle("active",b.dataset.value===mode));$("taskRoleField").classList.toggle("hidden",mode!=="role");$("taskUsersField").classList.toggle("hidden",mode!=="users");if(mode==="users")loadAssigneeChoices();else refreshAssigneePreview()}
 async function loadAssigneeChoices(){
   $("taskAssignees").innerHTML='<div class="check-row">Загружаю…</div>';
-  try{const data=await request(API.employees+query({city_id:state.cityId,role:roleScope(),limit:200}));const items=data.items||[];$("taskAssignees").innerHTML=items.length?items.map(e=>`<label class="check-row"><input type="radio" name="taskUser" value="${Number(e.user_id)}"><span>${esc(e.name)}<small>${esc(e.role)}</small></span></label>`).join(""):stateBlock("Сотрудников нет","Некого назначить в разрешённой роли.");$$('input[name="taskUser"]',$("taskAssignees")).forEach(i=>i.onchange=refreshAssigneePreview);refreshAssigneePreview()}
+  try{const data=await request(API.employees+query({city_id:state.cityId,role:roleScope(),limit:200}));const items=data.items||[];$("taskAssignees").innerHTML=items.length?items.map(e=>`<label class="check-row"><input type="checkbox" name="taskUser" value="${Number(e.user_id)}" ${(state.editTaskTargetIds||[]).includes(Number(e.user_id))?'checked':''}><span>${esc(e.name)}<small>${esc(e.role)}</small></span></label>`).join(""):stateBlock("Сотрудников нет","Некого назначить в разрешённой роли.");$$('input[name="taskUser"]',$("taskAssignees")).forEach(i=>i.onchange=refreshAssigneePreview);refreshAssigneePreview()}
   catch(err){$("taskAssignees").innerHTML=stateBlock("Не удалось загрузить",err.message)}
 }
 async function refreshAssigneePreview(){
-  const params={city_id:state.cityId,target_type:state.targetMode==="role"?"role":"user"};if(params.target_type==="role")params.role=$("taskRole").value;else params.user_id=document.querySelector('input[name="taskUser"]:checked')?.value;
-  if((params.target_type==="role"&&!params.role)||(params.target_type==="user"&&!params.user_id)){$("assigneePreview").dataset.count="0";return $("assigneePreview").textContent="Выберите исполнителя"}
+  const params={city_id:state.cityId,target_type:state.targetMode==="role"?"role":"user"};if(params.target_type==="role")params.role=$("taskRole").value;else{const ids=$$('input[name="taskUser"]:checked').map(x=>Number(x.value));$("assigneePreview").dataset.count=String(ids.length);return $("assigneePreview").textContent=ids.length?`Задание получат: ${ids.length} ${plural(ids.length,"сотрудник","сотрудника","сотрудников")}`:"Выберите исполнителей"}
+  if(!params.role){$("assigneePreview").dataset.count="0";return $("assigneePreview").textContent="Выберите исполнителя"}
   $("assigneePreview").textContent="Проверяем состав…";try{const data=await request(API.preview+query(params));const items=data.assignees||data.items||[];$("assigneePreview").textContent=`Задание получат: ${items.length} ${plural(items.length,"сотрудник","сотрудника","сотрудников")}`;$("assigneePreview").dataset.count=String(items.length)}catch(err){$("assigneePreview").textContent=err.message;$("assigneePreview").dataset.count="0"}
 }
 function plural(value,one,few,many){const v=Math.abs(value)%100,n=v%10;return v>10&&v<20?many:n>1&&n<5?few:n===1?one:many}
 function selectTaskFiles(){const allowed=new Set(["image/jpeg","image/png","image/webp"]),files=[...$("taskPhotos").files];clearError("taskError");if(files.length>5){showError("taskError","Можно приложить не больше 5 фото.");$("taskPhotos").value="";return}for(const file of files){if(!allowed.has(file.type)||file.size>10*1024*1024){showError("taskError",`Файл ${file.name}: нужен JPEG, PNG или WebP до 10 МБ.`);$("taskPhotos").value="";return}}state.taskFiles=files;$("uploadPreview").innerHTML=files.map((file,i)=>`<div class="upload-row"><img class="upload-thumb" src="${URL.createObjectURL(file)}" alt=""><div><div class="upload-name">${esc(file.name)}</div><div class="upload-status">${(file.size/1024/1024).toFixed(1)} МБ · готово к загрузке</div></div><button class="upload-remove" type="button" data-remove-file="${i}">×</button></div>`).join("");$$('[data-remove-file]',$("uploadPreview")).forEach(b=>b.onclick=()=>removeTaskFile(Number(b.dataset.removeFile)))}
 function removeTaskFile(index){state.taskFiles.splice(index,1);const dt=new DataTransfer();state.taskFiles.forEach(f=>dt.items.add(f));$("taskPhotos").files=dt.files;selectTaskFiles()}
 async function createTask(event){
-  event.preventDefault();clearError("taskError");const button=$("taskSubmit"),targetRole=state.targetMode==="role"?$("taskRole").value:null,targetUser=state.targetMode==="users"?Number(document.querySelector('input[name="taskUser"]:checked')?.value):null,count=Number($("assigneePreview").dataset.count||0);
+  event.preventDefault();clearError("taskError");const button=$("taskSubmit"),targetRole=state.targetMode==="role"?$("taskRole").value:null,targetUsers=state.targetMode==="users"?$$('input[name="taskUser"]:checked').map(x=>Number(x.value)):[],count=Number($("assigneePreview").dataset.count||0);
   if(!count)return showError("taskError","Выберите хотя бы одного исполнителя.");button.disabled=true;button.textContent="Создаём черновик…";
-  const body={city_id:Number(state.cityId),work_date:$("taskDate").value,title:$("taskTitle").value.trim(),description:$("taskDescription").value.trim(),priority:$("taskPriority").value,requires_photo:$("taskRequiresPhoto").checked,target_type:state.targetMode==="role"?"role":"user",target_user_id:targetUser||null,target_role:targetRole||null,publish:false};
+  const body={city_id:Number(state.cityId),work_date:$("taskDateFrom").value,date_from:$("taskDateFrom").value,date_to:$("taskDateTo").value,district:$("taskDistrict").value.trim(),completion_mode:state.taskCompletion,title:$("taskTitle").value.trim(),description:$("taskDescription").value.trim(),priority:$("taskPriority").value,requires_photo:$("taskRequiresPhoto").checked,target_type:state.targetMode==="role"?"role":"user",target_user_id:targetUsers[0]||null,target_user_ids:targetUsers,target_role:targetRole||null,publish:false};
   try{
-    const created=await request(API.tasks,{method:"POST",body:JSON.stringify(body)}),task=created.task||created,taskId=Number(task.task_id||task.id);if(!taskId)throw new Error("Сервер не вернул номер задания.");
+    if($("taskDateTo").value<$("taskDateFrom").value)throw new Error('Дата окончания раньше даты начала.');
+    let taskId=state.editTaskId;
+    if(taskId){button.textContent='Сохраняем…';await request(`${API.tasks}/${taskId}`,{method:'PATCH',body:JSON.stringify(body)})}
+    else{const created=await request(API.tasks,{method:"POST",body:JSON.stringify(body)}),task=created.task||created;taskId=Number(task.task_id||task.id);if(!taskId)throw new Error("Сервер не вернул номер задания.")}
     if(state.taskFiles.length){button.textContent="Загружаем фото…";const form=new FormData();state.taskFiles.forEach(file=>form.append("file",file));await request(`${API.tasks}/${taskId}/attachments`,{method:"POST",body:form})}
-    button.textContent="Публикуем…";await request(`${API.tasks}/${taskId}/publish`,{method:"POST",body:JSON.stringify({})});closeModal("taskModal");toast("Задание опубликовано.");delete state.cache[`tasks:${state.cityId}`];delete state.cache[`calendar:${state.cityId}`];loadRoute(state.route);
-  }catch(err){showError("taskError",err.message+" Если черновик уже создан, он останется в разделе «Черновики».")}finally{button.disabled=false;button.textContent="Опубликовать"}
+    if(!state.editTaskId){button.textContent="Публикуем…";await request(`${API.tasks}/${taskId}/publish`,{method:"POST",body:JSON.stringify({})})}closeModal("taskModal");toast(state.editTaskId?"Задание сохранено.":"Задание опубликовано.");delete state.cache[`tasks:${state.cityId}`];delete state.cache[`calendar:${state.cityId}`];delete state.cache[`analysis:${state.cityId}`];loadRoute(state.route);
+  }catch(err){showError("taskError",err.message+(state.editTaskId?'':" Если черновик уже создан, он останется в разделе «Черновики»."))}finally{button.disabled=false;button.textContent=state.editTaskId?'Сохранить':'Опубликовать'}
 }
 async function openTaskDetail(taskId){
-  openDetail("Задание",loadingCards());try{const data=await request(`${API.tasks}/${taskId}`+query({city_id:state.cityId})),task=data.task||data,assignees=data.assignees||task.assignees||[],attachments=data.attachments||task.attachments||[],comments=data.comments||task.comments||[];$("detailTitle").textContent=task.title||"Задание";$("detailRoot").innerHTML=`<div class="task-card"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(task.work_date)} · ${esc(task.priority)}</div></div>${badge(task.status,TASK_STATUS[task.status])}</div>${task.description?`<div class="row-meta">${esc(task.description)}</div>`:""}</div>${attachments.length?`<div class="day-section"><div class="day-section-head"><b>Фото</b><span>${attachments.length}</span></div><div class="grid" style="grid-template-columns:repeat(3,1fr)">${attachments.map(a=>`<button class="btn btn-ghost" style="padding:0;display:block" data-protected-image="${esc(a.download_url)}" title="Открыть ${esc(a.original_name||"фото")}"><span class="skeleton" style="display:block;width:100%;aspect-ratio:1"></span></button>`).join("")}</div></div>`:""}<div class="day-section"><div class="day-section-head"><b>Исполнители</b><span>${assignees.length}</span></div><div class="list">${assignees.length?assignees.map(a=>renderAssignee(taskId,a)).join(""):stateBlock("Нет исполнителей","Задание ещё не опубликовано или snapshot пуст.")}</div></div>${comments.length?`<div class="day-section"><div class="day-section-head"><b>Комментарии</b><span>${comments.length}</span></div><div class="list">${comments.map(c=>`<div class="row-card"><div><div class="row-title">Пользователь #${Number(c.author_user_id)}</div><div class="row-meta">${esc(c.body)}</div></div><div class="row-side"><span>${fmtDate(c.created_at,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span></div></div>`).join("")}</div></div>`:""}`;wireTaskReview($("detailRoot"));hydrateProtectedImages($("detailRoot"))}catch(err){$("detailRoot").innerHTML=stateBlock("Не удалось открыть задание",err.message)}
+  openDetail("Задание",loadingCards());try{const data=await request(`${API.tasks}/${taskId}`+query({city_id:state.cityId})),task=data.task||data,assignees=data.assignees||task.assignees||[],attachments=data.attachments||task.attachments||[],comments=data.comments||task.comments||[];$("detailTitle").textContent=task.title||"Задание";$("detailRoot").innerHTML=`${canWrite()?'<div class="quick-actions"><button class="btn btn-secondary" id="editTaskButton">Редактировать</button></div>':''}<div class="task-card"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(task.date_from||task.work_date)}${task.date_to&&task.date_to!==(task.date_from||task.work_date)?` — ${fmtDate(task.date_to)}`:''} · ${esc(task.priority)}</div></div>${badge(task.status,TASK_STATUS[task.status])}</div>${task.district?`<div class="row-meta">Район: ${esc(task.district)}</div>`:''}${task.description?`<div class="row-meta">${esc(task.description)}</div>`:""}</div>${attachments.length?`<div class="day-section"><div class="day-section-head"><b>Фото</b><span>${attachments.length}</span></div><div class="grid" style="grid-template-columns:repeat(3,1fr)">${attachments.map(a=>`<button class="btn btn-ghost" style="padding:0;display:block" data-protected-image="${esc(a.download_url)}" title="Открыть ${esc(a.original_name||"фото")}"><span class="skeleton" style="display:block;width:100%;aspect-ratio:1"></span></button>`).join("")}</div></div>`:""}<div class="day-section"><div class="day-section-head"><b>Исполнители</b><span>${assignees.length}</span></div><div class="list">${assignees.length?assignees.map(a=>renderAssignee(taskId,a)).join(""):stateBlock("Нет исполнителей","Задание ещё не опубликовано или snapshot пуст.")}</div></div>${comments.length?`<div class="day-section"><div class="day-section-head"><b>Комментарии</b><span>${comments.length}</span></div><div class="list">${comments.map(c=>`<div class="row-card"><div><div class="row-title">Пользователь #${Number(c.author_user_id)}</div><div class="row-meta">${esc(c.body)}</div></div><div class="row-side"><span>${fmtDate(c.created_at,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span></div></div>`).join("")}</div></div>`:""}`;const edit=$('editTaskButton');if(edit)edit.onclick=()=>{closeModal('detailModal');openTaskModal(task.date_from||task.work_date,task)};wireTaskReview($("detailRoot"));hydrateProtectedImages($("detailRoot"))}catch(err){$("detailRoot").innerHTML=stateBlock("Не удалось открыть задание",err.message)}
 }
 async function fetchProtectedBlob(url){const response=await fetch(url,{headers:{"Authorization":"tma "+initData,"X-Init-Data":initData,"X-Admin-Token":state.token}});if(!response.ok)throw new Error("Фото недоступно.");return URL.createObjectURL(await response.blob())}
 function hydrateProtectedImages(root){$$('[data-protected-image]',root).forEach(async button=>{try{const objectUrl=await fetchProtectedBlob(button.dataset.protectedImage),img=document.createElement("img");img.src=objectUrl;img.alt="Фото задания";img.style.cssText="width:100%;aspect-ratio:1;object-fit:cover;border-radius:11px;display:block";button.replaceChildren(img);button.onclick=()=>window.open(objectUrl,"_blank","noopener")}catch(err){button.innerHTML=stateBlock("Нет фото",err.message)}})}
@@ -404,33 +487,40 @@ async function reviewAssignee(button,status,comment){button.disabled=true;try{aw
 
 async function loadTeam(){const root=$("teamRoot");root.innerHTML=loadingCards();try{const today=new Date(),from=isoDate(new Date(today.getFullYear(),today.getMonth(),1)),to=isoDate(today);const data=await withSeq("team",()=>request(API.employees+query({city_id:state.cityId,from,to,role:roleScope()||state.teamRole,search:state.teamQuery,limit:200})));state.cache[`team:${state.cityId}`]=data;renderTeam(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить команду",err.message,"team")}}
 function renderTeam(data){const root=$("teamRoot"),items=data.items||[];root.innerHTML=`<div class="toolbar"><input class="input search" id="teamSearch" placeholder="Поиск сотрудника" value="${esc(state.teamQuery)}"><div class="filters">${roleScope()?badge("active","Только скауты"):[["","Все роли"],["Скаут","Скауты"],["Водитель","Водители"],["Чарджер","Чарджеры"]].map(([v,l])=>`<button class="chip ${state.teamRole===v?"active":""}" data-team-role="${v}">${l}</button>`).join("")}</div></div>${items.length?`<div class="desktop-table table-wrap"><table class="data-table"><thead><tr><th>Сотрудник</th><th>Статус</th><th>Смены</th><th>Часы</th><th>Действия</th><th>Действий/час</th></tr></thead><tbody>${items.map(e=>`<tr class="clickable" data-employee="${Number(e.user_id)}"><td><div class="person-line"><div class="initial">${esc(initials(e.name))}</div><div><b>${esc(e.name)}</b><div class="row-meta">${esc(e.role)}</div></div></div></td><td>${badge(e.on_lunch?"seen":e.has_open_shift?"active":"",e.on_lunch?"Обед":e.has_open_shift?"На смене":"Не на смене")}</td><td>${fmtNum(e.shifts)}</td><td>${fmtMinutes(e.worked_minutes)}</td><td>${fmtNum(e.actions_total)}</td><td>${e.actions_per_hour==null?"—":esc(e.actions_per_hour)}</td></tr>`).join("")}</tbody></table></div><div class="mobile-cards">${items.map(e=>`<div class="row-card clickable" data-employee="${Number(e.user_id)}"><div class="person-line"><div class="initial">${esc(initials(e.name))}</div><div class="row-main"><div class="row-title">${esc(e.name)}</div><div class="row-meta">${esc(e.role)} · ${e.shifts} смен · ${fmtMinutes(e.worked_minutes)}</div></div></div><div class="row-side">${badge(e.has_open_shift?"active":"",e.on_lunch?"Обед":e.has_open_shift?"На смене":"Не на смене")}<span>${fmtNum(e.actions_total)} действ.</span></div></div>`).join("")}</div>`:stateBlock("Сотрудники не найдены","Измените поиск или проверьте выбранный город.")}`;const search=$("teamSearch");let timer;search.oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{state.teamQuery=search.value.trim();loadTeam()},350)};$$('[data-team-role]',root).forEach(b=>b.onclick=()=>{state.teamRole=b.dataset.teamRole;loadTeam()});wireCommon(root)}
-async function openEmployee(userId){openDetail("Карточка сотрудника",loadingCards());try{const today=new Date(),from=isoDate(new Date(today.getFullYear(),today.getMonth()-1,today.getDate())),to=isoDate(today),data=await request(`${API.employees}/${userId}`+query({city_id:state.cityId,from,to})),e=data.employee||{},t=data.totals||{},shifts=data.shifts||[];$("detailTitle").textContent=e.name||"Сотрудник";$("detailRoot").innerHTML=`<div class="row-card"><div class="person-line"><div class="initial" style="width:48px;height:48px">${esc(initials(e.name))}</div><div><div class="row-title">${esc(e.name)}</div><div class="row-meta">${esc(e.role)} · Telegram ID ${Number(e.user_id)}</div></div></div></div><div class="kpi-grid" style="margin-top:12px"><div class="kpi"><div class="kpi-label">Смены</div><div class="kpi-value">${fmtNum(t.shifts)}</div></div><div class="kpi"><div class="kpi-label">Часы</div><div class="kpi-value">${fmtMinutes(t.worked_minutes)}</div></div><div class="kpi"><div class="kpi-label">Действия</div><div class="kpi-value">${fmtNum(t.actions)}</div></div><div class="kpi"><div class="kpi-label">Действий/час</div><div class="kpi-value">${t.actions_per_hour==null?"—":esc(t.actions_per_hour)}</div><div class="kpi-sub">сравнивать только внутри роли</div></div></div><div class="day-section"><div class="day-section-head"><b>Последние смены</b><span>${shifts.length}</span></div>${renderShiftHistory(shifts)}</div>`}catch(err){$("detailRoot").innerHTML=stateBlock("Не удалось открыть сотрудника",err.message)}}
+async function openEmployee(userId){openDetail("Карточка сотрудника",loadingCards());try{const today=new Date(),from=isoDate(new Date(today.getFullYear(),today.getMonth()-1,today.getDate())),to=isoDate(today),data=await request(`${API.employees}/${userId}`+query({city_id:state.cityId,from,to})),e=data.employee||{},t=data.totals||{},shifts=data.shifts||[];$("detailTitle").textContent=e.name||"Сотрудник";$("detailRoot").innerHTML=`<div class="row-card"><div class="person-line"><div class="initial" style="width:48px;height:48px">${esc(initials(e.name))}</div><div><div class="row-title">${esc(e.name)}</div><div class="row-meta">${esc(e.role)} · Telegram ID ${Number(e.user_id)}</div></div></div></div>${canWrite()?'<div class="quick-actions"><button class="btn btn-secondary" id="employeePlanButton">Назначить смену</button><button class="btn btn-primary" id="employeeTaskButton">Создать задание</button></div>':''}<div class="kpi-grid" style="margin-top:12px"><div class="kpi"><div class="kpi-label">Смены</div><div class="kpi-value">${fmtNum(t.shifts)}</div></div><div class="kpi"><div class="kpi-label">Часы</div><div class="kpi-value">${fmtMinutes(t.worked_minutes)}</div></div><div class="kpi"><div class="kpi-label">Действия</div><div class="kpi-value">${fmtNum(t.actions)}</div></div><div class="kpi"><div class="kpi-label">Действий/час</div><div class="kpi-value">${t.actions_per_hour==null?"—":esc(t.actions_per_hour)}</div><div class="kpi-sub">сравнивать только внутри роли</div></div></div><div class="day-section"><div class="day-section-head"><b>Последние смены</b><span>${shifts.length}</span></div>${renderShiftHistory(shifts)}</div>`;const plan=$('employeePlanButton'),task=$('employeeTaskButton');if(plan)plan.onclick=()=>{closeModal('detailModal');openPlanModal(isoDate(new Date()),userId)};if(task)task.onclick=()=>{closeModal('detailModal');openTaskModal(isoDate(new Date()),null,userId)}}catch(err){$("detailRoot").innerHTML=stateBlock("Не удалось открыть сотрудника",err.message)}}
 function renderShiftHistory(items){if(!items.length)return stateBlock("Смен нет","За выбранный период смены не найдены.");return `<div class="list">${items.slice(0,30).map(s=>`<div class="row-card"><div><div class="row-title">${fmtDate(s.date)} · ${esc(s.start_time||"—")}–${esc(s.end_time||"…")}</div><div class="row-meta">${esc(s.district||"район не указан")} · ${fmtNum(s.actions_total)} действий</div></div><div class="row-side"><b>${fmtMinutes(s.worked_minutes)}</b><span>${esc(s.source)}</span></div></div>`).join("")}</div>`}
 
-async function loadControl(){const root=$("controlRoot");root.innerHTML=loadingCards();try{const data=await withSeq("control",()=>request(API.quality+query({city_id:state.cityId})));state.cache[`control:${state.cityId}`]=data;renderControl(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить контроль",err.message,"control")}}
 function issueText(issue){const labels={long_open_shift:["Длинная открытая смена","Открыта больше 14 часов"],missing_start_at:["Нет точного начала","Нужно проверить данные смены"],missing_end_at:["Нет точного окончания","Закрытая смена требует проверки"],unknown_role:["Неизвестная роль","Роль не соответствует настройкам города"],manual_report_waiting:["Ручной отчёт","Ожидает проверки руководителем"],attachment_missing:["Фото недоступно","Файл задания отсутствует в хранилище"]};return labels[issue.type]||[issue.type,"Событие качества данных"]}
 function renderIssueCards(items){if(!items||!items.length)return stateBlock("Всё спокойно","Проверяемых событий за период нет.");return `<div class="list">${items.map(issue=>{const [title,sub]=issueText(issue),shift=issue.shift||{};return `<div class="row-card"><div><div class="row-title">${esc(title)}</div><div class="row-meta">${esc(shift.name||issue.report?.sender_name||sub)}${shift.shift_id?` · смена #${shift.shift_id}`:""}</div></div><div>${badge(issue.severity,issue.severity==="high"?"Важно":"Проверить")}</div></div>`}).join("")}</div>`}
-function renderControl(data){const root=$("controlRoot"),items=data.items||[],counts=data.counts||{};root.innerHTML=`<div class="kpi-grid">${Object.entries(counts).slice(0,4).map(([type,count])=>`<div class="kpi"><div class="kpi-label">${esc(issueText({type})[0])}</div><div class="kpi-value">${fmtNum(count)}</div><div class="kpi-sub">реальных записей</div></div>`).join("")}</div><div class="card"><div class="card-head"><div><h3>Очередь проверки</h3><p>События формируются из фактических данных</p></div></div>${renderIssueCards(items)}</div>`}
 
-async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const data=await withSeq("more",()=>request(API.trends+query({city_id:state.cityId})));state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Аналитика пока недоступна",err.message,"more")}}
-function renderMore(data){const root=$("moreRoot"),series=data.series||[],max=Math.max(1,...series.map(x=>n(x.actions)));root.innerHTML=`<div class="card"><div class="card-head"><div><h3>Действия по дням</h3><p>${fmtDate(data.range?.from)} — ${fmtDate(data.range?.to)} · только реальные данные</p></div></div>${series.length?`<div class="stack">${series.map(x=>`<div class="role-row"><div><b>${fmtDate(x.date,{day:"numeric",month:"short"})}</b><span>${fmtMinutes(x.worked_minutes)} · ${fmtNum(x.employees)} чел.</span></div><div class="role-numbers" style="min-width:45%"><strong>${fmtNum(x.actions)}</strong><div class="progress"><i style="width:${Math.round(n(x.actions)*100/max)}%"></i></div></div></div>`).join("")}</div>`:stateBlock("Данных нет","За период действия не найдены.")}</div><div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Отчёты</h3><p>Выгрузки появятся после подключения серверного экспорта</p></div></div>${stateBlock("Экспорт ещё не подключён","CRM не показывает неработающие кнопки и не имитирует скачивание.")}</div>`}
+async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const results=await withSeq("more",()=>Promise.allSettled([request(API.trends+query({city_id:state.cityId})),request(API.quality+query({city_id:state.cityId}))])),data={trends:valueOf(results[0]),quality:valueOf(results[1])};state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Раздел пока недоступен",err.message,"more")}}
+function renderMore(data){const root=$("moreRoot"),trend=data.trends||{},quality=data.quality||{},series=trend.series||[],max=Math.max(1,...series.map(x=>n(x.actions))),issues=quality.items||[],counts=quality.counts||{};root.innerHTML=`<div class="more-grid"><div class="card"><div class="card-head"><div><h3>Качество данных</h3><p>Реальные события, требующие проверки</p></div><span class="badge ${issues.length?'danger':'active'}">${issues.length}</span></div>${Object.keys(counts).length?`<div class="filters" style="margin-bottom:12px">${Object.entries(counts).filter(([,count])=>n(count)>0).map(([type,count])=>`<span class="badge">${esc(issueText({type})[0])}: ${fmtNum(count)}</span>`).join('')}</div>`:''}${renderIssueCards(issues)}</div><div class="card"><div class="card-head"><div><h3>Действия по дням</h3><p>${fmtDate(trend.range?.from)} — ${fmtDate(trend.range?.to)}</p></div></div>${series.length?`<div class="stack">${series.map(x=>`<div class="role-row"><div><b>${fmtDate(x.date,{day:"numeric",month:"short"})}</b><span>${fmtMinutes(x.worked_minutes)} · ${fmtNum(x.employees)} чел.</span></div><div class="role-numbers" style="min-width:45%"><strong>${fmtNum(x.actions)}</strong><div class="progress"><i style="width:${Math.round(n(x.actions)*100/max)}%"></i></div></div></div>`).join("")}</div>`:stateBlock("Данных нет","За период действия не найдены.")}</div><div class="card"><div class="card-head"><div><h3>Отчёты</h3><p>Только реально подключённые возможности</p></div></div>${stateBlock("Экспорт готовится","Неработающие кнопки скачивания не показываются.")}</div><div class="card"><div class="card-head"><div><h3>Доступ</h3><p>${esc(ROLE_LABELS[state.context?.role]||state.context?.role||'Администратор')} · ${esc(selectedCity()?.name||'')}</p></div></div><div class="stack"><button class="more-item" id="moreEmployeeApp">${icon('i-today')}Вернуться к моей смене</button><button class="more-item" id="moreFullscreen">${icon('i-fullscreen')}Открыть на весь экран</button><button class="more-item" id="moreLogout">${icon('i-close')}Выйти из CRM</button></div></div></div>`;const back=$('moreEmployeeApp'),full=$('moreFullscreen'),out=$('moreLogout');if(back)back.onclick=()=>location.href='/';if(full)full.onclick=requestFullscreen;if(out)out.onclick=()=>logout()}
 
 function openDetail(title,html){$("detailTitle").textContent=title;$("detailRoot").innerHTML=html;$("detailModal").classList.add("open")}
 function closeModal(id){$(id).classList.remove("open")}
 function openMore(){$("moreSheet").classList.add("open")}
 function closeMore(){$("moreSheet").classList.remove("open")}
+async function requestFullscreen(){
+  try{if(tg&&tg.requestFullscreen){tg.requestFullscreen();return}}catch(_){}
+  try{if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else toast('Полный экран недоступен в этом браузере.')}catch(_){toast('Telegram не разрешил полноэкранный режим.')}
+}
 function wireCommon(root){
-  $$('[data-go]',root).forEach(b=>b.onclick=()=>setRoute(b.dataset.go));$$('[data-create-task]',root).forEach(b=>b.onclick=()=>openTaskModal(state.selectedDate||isoDate(new Date())));$$('[data-task]',root).forEach(b=>b.onclick=()=>openTaskDetail(Number(b.dataset.task)));$$('[data-employee]',root).forEach(b=>b.onclick=()=>openEmployee(Number(b.dataset.employee)));$$('[data-retry]',root).forEach(b=>b.onclick=()=>loadRoute(b.dataset.retry))
+  $$('[data-go]',root).forEach(b=>b.onclick=()=>setRoute(b.dataset.go));$$('[data-create-task]',root).forEach(b=>b.onclick=()=>openTaskModal(state.route==='calendar'?state.selectedDate:state.taskDate));$$('[data-task]',root).forEach(b=>b.onclick=()=>openTaskDetail(Number(b.dataset.task)));$$('[data-employee]',root).forEach(b=>b.onclick=()=>openEmployee(Number(b.dataset.employee)));$$('[data-retry]',root).forEach(b=>b.onclick=()=>loadRoute(b.dataset.retry))
 }
 
 $("loginForm").addEventListener("submit",login);$("logoutButton").onclick=()=>logout();$("mobileLogout").onclick=()=>logout();$("employeeAppButton").onclick=()=>location.href="/";$("mobileEmployeeApp").onclick=()=>location.href="/";
-$$('[data-route]').forEach(b=>b.onclick=()=>setRoute(b.dataset.route));$("mobileMoreButton").onclick=openMore;$("moreSheet").onclick=e=>{if(e.target===$("moreSheet"))closeMore()};
-$("scopeSelect").onchange=()=>{state.cityId=Number($("scopeSelect").value);state.cache={};state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());loadRoute()};
-$("refreshButton").onclick=()=>{delete state.cache[`${state.route}:${state.cityId}`];loadRoute()};$("staleRetry").onclick=()=>loadRoute();
+$$('[data-route]').forEach(b=>b.onclick=()=>setRoute(b.dataset.route));$("mobileMoreButton").onclick=()=>setRoute('more');$("moreSheet").onclick=e=>{if(e.target===$("moreSheet"))closeMore()};
+$("scopeSelect").onchange=()=>{state.cityId=Number($("scopeSelect").value);state.cache={};state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());updateDistrictSuggestions();loadRoute()};
+$("refreshButton").onclick=()=>{delete state.cache[`${state.route}:${state.cityId}`];loadRoute()};$("fullscreenButton").onclick=requestFullscreen;$("staleRetry").onclick=()=>loadRoute();
 $$('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));$$('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)closeModal(m.id)});
 $("planForm").addEventListener("submit",createPlan);$("taskForm").addEventListener("submit",createTask);$("taskPhotos").onchange=selectTaskFiles;$("taskRole").onchange=refreshAssigneePreview;
 $$('#planSegment button').forEach(b=>b.onclick=()=>{$$('#planSegment button').forEach(x=>x.classList.toggle("active",x===b));if(b.dataset.value==="day"){$("planStart").value="08:00";$("planEnd").value="18:00"}else{$("planStart").value="20:00";$("planEnd").value="05:00"}});
 $$('#taskTargetMode button').forEach(b=>b.onclick=()=>toggleTargetMode(b.dataset.value));
+$$('#taskCompletion button').forEach(b=>b.onclick=()=>{state.taskCompletion=b.dataset.value;$$('#taskCompletion button').forEach(x=>x.classList.toggle('active',x===b))});
+$$('#planMode button').forEach(b=>b.onclick=()=>setPlanMode(b.dataset.value));
+$$('#batchPattern button').forEach(b=>b.onclick=()=>{state.batchWork=Number(b.dataset.work);state.batchRest=Number(b.dataset.rest);$$('#batchPattern button').forEach(x=>x.classList.toggle('active',x===b));updateBatchPreview()});
+$$('#batchDecadePreset button').forEach(b=>b.onclick=()=>setBatchDecade(Number(b.dataset.decade)));
+$('batchFrom').onchange=()=>{$$('#batchDecadePreset button').forEach(b=>b.classList.remove('active'));updateBatchPreview()};$('batchTo').onchange=()=>{$$('#batchDecadePreset button').forEach(b=>b.classList.remove('active'));updateBatchPreview()};
 window.addEventListener("online",()=>{state.online=true;paintConnectivity();loadRoute()});window.addEventListener("offline",()=>{state.online=false;paintConnectivity()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){$$('.modal-backdrop.open').forEach(m=>closeModal(m.id));closeMore()}});
 restoreSession();

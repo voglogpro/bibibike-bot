@@ -5057,6 +5057,46 @@ async def _admin_account(uid):
     return account
 
 
+async def _password_crm_account(uid):
+    """Grant password holders CRM access scoped to the city in their profile."""
+    account = await _admin_account(uid)
+    if account and (account["role"] == "network_admin" or account["city_ids"]):
+        return account, None
+
+    user = await get_user(uid)
+    city = get_city((user or {}).get("city_id"))
+    if not city:
+        return None, (
+            "admin_city",
+            "Сначала зарегистрируйтесь в приложении и выберите свой город.",
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        if account:
+            # Keep explicitly assigned roles, only repair a missing city binding.
+            await db.execute(
+                "INSERT OR IGNORE INTO admin_city_permissions (user_id,city_id) VALUES (?,?)",
+                (uid, city["id"]),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,"
+                "created_at,updated_at) VALUES (?,'city_manager',NULL,1,1,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET role='city_manager',role_scope=NULL,is_active=1,"
+                "session_version=admin_accounts.session_version+1,updated_at=excluded.updated_at",
+                (uid, now_iso, now_iso),
+            )
+            await db.execute("DELETE FROM admin_city_permissions WHERE user_id=?", (uid,))
+            await db.execute(
+                "INSERT INTO admin_city_permissions (user_id,city_id) VALUES (?,?)",
+                (uid, city["id"]),
+            )
+        await db.commit()
+    logger.info("CRM доступ по паролю выдан: uid=%s город=%s", uid, city["name"])
+    return await _admin_account(uid), None
+
+
 async def _admin_city(uid, bind_if_missing=False):
     """Совместимый город старой админки, выбранный только из явных CRM-прав."""
     account = await _admin_account(uid)
@@ -5128,12 +5168,10 @@ async def api_admin_login(request):
         failures.append(now_ts)
         _admin_login_failures[uid] = failures
         return web.json_response({"error": "password", "message": "Неверный пароль."}, status=403)
-    account = await _admin_account(uid)
-    if not account:
-        return web.json_response(
-            {"error": "admin_access", "message": "Доступ администратора не выдан."},
-            status=403,
-        )
+    account, access_error = await _password_crm_account(uid)
+    if access_error is not None:
+        error_code, message = access_error
+        return web.json_response({"error": error_code, "message": message}, status=409)
     city = await _admin_city(uid)
     if not city:
         return web.json_response(

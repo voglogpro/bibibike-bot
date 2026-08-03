@@ -146,6 +146,24 @@ async def run():
     # Login/context используют явный account, а не старую admin_city_access.
     login = await bot.api_admin_login(Request(900001, body={"password": "test-admin-password"}))
     assert login.status == 200 and payload(login)["role"] == "network_admin"
+    password_login = await bot.api_admin_login(Request(
+        910001, body={"password": "test-admin-password"},
+    ))
+    password_payload = payload(password_login)
+    assert password_login.status == 200
+    assert password_payload["role"] == "city_manager"
+    assert [item["id"] for item in password_payload["cities"]] == [city["id"]]
+    password_token = password_payload["token"]
+    password_context = await bot.api_crm_context(Request(910001, admin_token=password_token))
+    assert password_context.status == 200
+    password_denied_city = await bot.api_crm_overview(Request(
+        910001, query={"city_id": str(other_city["id"])}, admin_token=password_token,
+    ))
+    assert password_denied_city.status == 403
+    unregistered_login = await bot.api_admin_login(Request(
+        919999, body={"password": "test-admin-password"},
+    ))
+    assert unregistered_login.status == 409
     context = await bot.api_crm_context(Request(900002, admin_token=scout_token))
     assert context.status == 200 and payload(context)["role_scope"] == "Скаут"
 

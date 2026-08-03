@@ -191,7 +191,6 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if(tg){
   try{tg.ready();tg.expand();}catch(_){}
-  try{ if(tg.requestFullscreen) tg.requestFullscreen(); }catch(_){}
 }
 const initData = tg ? tg.initData : "";
 const $ = id => document.getElementById(id);
@@ -520,8 +519,21 @@ function closeModal(id){$(id).classList.remove("open")}
 function openMore(){$("moreSheet").classList.add("open")}
 function closeMore(){$("moreSheet").classList.remove("open")}
 async function requestFullscreen(){
-  try{if(tg&&tg.requestFullscreen){tg.requestFullscreen();return}}catch(_){}
-  try{if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else toast('Полный экран недоступен в этом браузере.')}catch(_){toast('Telegram не разрешил полноэкранный режим.')}
+  const root=document.documentElement,isDesktop=window.matchMedia('(min-width: 769px)').matches;
+  try{if(document.fullscreenElement){await document.exitFullscreen();toast('Обычный режим.');return}}catch(_){}
+  if(isDesktop&&root.requestFullscreen){
+    try{await root.requestFullscreen({navigationUI:'hide'});toast('Полноэкранный режим включён.');return}catch(_){}
+  }
+  try{
+    if(tg){
+      if(tg.expand)tg.expand();
+      if(tg.requestFullscreen){tg.requestFullscreen();setTimeout(()=>{if(!tg.isFullscreen&&!document.fullscreenElement)toast('Telegram не включил полный экран. Обновите Telegram Desktop.')},900);return}
+    }
+  }catch(_){}
+  if(root.requestFullscreen){
+    try{await root.requestFullscreen({navigationUI:'hide'});toast('Полноэкранный режим включён.');return}catch(_){}
+  }
+  toast('Полный экран недоступен. Обновите Telegram Desktop или откройте CRM в браузере.')
 }
 function wireCommon(root){
   $$('[data-go]',root).forEach(b=>b.onclick=()=>setRoute(b.dataset.go));$$('[data-create-task]',root).forEach(b=>b.onclick=()=>openTaskModal(state.route==='calendar'?state.selectedDate:state.taskDate));$$('[data-task]',root).forEach(b=>b.onclick=()=>openTaskDetail(Number(b.dataset.task)));$$('[data-employee]',root).forEach(b=>b.onclick=()=>openEmployee(Number(b.dataset.employee)));$$('[data-retry]',root).forEach(b=>b.onclick=()=>loadRoute(b.dataset.retry))

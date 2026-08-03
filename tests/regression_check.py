@@ -118,6 +118,51 @@ async def check_configuration_and_routing():
     assert not await work_filter(charger_other)
     assert bot.topic_parser_kind(charger, 4) == "npb"
 
+    stavropol = next(
+        city for city in bot.CITIES_BY_ID.values() if city["city_key"] == "stavropol"
+    )
+    stavropol_scout = bot.get_city_by_group(bot.STAVROPOL_SCOUTS_GROUP_ID)
+    stavropol_transport = bot.get_city_by_group(bot.STAVROPOL_TRANSPORT_GROUP_ID)
+    assert stavropol_scout and stavropol_scout["role_group"] == "Скаут"
+    assert stavropol_transport and set(stavropol_transport["role_groups"]) == {
+        "Водитель", "Чарджер",
+    }
+    assert bot.city_for_role(stavropol["id"], "Водитель")["group_id"] == \
+        bot.STAVROPOL_TRANSPORT_GROUP_ID
+    assert bot.city_for_role(stavropol["id"], "Чарджер")["group_id"] == \
+        bot.STAVROPOL_TRANSPORT_GROUP_ID
+    assert bot.report_city_for_role(stavropol["id"], "Скаут")["group_id"] == \
+        bot.STAVROPOL_GROUP_ID
+    assert set(bot.city_supported_roles(stavropol["id"])) == {
+        "Скаут", "Водитель", "Чарджер",
+    }
+
+    stavropol_report = FakeMessage(2, bot.STAVROPOL_GROUP_ID, None, 10, "/10:00")
+    stavropol_scout_work = FakeMessage(
+        2, bot.STAVROPOL_SCOUTS_GROUP_ID, bot.STAVROPOL_SCOUTS_TOPIC_WORK,
+        11, "переместил 0001",
+    )
+    stavropol_driver_work = FakeMessage(
+        2, bot.STAVROPOL_TRANSPORT_GROUP_ID, bot.STAVROPOL_DRIVERS_TOPIC_WORK,
+        12, "переместил 0002",
+    )
+    stavropol_battery = FakeMessage(
+        2, bot.STAVROPOL_TRANSPORT_GROUP_ID, bot.STAVROPOL_CHARGERS_TOPIC_BATTERY,
+        13, "0003 0004",
+    )
+    stavropol_other = FakeMessage(2, bot.STAVROPOL_TRANSPORT_GROUP_ID, 99, 14, "0005")
+    assert await reports_filter(stavropol_report)
+    assert not await work_filter(stavropol_report)
+    assert await work_filter(stavropol_scout_work)
+    assert await work_filter(stavropol_driver_work)
+    assert await work_filter(stavropol_battery)
+    assert not await work_filter(stavropol_other)
+    assert bot.topic_parser_kind(stavropol_scout, bot.STAVROPOL_SCOUTS_TOPIC_WORK) == "tasks"
+    assert bot.topic_parser_kind(stavropol_transport, bot.STAVROPOL_DRIVERS_TOPIC_WORK) == "tasks"
+    assert bot.topic_parser_kind(
+        stavropol_transport, bot.STAVROPOL_CHARGERS_TOPIC_BATTERY,
+    ) == "npb"
+
 
 async def check_database_and_message_burst():
     driver = bot.get_city_by_group(bot.KHIMKI_DRIVERS_GROUP_ID)
@@ -180,6 +225,36 @@ async def check_database_and_message_burst():
         assert action_rows == 26, action_rows
 
 
+async def check_stavropol_processing():
+    transport = bot.get_city_by_group(bot.STAVROPOL_TRANSPORT_GROUP_ID)
+    bot.schedule_report_update = lambda _shift_id: None
+
+    driver_uid = 930001
+    driver_shift = await insert_shift(driver_uid, transport, "Водитель")
+    driver_message = FakeMessage(
+        driver_uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7001, "переместил 5100 5101",
+    )
+    await bot.process_work_message(driver_message, transport)
+    wrong_battery = FakeMessage(
+        driver_uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_CHARGERS_TOPIC_BATTERY, 7002, "5102 5103",
+    )
+    await bot.process_work_message(wrong_battery, transport, npb=True)
+    driver_stats = await bot.get_stats(driver_shift)
+    assert driver_stats["move"] == 2 and driver_stats["battery"] == 0, driver_stats
+
+    charger_uid = 930002
+    charger_shift = await insert_shift(charger_uid, transport, "Чарджер")
+    charger_message = FakeMessage(
+        charger_uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_CHARGERS_TOPIC_BATTERY, 7003, "5200 5201",
+    )
+    await bot.process_work_message(charger_message, transport, npb=True)
+    charger_stats = await bot.get_stats(charger_shift)
+    assert charger_stats["battery"] == 2, charger_stats
+
+
 async def check_report_rendering():
     city = bot.get_city_by_group(bot.KHIMKI_CHARGERS_GROUP_ID)
     shift = {
@@ -209,6 +284,7 @@ async def main():
         await bot.init_db()
         check_parsers()
         await check_configuration_and_routing()
+        await check_stavropol_processing()
         await check_database_and_message_burst()
         await check_report_rendering()
         print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report")

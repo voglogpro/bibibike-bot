@@ -95,12 +95,22 @@ NO_TOPIC = -1
 # message_thread_id=None. В базе храним 0, чтобы отличать от «темы нет совсем».
 GENERAL_TOPIC = 0
 
-# --- Ставрополь: одна обычная группа БЕЗ тем ---
-# web.telegram.org/k/#-4456873256 -> Bot API chat_id -1004456873256.
+# --- Ставрополь: общая группа отчётов + отдельные рабочие группы по ролям ---
+# Общая группа отчётов (ранее: web.telegram.org/k/#-4456873256).
 STAVROPOL_GROUP_ID      = -1004456873256
 STAVROPOL_TOPIC_TASKS   = NO_TOPIC
 STAVROPOL_TOPIC_NPB     = NO_TOPIC
 STAVROPOL_TOPIC_REPORTS = NO_TOPIC
+
+# Скауты: t.me/c/3930962000/3 — обычный парсер по словам, как в Краснодаре.
+STAVROPOL_SCOUTS_GROUP_ID    = -1003930962000
+STAVROPOL_SCOUTS_TOPIC_WORK  = 3
+
+# Водители и чарджеры находятся в одной форумной группе t.me/c/3944046511.
+# Тема 2 — действия водителей по словам; тема 4 — голые номера замен АКБ.
+STAVROPOL_TRANSPORT_GROUP_ID     = -1003944046511
+STAVROPOL_DRIVERS_TOPIC_WORK     = 2
+STAVROPOL_CHARGERS_TOPIC_BATTERY = 4
 
 # --- Красная Поляна: одна группа с отдельными темами ---
 POLYANA_GROUP_ID        = -1002866630249   # t.me/c/2866630249
@@ -159,6 +169,14 @@ BARE_REPAIR_TOPICS = {
 # Тема оклейки скаутов: 4-значный номер + слово об оклейке.
 STICKER_TOPICS = {
     KHIMKI_SCOUTS_GROUP_ID: (KHIMKI_SCOUTS_TOPIC_STICKER,),
+}
+
+# Одна Telegram-группа может обслуживать несколько ролей в разных темах.
+# Здесь фиксируем ожидаемую роль для каждой рабочей темы.
+WORK_TOPIC_ROLES = {
+    (STAVROPOL_SCOUTS_GROUP_ID, STAVROPOL_SCOUTS_TOPIC_WORK): "Скаут",
+    (STAVROPOL_TRANSPORT_GROUP_ID, STAVROPOL_DRIVERS_TOPIC_WORK): "Водитель",
+    (STAVROPOL_TRANSPORT_GROUP_ID, STAVROPOL_CHARGERS_TOPIC_BATTERY): "Чарджер",
 }
 
 # === НОВОЕ: живое сообщение обновляется не чаще, чем раз в N секунд ===
@@ -329,7 +347,7 @@ def _configured_cities():
         "topic_reports": CHAT2_THREAD_ID,
         "timezone_offset": 3,
     }, {
-        # Ставрополь — работает на заглушках, впиши реальные ID выше
+        # Ставрополь: эта базовая группа принимает живые отчёты всех ролей.
         "key": "stavropol",
         "name": "Ставрополь",
         "group_id": STAVROPOL_GROUP_ID,
@@ -337,6 +355,25 @@ def _configured_cities():
         "topic_npb": STAVROPOL_TOPIC_NPB,
         "topic_reports": STAVROPOL_TOPIC_REPORTS,
         "timezone_offset": 3,
+        "role_groups": [
+            {
+                "role": "Скаут",
+                "group_id": STAVROPOL_SCOUTS_GROUP_ID,
+                "topic_tasks": STAVROPOL_SCOUTS_TOPIC_WORK,
+                "topic_moves": None,
+                "topic_npb": NO_TOPIC,
+                "topic_reports": NO_TOPIC,
+            },
+            {
+                # Одна группа, две роли: маршрутизация уточняется номером темы.
+                "role": "Водитель|Чарджер",
+                "group_id": STAVROPOL_TRANSPORT_GROUP_ID,
+                "topic_tasks": STAVROPOL_DRIVERS_TOPIC_WORK,
+                "topic_moves": None,
+                "topic_npb": STAVROPOL_CHARGERS_TOPIC_BATTERY,
+                "topic_reports": NO_TOPIC,
+            },
+        ],
     }, {
         # Красная Поляна — работает на заглушках, впиши реальные ID выше
         "key": "krasnaya_polyana",
@@ -451,15 +488,18 @@ async def refresh_cities_cache(db=None):
             # (тот же city["id"]!), но с group_id и темами этой группы.
             # Благодаря общему city_id вся статистика города остаётся единой.
             for rg in roles_by_city.get(city_id, []):
+                roles = [item.strip() for item in str(rg["role"] or "").split("|") if item.strip()]
                 variant = dict(city)
                 variant["group_id"] = rg["group_id"]
                 variant["topic_tasks"] = rg["topic_tasks"]
                 variant["topic_npb"] = rg["topic_npb"]
                 variant["topic_moves"] = rg["topic_moves"]
                 variant["topic_reports"] = rg["topic_reports"]
-                variant["role_group"] = rg["role"]
+                variant["role_groups"] = roles
+                variant["role_group"] = roles[0] if len(roles) == 1 else None
                 CITIES_BY_GROUP[rg["group_id"]] = variant
-                CITY_ROLE_GROUPS.setdefault(city_id, {})[_norm_role(rg["role"])] = variant
+                for role in roles:
+                    CITY_ROLE_GROUPS.setdefault(city_id, {})[_norm_role(role)] = variant
     finally:
         if own_connection:
             await db.close()
@@ -480,12 +520,17 @@ def _city_key(city):
 
 def _is_single_chat_city(city):
     """Город без тем: управление сменой, отчёт и действия в одном чате."""
-    return _city_key(city) == "stavropol"
+    return _city_key(city) == "stavropol" and not city_role_groups(city.get("id"))
 
 
 def _uses_strict_work_topics(city):
     """Города, где парсер слушает только явно указанные рабочие темы."""
-    return bool((city or {}).get("role_group")) or _city_key(city) == "krasnaya_polyana"
+    return (
+        bool((city or {}).get("role_group"))
+        or bool((city or {}).get("role_groups"))
+        or bool(city_role_groups((city or {}).get("id")))
+        or _city_key(city) == "krasnaya_polyana"
+    )
 
 
 def _telegram_thread_id(value):
@@ -530,7 +575,20 @@ def city_requires_role(city_id):
 def city_supported_roles(city_id):
     """Роли, для которых в городе есть группа (для понятной ошибки)."""
     groups = city_role_groups(city_id)
-    return [variant.get("role_group") for variant in groups.values()]
+    result = []
+    for variant in groups.values():
+        for role in variant.get("role_groups") or [variant.get("role_group")]:
+            if role and role not in result:
+                result.append(role)
+    return result
+
+
+def report_city_for_role(city_id, role):
+    """Destination for live reports; Stavropol uses one shared report group."""
+    city = get_city(city_id)
+    if city and _city_key(city) == "stavropol":
+        return city
+    return city_for_role(city_id, role)
 
 
 def get_city_by_group(group_id):
@@ -3290,7 +3348,7 @@ async def _update_report_message_locked(shift_id, force_new=False):
         return
     # Группа выбирается по роли сотрудника: в городах с ролевыми группами
     # (Химки) смена скаута уходит в группу скаутов, водителя — в водительскую.
-    city = city_for_role(shift.get("city_id"), shift.get("role"))
+    city = report_city_for_role(shift.get("city_id"), shift.get("role"))
     if not city:
         logger.error(f"Не найден город смены {shift_id}")
         return
@@ -3433,7 +3491,10 @@ class CityTopicFilter(BaseFilter):
             # команды/ручное начало смены и обычные рабочие действия.
             matches = True
         elif self.topic_kind == "reports":
-            matches = route_thread_id == city["topic_reports"]
+            matches = (
+                thread_id is None if city["topic_reports"] == NO_TOPIC
+                else route_thread_id == city["topic_reports"]
+            )
         elif _uses_strict_work_topics(city):
             # В Химках и Красной Поляне не читаем General, штрафы, срочные
             # задачи и остальные темы. Только явно настроенные рабочие темы.
@@ -3529,7 +3590,9 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                 message.message_id,
             )
         return
-    expected_role = city.get("role_group")
+    expected_role = WORK_TOPIC_ROLES.get(
+        (chat_id, message.message_thread_id), city.get("role_group")
+    )
     if expected_role and _norm_role(shift.get("role")) != _norm_role(expected_role):
         logger.info(
             "ПРОПУЩЕНО: роль смены не совпадает с группой. uid=%s город=%s "
@@ -4679,7 +4742,7 @@ async def api_shift_delete(request):
     # 1) Удаляем сообщение-отчёт из темы ОТЧЁТЫ (если оно ещё там)
     msg_id = shift.get("report_msg_id")
     # Группа по роли: в Химках отчёт водителя лежит в водительской группе.
-    city = city_for_role(shift.get("city_id"), shift.get("role"))
+    city = report_city_for_role(shift.get("city_id"), shift.get("role"))
     if msg_id:
         try:
             if city:

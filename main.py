@@ -38,6 +38,9 @@ import hashlib
 import base64
 import html
 import math
+import uuid
+import time
+import shutil
 import aiosqlite
 from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qsl
@@ -188,6 +191,7 @@ WEBAPP_ALLOW_ORIGIN = os.getenv("WEBAPP_ALLOW_ORIGIN", "https://voglogpro.github
 # === НОВОЕ: бот сам отдаёт страницу мини-приложения (index.html рядом с этим файлом) ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(BASE_DIR, "index.html")
+CRM_INDEX_PATH = os.path.join(BASE_DIR, "crm.html")
 
 # Краснодар = московское время (UTC+3)
 MSK = timezone(timedelta(hours=3))
@@ -195,7 +199,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-03 · чарджеры Химок темы 3/4 + надёжная серия сообщений"
+BUILD_VERSION = "2026-08-03 · CRM P0 + чарджеры Химок + надёжная серия сообщений"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -208,12 +212,25 @@ AUTO_CLOSE_GRACE_MIN = 10
 
 # Пароль админки не хранится в репозитории. Если ADMIN_PASSWORD пуст, админка
 # отключена. После проверки сервер выдаёт подписанную сессию на несколько часов.
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "123")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "").strip()
 ADMIN_SESSION_TTL_SEC = int(os.getenv("ADMIN_SESSION_TTL_SEC", str(8 * 60 * 60)))
 INIT_DATA_MAX_AGE_SEC = int(os.getenv("INIT_DATA_MAX_AGE_SEC", str(24 * 60 * 60)))
 CITY_MEMBERSHIP_TTL_SEC = int(os.getenv("CITY_MEMBERSHIP_TTL_SEC", "300"))
-# При первом успешном входе каждый администратор закрепляется за текущим
-# городом в admin_city_access. Обычные настройки профиля эту связь не меняют.
+# Telegram ID владельцев сети. Только эти ID автоматически получают роль
+# network_admin при старте. Старые самопривязанные admin_city_access намеренно
+# не повышаются: доступ к CRM всегда выдаётся явно.
+NETWORK_ADMIN_USER_IDS = {
+    int(value.strip())
+    for value in os.getenv("NETWORK_ADMIN_USER_IDS", "").split(",")
+    if value.strip().isdigit()
+}
+CRM_MAX_RANGE_DAYS = max(1, int(os.getenv("CRM_MAX_RANGE_DAYS", "366")))
+CRM_UPLOAD_MAX_FILES = max(1, min(5, int(os.getenv("CRM_UPLOAD_MAX_FILES", "5"))))
+CRM_UPLOAD_MAX_BYTES = max(
+    1024 * 1024,
+    min(10 * 1024 * 1024, int(os.getenv("CRM_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))),
+)
 
 def _webapp_button():
     """Кнопка под отчётом, открывающая мини-приложение прямо из группы.
@@ -276,6 +293,7 @@ bot = Bot(token=BOT_TOKEN)
 # [03-DATABASE] СХЕМА БАЗЫ, МИГРАЦИИ И КЭШ КОНФИГУРАЦИИ ГОРОДОВ
 # ============================================================================
 DB_PATH = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "bibibike_work.db")
+CRM_UPLOAD_DIR = os.path.join(os.getenv("DATA_DIR", BASE_DIR), "crm_uploads")
 # База лежит в постоянной папке (на BotHost это /app/data), поэтому смены,
 # зарплаты и история НЕ обнуляются при обновлении бота из GitHub.
 
@@ -676,6 +694,145 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # CRM использует явные серверные права. Старая admin_city_access
+        # оставлена только для совместимости и никогда не повышает человека
+        # автоматически до CRM-администратора.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_accounts (
+                user_id INTEGER PRIMARY KEY,
+                role TEXT NOT NULL CHECK (
+                    role IN ('city_viewer', 'city_manager', 'network_admin')
+                ),
+                role_scope TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                session_version INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_city_permissions (
+                user_id INTEGER NOT NULL,
+                city_id INTEGER NOT NULL,
+                PRIMARY KEY (user_id, city_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_user_id INTEGER NOT NULL,
+                city_id INTEGER,
+                operation TEXT NOT NULL,
+                entity_type TEXT,
+                entity_id TEXT,
+                before_json TEXT,
+                after_json TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_planned_shifts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                work_date TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                user_id INTEGER,
+                role TEXT,
+                district TEXT,
+                note TEXT,
+                status TEXT NOT NULL DEFAULT 'scheduled' CHECK (
+                    status IN ('scheduled', 'cancelled')
+                ),
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_by INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK ((user_id IS NOT NULL AND role IS NULL) OR
+                       (user_id IS NULL AND role IS NOT NULL))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                work_date TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                priority TEXT NOT NULL DEFAULT 'normal' CHECK (
+                    priority IN ('low', 'normal', 'high', 'urgent')
+                ),
+                status TEXT NOT NULL DEFAULT 'draft' CHECK (
+                    status IN ('draft', 'published', 'cancelled')
+                ),
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_by INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                published_at TEXT,
+                requires_photo INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_task_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                target_type TEXT NOT NULL CHECK (target_type IN ('user', 'role')),
+                user_id INTEGER,
+                role TEXT,
+                CHECK ((target_type = 'user' AND user_id IS NOT NULL AND role IS NULL) OR
+                       (target_type = 'role' AND user_id IS NULL AND role IS NOT NULL))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_task_assignees (
+                task_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                full_name_snap TEXT,
+                role_snap TEXT,
+                status TEXT NOT NULL DEFAULT 'assigned' CHECK (
+                    status IN ('assigned', 'seen', 'in_progress', 'submitted',
+                               'accepted', 'blocked')
+                ),
+                status_comment TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, user_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_task_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                author_user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_task_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                storage_key TEXT NOT NULL UNIQUE,
+                original_name TEXT,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'brief' CHECK (kind IN ('brief', 'result')),
+                assignee_user_id INTEGER,
+                uploaded_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_task_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                actor_user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
         # Декады — расчётные периоды админки. «Обнуление» счётчиков это старт
         # новой декады: данные смен остаются в БД, меняется только точка отсчёта.
         await db.execute("""
@@ -802,6 +959,10 @@ async def init_db():
             "ALTER TABLE manual_reports ADD COLUMN pay_type_snap TEXT",
             "ALTER TABLE manual_reports ADD COLUMN pay_amount_snap REAL",
             "ALTER TABLE work_message_links ADD COLUMN last_event_version REAL",
+            "ALTER TABLE admin_accounts ADD COLUMN role_scope TEXT",
+            "ALTER TABLE crm_tasks ADD COLUMN requires_photo INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE crm_task_attachments ADD COLUMN kind TEXT NOT NULL DEFAULT 'brief'",
+            "ALTER TABLE crm_task_attachments ADD COLUMN assignee_user_id INTEGER",
         ]:
             try:
                 await db.execute(ddl); await db.commit()
@@ -908,6 +1069,59 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_work_message_links_shift "
             "ON work_message_links(shift_id)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shifts_city_start_end "
+            "ON shifts(city_id, start_at, end_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shifts_city_role_start "
+            "ON shifts(city_id, role, start_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_actions_city_type_shift "
+            "ON actions(city_id, action_type, shift_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kpi_city_hour_user "
+            "ON kpi_snapshots(city_id, snapshot_hour, user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manual_reports_city_status_created "
+            "ON manual_reports(city_id, status, created_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_permissions_city_user "
+            "ON admin_city_permissions(city_id, user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_planned_city_date "
+            "ON crm_planned_shifts(city_id, work_date, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_tasks_city_date_status "
+            "ON crm_tasks(city_id, work_date, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_targets_task "
+            "ON crm_task_targets(task_id, target_type, user_id, role)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_assignees_user_task "
+            "ON crm_task_assignees(user_id, task_id, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_attachments_task_assignee "
+            "ON crm_task_attachments(task_id, kind, assignee_user_id)"
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for admin_uid in NETWORK_ADMIN_USER_IDS:
+            await db.execute(
+                "INSERT INTO admin_accounts (user_id, role, is_active, session_version, "
+                "created_at, updated_at) VALUES (?, 'network_admin', 1, 1, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET role='network_admin', is_active=1, "
+                "updated_at=excluded.updated_at",
+                (admin_uid, now_iso, now_iso),
+            )
         duplicate_active = await (await db.execute(
             "SELECT user_id, MAX(id) AS keep_id, COUNT(*) AS amount FROM shifts "
             "WHERE is_active = 1 GROUP BY user_id HAVING COUNT(*) > 1"
@@ -3902,7 +4116,7 @@ async def cors_mw(request, handler):
     resp.headers["Access-Control-Allow-Headers"] = (
         "Authorization, Content-Type, X-Init-Data, X-Admin-Token"
     )
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, OPTIONS"
     return resp
 
 # ============================================================================
@@ -4713,12 +4927,16 @@ async def scheduled_report_status_worker():
 # ============================================================================
 
 def _admin_key():
-    return hashlib.sha256((BOT_TOKEN + "\0" + ADMIN_PASSWORD).encode()).digest()
+    material = ADMIN_SESSION_SECRET or (BOT_TOKEN + "\0" + ADMIN_PASSWORD)
+    return hashlib.sha256(material.encode()).digest()
 
 
-def _issue_admin_token(uid):
+def _issue_admin_token(uid, session_version=1):
     expires = int(datetime.now(timezone.utc).timestamp()) + ADMIN_SESSION_TTL_SEC
-    payload = json.dumps({"uid": uid, "exp": expires}, separators=(",", ":")).encode()
+    payload = json.dumps(
+        {"uid": uid, "exp": expires, "ver": int(session_version)},
+        separators=(",", ":"),
+    ).encode()
     encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     signature = hmac.new(_admin_key(), encoded.encode(), hashlib.sha256).hexdigest()
     return f"{encoded}.{signature}", expires
@@ -4734,11 +4952,13 @@ def _verify_admin_token(token, uid):
     try:
         padding = "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
-        return payload.get("uid") == uid and int(payload.get("exp", 0)) >= int(
+        if payload.get("uid") != uid or int(payload.get("exp", 0)) < int(
             datetime.now(timezone.utc).timestamp()
-        )
+        ):
+            return None
+        return payload
     except Exception:
-        return False
+        return None
 
 
 _admin_login_failures = {}
@@ -4749,37 +4969,45 @@ async def _admin_user(request):
     if not tg_user:
         return None
     uid = tg_user["id"]
-    if not _verify_admin_token(request.headers.get("X-Admin-Token", ""), uid):
+    token_payload = _verify_admin_token(request.headers.get("X-Admin-Token", ""), uid)
+    if not token_payload:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        account = await (await db.execute(
+            "SELECT * FROM admin_accounts WHERE user_id = ? AND is_active = 1", (uid,)
+        )).fetchone()
+    if not account or int(account["session_version"] or 1) != int(token_payload.get("ver", 0)):
         return None
     return tg_user
 
 
-async def _admin_city(uid, bind_if_missing=False):
-    """Город администратора хранится отдельно и не меняется через настройки."""
+async def _admin_account(uid):
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
         row = await (await db.execute(
-            "SELECT city_id FROM admin_city_access WHERE user_id = ?", (uid,)
+            "SELECT * FROM admin_accounts WHERE user_id = ? AND is_active = 1", (uid,)
         )).fetchone()
-        if row:
-            return get_city(row[0])
-        if not bind_if_missing:
+        if not row:
             return None
-        user = await (await db.execute(
-            "SELECT city_id FROM users WHERE user_id = ?", (uid,)
-        )).fetchone()
-        city = get_city(user[0] if user else None)
-        if not city:
-            return None
-        await db.execute(
-            "INSERT OR IGNORE INTO admin_city_access (user_id, city_id, created_at) "
-            "VALUES (?, ?, ?)",
-            (uid, city["id"], datetime.now(timezone.utc).isoformat()),
-        )
-        await db.commit()
-        bound = await (await db.execute(
-            "SELECT city_id FROM admin_city_access WHERE user_id = ?", (uid,)
-        )).fetchone()
-        return get_city(bound[0] if bound else None)
+        account = dict(row)
+        permissions = await (await db.execute(
+            "SELECT city_id FROM admin_city_permissions WHERE user_id = ? ORDER BY city_id",
+            (uid,),
+        )).fetchall()
+    account["city_ids"] = [item[0] for item in permissions if get_city(item[0])]
+    return account
+
+
+async def _admin_city(uid, bind_if_missing=False):
+    """Совместимый город старой админки, выбранный только из явных CRM-прав."""
+    account = await _admin_account(uid)
+    if not account:
+        return None
+    if account["role"] != "network_admin":
+        return get_city(account["city_ids"][0]) if account["city_ids"] else None
+    user = await get_user(uid)
+    return get_city((user or {}).get("city_id")) or get_default_city()
 
 
 async def _admin_context(request):
@@ -4792,8 +5020,30 @@ async def _admin_context(request):
     if not tg_user:
         return None
     user = await get_user(tg_user["id"])
+    account = await _admin_account(tg_user["id"])
+    if not account:
+        return None
     city = await _admin_city(tg_user["id"])
-    return {"telegram_user": tg_user, "user": user or {}, "city": city}
+    return {
+        "telegram_user": tg_user,
+        "user": user or {},
+        "city": city,
+        "admin": account,
+        "allowed_city_ids": (
+            sorted(CITIES_BY_ID) if account["role"] == "network_admin"
+            else account["city_ids"]
+        ),
+    }
+
+
+def _legacy_admin_scope_error(context):
+    """Старая городская админка не умеет безопасно фильтровать по роли."""
+    if context and _crm_scope_role(context):
+        return web.json_response(
+            {"error": "admin_role_scope",
+             "message": "Для ролевого доступа используйте новую CRM."}, status=403
+        )
+    return None
 
 
 async def api_admin_login(request):
@@ -4820,22 +5070,35 @@ async def api_admin_login(request):
         failures.append(now_ts)
         _admin_login_failures[uid] = failures
         return web.json_response({"error": "password", "message": "Неверный пароль."}, status=403)
-    city = await _admin_city(uid, bind_if_missing=True)
+    account = await _admin_account(uid)
+    if not account:
+        return web.json_response(
+            {"error": "admin_access", "message": "Доступ администратора не выдан."},
+            status=403,
+        )
+    city = await _admin_city(uid)
     if not city:
         return web.json_response(
             {
                 "error": "admin_city",
-                "message": "Сначала зарегистрируйтесь и выберите свой город в настройках.",
+                "message": "Администратору не назначен доступ ни к одному городу.",
             },
             status=409,
         )
     _admin_login_failures.pop(uid, None)
-    token, expires = _issue_admin_token(uid)
+    token, expires = _issue_admin_token(uid, account["session_version"])
+    city_ids = sorted(CITIES_BY_ID) if account["role"] == "network_admin" else account["city_ids"]
     return web.json_response({
         "ok": True,
         "token": token,
         "expires_at": expires,
+        "role": account["role"],
+        "role_scope": account.get("role_scope"),
         "city": {"id": city["id"], "name": city["name"]},
+        "cities": [
+            {"id": item_id, "name": get_city(item_id)["name"]}
+            for item_id in city_ids if get_city(item_id)
+        ],
     })
 
 
@@ -4999,6 +5262,8 @@ async def api_admin_manual_approve(request):
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
+    scoped_error = _legacy_admin_scope_error(context)
+    if scoped_error: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5075,6 +5340,8 @@ async def api_admin_dashboard(request):
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
+    scoped_error = _legacy_admin_scope_error(context)
+    if scoped_error: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5318,6 +5585,8 @@ async def api_admin_history(request):
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
+    scoped_error = _legacy_admin_scope_error(context)
+    if scoped_error: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5447,6 +5716,8 @@ async def api_admin_force_close(request):
     if not context:
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401)
+    scoped_error = _legacy_admin_scope_error(context)
+    if scoped_error: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5482,6 +5753,8 @@ async def api_admin_period_new(request):
     if not context:
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401)
+    scoped_error = _legacy_admin_scope_error(context)
+    if scoped_error: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5500,6 +5773,1529 @@ async def api_admin_period_new(request):
         return web.json_response({"error": "city", "message": str(exc)}, status=400)
     return web.json_response({
         "ok": True, "segment": segment, "period": _period_info(period, city)})
+
+
+# ============================================================================
+# [12A-CRM] АНАЛИТИКА, КАЛЕНДАРЬ И ЗАДАНИЯ (НЕ МЕНЯЮТ ПАРСЕР И СМЕНЫ)
+# ============================================================================
+
+CRM_ACTION_TYPES = ("move", "fix", "repair", "battery", "sticker", "to_sc", "from_sc")
+CRM_ADMIN_WRITE_ROLES = {"city_manager", "network_admin"}
+
+
+async def _crm_admin(request, write=False, network=False):
+    context = await _admin_context(request)
+    if not context:
+        return None, web.json_response(
+            {"error": "admin_auth", "message": "Нужен вход в CRM."}, status=401
+        )
+    role = context["admin"]["role"]
+    if network and role != "network_admin":
+        return None, web.json_response(
+            {"error": "admin_scope", "message": "Нужны права администратора сети."}, status=403
+        )
+    if write and role not in CRM_ADMIN_WRITE_ROLES:
+        return None, web.json_response(
+            {"error": "admin_read_only", "message": "У вас доступ только для просмотра."},
+            status=403,
+        )
+    return context, None
+
+
+def _crm_scope_role(context):
+    value = (context.get("admin", {}).get("role_scope") or "").strip()
+    return value or None
+
+
+def _crm_scoped_role(context, requested=None):
+    scope = _crm_scope_role(context)
+    requested = (requested or "").strip() or None
+    if scope and requested and scope.casefold() != requested.casefold():
+        return None, web.json_response(
+            {"error": "admin_role_scope", "message": f"Доступ ограничен ролью {scope}."},
+            status=403,
+        )
+    return scope or requested, None
+
+
+def _crm_city(context, request=None, body=None):
+    raw = body.get("city_id") if isinstance(body, dict) else None
+    if raw in (None, "") and request is not None:
+        raw = request.query.get("city_id")
+    if raw in (None, ""):
+        city = context.get("city")
+        return (city, None) if city else (
+            None,
+            web.json_response(
+                {"error": "city_id", "message": "Выберите город."}, status=400
+            ),
+        )
+    try:
+        city_id = int(raw)
+    except (TypeError, ValueError):
+        return None, web.json_response(
+            {"error": "city_id", "message": "Некорректный город."}, status=400
+        )
+    if city_id not in context["allowed_city_ids"] or not get_city(city_id):
+        return None, web.json_response(
+            {"error": "admin_city", "message": "Нет доступа к этому городу."}, status=403
+        )
+    return get_city(city_id), None
+
+
+def _crm_date(value):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _crm_range(request, city, default_days=1):
+    today = datetime.now(_city_tz(city)).date()
+    start_date = _crm_date(request.query.get("from")) or (today - timedelta(days=default_days - 1))
+    end_date = _crm_date(request.query.get("to")) or today
+    if end_date < start_date:
+        return None, web.json_response(
+            {"error": "date_range", "message": "Дата окончания раньше даты начала."}, status=400
+        )
+    if (end_date - start_date).days + 1 > CRM_MAX_RANGE_DAYS:
+        return None, web.json_response(
+            {"error": "date_range", "message": f"Максимальный диапазон — {CRM_MAX_RANGE_DAYS} дней."},
+            status=400,
+        )
+    tz = _city_tz(city)
+    start_at = datetime.combine(start_date, datetime.min.time(), tzinfo=tz)
+    end_at = datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    return {
+        "from": start_date.isoformat(), "to": end_date.isoformat(),
+        "start_at": start_at, "end_at": end_at,
+    }, None
+
+
+def _crm_paging(request, default=50, maximum=200):
+    try:
+        limit = int(request.query.get("limit", default))
+        offset = int(request.query.get("offset", 0))
+    except (TypeError, ValueError):
+        return None
+    if limit < 1 or limit > maximum or offset < 0:
+        return None
+    return limit, offset
+
+
+async def _crm_action_stats(db, shift_ids):
+    result = {
+        shift_id: {action_type: 0 for action_type in CRM_ACTION_TYPES}
+        for shift_id in shift_ids
+    }
+    for pos in range(0, len(shift_ids), 500):
+        chunk = shift_ids[pos:pos + 500]
+        if not chunk:
+            continue
+        placeholders = ",".join("?" for _ in chunk)
+        rows = await (await db.execute(
+            f"SELECT shift_id, action_type, bike_codes, quantity FROM actions "
+            f"WHERE shift_id IN ({placeholders})", chunk
+        )).fetchall()
+        for row in rows:
+            action_type = row["action_type"]
+            if action_type in result.get(row["shift_id"], {}):
+                result[row["shift_id"]][action_type] += _action_units(row)
+    for stats in result.values():
+        for action_type in stats:
+            stats[action_type] = max(0, stats[action_type])
+    return result
+
+
+async def _crm_load_shifts(city, date_range, user_id=None, role=None, status=None, source=None):
+    clauses = [
+        "city_id = ?", "COALESCE(start_at, created_at) >= ?",
+        "COALESCE(start_at, created_at) < ?",
+    ]
+    params = [city["id"], date_range["start_at"].isoformat(), date_range["end_at"].isoformat()]
+    if user_id is not None:
+        clauses.append("user_id = ?"); params.append(user_id)
+    if role:
+        clauses.append("LOWER(role) = LOWER(?)"); params.append(role)
+    if status == "active":
+        clauses.append("is_active = 1")
+    elif status == "closed":
+        clauses.append("is_active = 0")
+    if source:
+        clauses.append("source = ?"); params.append(source)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM shifts WHERE " + " AND ".join(clauses) +
+            " ORDER BY COALESCE(start_at, created_at) DESC, id DESC", params
+        )).fetchall()
+        shift_ids = [row["id"] for row in rows]
+        stats = await _crm_action_stats(db, shift_ids)
+    return [dict(row) for row in rows], stats
+
+
+def _crm_shift_item(shift, city, stats, now=None):
+    now = now or datetime.now(_city_tz(city))
+    worked = _shift_worked_min(shift, now)
+    actions = stats or {action_type: 0 for action_type in CRM_ACTION_TYPES}
+    total = sum(actions.values())
+    if shift.get("is_active"):
+        status = "scheduled" if _shift_is_scheduled(shift, now) else "active"
+    else:
+        status = "closed"
+    start_dt = _parse_datetime(shift.get("start_at") or shift.get("created_at"))
+    local_date = start_dt.astimezone(_city_tz(city)).date().isoformat() if start_dt else None
+    return {
+        "shift_id": shift["id"], "user_id": shift.get("user_id"),
+        "name": shift.get("full_name") or f"Сотрудник #{shift.get('user_id')}",
+        "role": shift.get("role") or "", "status": status,
+        "date": local_date, "start_time": shift.get("start_time"),
+        "end_time": shift.get("end_time"), "start_at": shift.get("start_at"),
+        "end_at": shift.get("end_at"), "worked_minutes": worked,
+        "district": shift.get("district") or "", "comment": shift.get("comment") or "",
+        "source": shift.get("source") or "bot", "on_lunch": bool(shift.get("on_lunch")),
+        "segment": _shift_segment(shift, city), "actions": actions,
+        "actions_total": total,
+        "actions_per_hour": round(total * 60 / worked, 2) if worked else None,
+    }
+
+
+async def api_crm_overview(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city)
+    if error: return error
+    role, error = _crm_scoped_role(context)
+    if error: return error
+    rows, stats_by_shift = await _crm_load_shifts(city, date_range, role=role)
+    now = datetime.now(_city_tz(city))
+    items = [_crm_shift_item(row, city, stats_by_shift.get(row["id"]), now) for row in rows]
+    action_totals = {action_type: 0 for action_type in CRM_ACTION_TYPES}
+    for item in items:
+        for action_type, units in item["actions"].items():
+            action_totals[action_type] += units
+    worked = sum(item["worked_minutes"] for item in items)
+    actions_total = sum(action_totals.values())
+    current = {
+        "active": sum(item["status"] == "active" for item in items),
+        "scheduled": sum(item["status"] == "scheduled" for item in items),
+        "on_lunch": sum(item["status"] == "active" and item["on_lunch"] for item in items),
+    }
+    long_open = sum(
+        item["status"] == "active" and item["worked_minutes"] > 14 * 60 for item in items
+    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        scope = _crm_scope_role(context)
+        waiting_sql = (
+            "SELECT COUNT(*) FROM manual_reports m LEFT JOIN users u ON u.user_id=m.user_id "
+            "WHERE m.city_id = ? AND m.status = 'needs_review' AND m.created_at >= ? "
+            "AND m.created_at < ?"
+        )
+        waiting_params = [city["id"], date_range["start_at"].isoformat(),
+                          date_range["end_at"].isoformat()]
+        if scope: waiting_sql += " AND LOWER(u.role)=LOWER(?)"; waiting_params.append(scope)
+        waiting = await (await db.execute(
+            waiting_sql, waiting_params,
+        )).fetchone()
+        task_sql = (
+            "SELECT COUNT(a.user_id), SUM(CASE WHEN a.status='accepted' THEN 1 ELSE 0 END) "
+            "FROM crm_tasks t LEFT JOIN crm_task_assignees a ON a.task_id=t.id "
+            "WHERE t.city_id=? AND t.work_date>=? AND t.work_date<=? AND t.status='published'"
+        )
+        task_params = [city["id"], date_range["from"], date_range["to"]]
+        if scope: task_sql += " AND LOWER(a.role_snap)=LOWER(?)"; task_params.append(scope)
+        task_counts = await (await db.execute(
+            task_sql, task_params,
+        )).fetchone()
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "generated_at": now.isoformat(),
+        "totals": {
+            "employees": len({item["user_id"] for item in items}),
+            "shifts": len(items), "worked_minutes": worked,
+            "actions": actions_total,
+            "actions_per_hour": round(actions_total * 60 / worked, 2) if worked else None,
+        },
+        "current": current, "actions": action_totals,
+        "tasks": {"assignees": int(task_counts[0] or 0),
+                  "accepted": int(task_counts[1] or 0),
+                  "done": int(task_counts[1] or 0)},
+        "data_quality": {
+            "manual_reports_waiting": int(waiting[0] or 0), "long_open_shifts": long_open,
+        },
+    })
+
+
+async def api_crm_employees(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=10)
+    if error: return error
+    paging = _crm_paging(request)
+    if not paging:
+        return web.json_response({"error": "paging"}, status=400)
+    role, error = _crm_scoped_role(context, request.query.get("role"))
+    if error: return error
+    rows, stats_by_shift = await _crm_load_shifts(city, date_range, role=role or None)
+    employees = {}
+    for shift in rows:
+        item = employees.setdefault(shift["user_id"], {
+            "user_id": shift["user_id"], "name": shift.get("full_name") or "Сотрудник",
+            "role": shift.get("role") or "", "shifts": 0, "worked_minutes": 0,
+            "actions": {kind: 0 for kind in CRM_ACTION_TYPES}, "has_open_shift": False,
+            "on_lunch": False, "last_shift_at": None,
+        })
+        payload = _crm_shift_item(shift, city, stats_by_shift.get(shift["id"]))
+        item["shifts"] += 1; item["worked_minutes"] += payload["worked_minutes"]
+        item["has_open_shift"] = item["has_open_shift"] or payload["status"] == "active"
+        item["on_lunch"] = item["on_lunch"] or payload["on_lunch"]
+        item["last_shift_at"] = max(
+            filter(None, [item["last_shift_at"], shift.get("start_at"), shift.get("created_at")]),
+            default=None,
+        )
+        for kind, units in payload["actions"].items(): item["actions"][kind] += units
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        users = await (await db.execute(
+            "SELECT user_id, full_name, role FROM users WHERE city_id = ?", (city["id"],)
+        )).fetchall()
+    for user in users:
+        if role and (user["role"] or "").casefold() != role.casefold(): continue
+        item = employees.setdefault(user["user_id"], {
+            "user_id": user["user_id"], "name": user["full_name"] or "Сотрудник",
+            "role": user["role"] or "", "shifts": 0, "worked_minutes": 0,
+            "actions": {kind: 0 for kind in CRM_ACTION_TYPES}, "has_open_shift": False,
+            "on_lunch": False, "last_shift_at": None,
+        })
+        item["name"] = user["full_name"] or item["name"]
+        item["role"] = user["role"] or item["role"]
+    search = (request.query.get("search") or "").strip().casefold()
+    status = (request.query.get("status") or "").strip()
+    result = []
+    for item in employees.values():
+        if search and search not in item["name"].casefold(): continue
+        if status == "active" and not item["has_open_shift"]: continue
+        if status == "inactive" and item["has_open_shift"]: continue
+        item["actions_total"] = sum(item["actions"].values())
+        item["actions_per_hour"] = (
+            round(item["actions_total"] * 60 / item["worked_minutes"], 2)
+            if item["worked_minutes"] else None
+        )
+        result.append(item)
+    result.sort(key=lambda item: (not item["has_open_shift"], item["name"].casefold()))
+    limit, offset = paging; total = len(result)
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "items": result[offset:offset + limit],
+        "page": {"limit": limit, "offset": offset, "total": total,
+                 "has_more": offset + limit < total},
+    })
+
+
+async def api_crm_employee(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    try: user_id = int(request.match_info["user_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "user_id"}, status=400)
+    date_range, error = _crm_range(request, city, default_days=30)
+    if error: return error
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        user = await (await db.execute(
+            "SELECT user_id, full_name, role FROM users WHERE user_id=? AND city_id=?",
+            (user_id, city["id"]),
+        )).fetchone()
+    scoped_role, error = _crm_scoped_role(context)
+    if error: return error
+    if user and scoped_role and (user["role"] or "").casefold() != scoped_role.casefold():
+        return web.json_response({"error": "not_found"}, status=404)
+    rows, stats_by_shift = await _crm_load_shifts(
+        city, date_range, user_id=user_id, role=scoped_role
+    )
+    if not user and not rows:
+        return web.json_response({"error": "not_found"}, status=404)
+    items = [_crm_shift_item(row, city, stats_by_shift.get(row["id"])) for row in rows]
+    action_totals = {kind: sum(item["actions"][kind] for item in items) for kind in CRM_ACTION_TYPES}
+    worked = sum(item["worked_minutes"] for item in items); total_actions = sum(action_totals.values())
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "employee": {"user_id": user_id,
+                     "name": (user["full_name"] if user else rows[0].get("full_name")) or "Сотрудник",
+                     "role": (user["role"] if user else rows[0].get("role")) or ""},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "totals": {"shifts": len(items), "worked_minutes": worked, "actions": total_actions,
+                   "actions_per_hour": round(total_actions * 60 / worked, 2) if worked else None},
+        "actions": action_totals, "shifts": items,
+    })
+
+
+async def api_crm_shifts(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=10)
+    if error: return error
+    paging = _crm_paging(request)
+    if not paging: return web.json_response({"error": "paging"}, status=400)
+    try: user_id = int(request.query["user_id"]) if request.query.get("user_id") else None
+    except ValueError: return web.json_response({"error": "user_id"}, status=400)
+    role, error = _crm_scoped_role(context, request.query.get("role"))
+    if error: return error
+    rows, stats = await _crm_load_shifts(
+        city, date_range, user_id=user_id, role=role,
+        status=request.query.get("status"), source=request.query.get("source"),
+    )
+    items = [_crm_shift_item(row, city, stats.get(row["id"])) for row in rows]
+    limit, offset = paging
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "items": items[offset:offset + limit],
+        "page": {"limit": limit, "offset": offset, "total": len(items),
+                 "has_more": offset + limit < len(items)},
+    })
+
+
+async def api_crm_trends(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=10)
+    if error: return error
+    if request.query.get("bucket", "day") != "day":
+        return web.json_response({"error": "bucket", "message": "Доступна группировка day."}, status=400)
+    action_filter = request.query.get("action_type")
+    if action_filter and action_filter not in CRM_ACTION_TYPES:
+        return web.json_response({"error": "action_type"}, status=400)
+    role, error = _crm_scoped_role(context, request.query.get("role"))
+    if error: return error
+    rows, stats = await _crm_load_shifts(city, date_range, role=role)
+    days = {}
+    for row in rows:
+        item = _crm_shift_item(row, city, stats.get(row["id"]))
+        day = days.setdefault(item["date"], {"date": item["date"], "shifts": 0,
+            "employees": set(), "worked_minutes": 0, "actions": 0})
+        day["shifts"] += 1; day["employees"].add(item["user_id"])
+        day["worked_minutes"] += item["worked_minutes"]
+        day["actions"] += item["actions"].get(action_filter, 0) if action_filter else item["actions_total"]
+    series = []
+    cursor = _crm_date(date_range["from"]); finish = _crm_date(date_range["to"])
+    while cursor <= finish:
+        item = days.get(cursor.isoformat(), {"date": cursor.isoformat(), "shifts": 0,
+            "employees": set(), "worked_minutes": 0, "actions": 0})
+        item["employees"] = len(item["employees"])
+        item["actions_per_hour"] = round(item["actions"] * 60 / item["worked_minutes"], 2) \
+            if item["worked_minutes"] else None
+        series.append(item); cursor += timedelta(days=1)
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "bucket": "day", "action_type": action_filter, "series": series})
+
+
+async def api_crm_data_quality(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=30)
+    if error: return error
+    role, error = _crm_scoped_role(context)
+    if error: return error
+    rows, stats = await _crm_load_shifts(city, date_range, role=role)
+    issues = []
+    valid_roles = {role.casefold() for role in city_supported_roles(city["id"])}
+    for row in rows:
+        item = _crm_shift_item(row, city, stats.get(row["id"]))
+        if item["status"] == "active" and item["worked_minutes"] > 14 * 60:
+            issues.append({"type": "long_open_shift", "severity": "high", "shift": item})
+        if not row.get("start_at"):
+            issues.append({"type": "missing_start_at", "severity": "high", "shift": item})
+        if not row.get("is_active") and not row.get("end_at"):
+            issues.append({"type": "missing_end_at", "severity": "high", "shift": item})
+        if (row.get("role") or "").casefold() not in valid_roles:
+            issues.append({"type": "unknown_role", "severity": "medium", "shift": item})
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        manual_sql = (
+            "SELECT m.id,m.user_id,m.sender_name,m.raw_text,m.parse_error,m.created_at,m.updated_at "
+            "FROM manual_reports m LEFT JOIN users u ON u.user_id=m.user_id "
+            "WHERE m.city_id=? AND m.status='needs_review' AND m.created_at>=? AND m.created_at<?"
+        )
+        manual_params = [city["id"], date_range["start_at"].isoformat(),
+                         date_range["end_at"].isoformat()]
+        if role:
+            manual_sql += " AND LOWER(u.role)=LOWER(?)"; manual_params.append(role)
+        manual_sql += " ORDER BY m.created_at DESC LIMIT 200"
+        manual = await (await db.execute(
+            manual_sql, manual_params,
+        )).fetchall()
+        attachment_sql = (
+            "SELECT DISTINCT a.id,a.storage_key,t.id AS task_id FROM crm_task_attachments a "
+            "JOIN crm_tasks t ON t.id=a.task_id LEFT JOIN crm_task_assignees ta ON ta.task_id=t.id "
+            "WHERE t.city_id=?"
+        )
+        attachment_params = [city["id"]]
+        if role:
+            attachment_sql += " AND LOWER(ta.role_snap)=LOWER(?)"; attachment_params.append(role)
+        attachments = await (await db.execute(attachment_sql, attachment_params)).fetchall()
+    for row in manual:
+        issues.append({"type": "manual_report_waiting", "severity": "medium", "report": dict(row)})
+    for row in attachments:
+        if not os.path.isfile(os.path.join(CRM_UPLOAD_DIR, row["storage_key"])):
+            issues.append({"type": "attachment_missing", "severity": "medium",
+                           "attachment_id": row["id"], "task_id": row["task_id"]})
+    counts = {}
+    for issue in issues: counts[issue["type"]] = counts.get(issue["type"], 0) + 1
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "counts": counts, "items": issues})
+
+
+async def _crm_audit(db, context, operation, entity_type, entity_id, city_id,
+                     before=None, after=None):
+    await db.execute(
+        "INSERT INTO admin_audit_log (admin_user_id, city_id, operation, entity_type, "
+        "entity_id, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (context["telegram_user"]["id"], city_id, operation, entity_type, str(entity_id),
+         json.dumps(before, ensure_ascii=False, default=str) if before is not None else None,
+         json.dumps(after, ensure_ascii=False, default=str) if after is not None else None,
+         datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def _crm_segment_from_time(value):
+    try: hour = int(str(value).split(":", 1)[0])
+    except (TypeError, ValueError): return None
+    return "day" if 5 <= hour < 17 else "night"
+
+
+async def _crm_validate_plan_target(db, city, user_id, role, role_scope=None):
+    if (user_id is None) == (not role):
+        return "Укажите либо сотрудника, либо роль."
+    if user_id is not None:
+        row = await (await db.execute(
+            "SELECT role FROM users WHERE user_id=? AND city_id=?", (user_id, city["id"])
+        )).fetchone()
+        if not row: return "Сотрудник не найден в этом городе."
+        if role_scope and (row[0] or "").casefold() != role_scope.casefold():
+            return f"Доступ ограничен ролью {role_scope}."
+    elif role.casefold() not in {item.casefold() for item in city_supported_roles(city["id"])}:
+        return "Роль не поддерживается в этом городе."
+    elif role_scope and role.casefold() != role_scope.casefold():
+        return f"Доступ ограничен ролью {role_scope}."
+    return None
+
+
+async def api_crm_calendar(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=31)
+    if error: return error
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        plans = await (await db.execute(
+            "SELECT p.*, u.full_name AS user_name FROM crm_planned_shifts p "
+            "LEFT JOIN users u ON u.user_id=p.user_id AND u.city_id=p.city_id "
+            "WHERE p.city_id=? AND p.work_date>=? AND p.work_date<=? "
+            "ORDER BY p.work_date, p.start_time, p.id",
+            (city["id"], date_range["from"], date_range["to"]),
+        )).fetchall()
+    role_scope, error = _crm_scoped_role(context)
+    if error: return error
+    if role_scope:
+        plans = [row for row in plans if
+                 ((row["role"] or "").casefold() == role_scope.casefold()) or row["user_id"] is not None]
+        if any(row["user_id"] is not None for row in plans):
+            async with aiosqlite.connect(DB_PATH) as scope_db:
+                allowed_users = {item[0] for item in await (await scope_db.execute(
+                    "SELECT user_id FROM users WHERE city_id=? AND LOWER(role)=LOWER(?)",
+                    (city["id"], role_scope),
+                )).fetchall()}
+            plans = [row for row in plans if row["user_id"] is None or row["user_id"] in allowed_users]
+    actual_rows, actual_stats = await _crm_load_shifts(city, date_range, role=role_scope)
+    actual_items = [_crm_shift_item(row, city, actual_stats.get(row["id"])) for row in actual_rows]
+    matched = set(); plan_items = []
+    for raw in plans:
+        plan = dict(raw); segment = _crm_segment_from_time(plan["start_time"])
+        if plan["status"] == "cancelled":
+            candidates = []
+        elif plan["user_id"] is not None:
+            candidates = [item for item in actual_items if item["user_id"] == plan["user_id"]
+                          and item["date"] == plan["work_date"] and item["segment"] == segment]
+        else:
+            candidates = [item for item in actual_items
+                          if (item["role"] or "").casefold() == (plan["role"] or "").casefold()
+                          and item["date"] == plan["work_date"] and item["segment"] == segment]
+        if plan["status"] == "cancelled": match_status = "отменено"
+        elif not candidates: match_status = "не вышел"
+        elif len(candidates) == 1: match_status = "вышел"
+        else: match_status = "неоднозначно"
+        for item in candidates: matched.add(item["shift_id"])
+        plan_items.append({
+            "plan_id": plan["id"], "city_id": plan["city_id"],
+            "work_date": plan["work_date"], "start_time": plan["start_time"],
+            "end_time": plan["end_time"], "segment": segment,
+            "user_id": plan["user_id"], "user_name": plan.get("user_name"),
+            "role": plan["role"], "district": plan["district"] or "",
+            "note": plan["note"] or "", "status": plan["status"],
+            "match_status": match_status, "actual_shifts": candidates,
+            "updated_at": plan["updated_at"],
+        })
+    unplanned = []
+    for item in actual_items:
+        if item["shift_id"] not in matched:
+            extra = dict(item); extra["match_status"] = "вне плана"; unplanned.append(extra)
+    day_totals = {}
+    for plan in plan_items:
+        day = day_totals.setdefault(plan["work_date"], {"planned": 0, "came": 0,
+            "missed": 0, "ambiguous": 0, "unplanned": 0})
+        if plan["status"] != "cancelled": day["planned"] += 1
+        if plan["match_status"] == "вышел": day["came"] += 1
+        elif plan["match_status"] == "не вышел": day["missed"] += 1
+        elif plan["match_status"] == "неоднозначно": day["ambiguous"] += 1
+    for item in unplanned:
+        day_totals.setdefault(item["date"], {"planned": 0, "came": 0, "missed": 0,
+            "ambiguous": 0, "unplanned": 0})["unplanned"] += 1
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "planned": plan_items, "actual_unplanned": unplanned, "days": day_totals})
+
+
+async def api_crm_planned_shift_create(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error: return error
+    work_date = _crm_date(body.get("work_date")); start = _valid_time(body.get("start_time"))
+    end = _valid_time(body.get("end_time")); role = (body.get("role") or "").strip() or None
+    try: user_id = int(body["user_id"]) if body.get("user_id") not in (None, "") else None
+    except (TypeError, ValueError): return web.json_response({"error": "user_id"}, status=400)
+    if not work_date or not start or not end:
+        return web.json_response({"error": "fields", "message": "Нужны дата и время."}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("PRAGMA busy_timeout=15000")
+        target_error = await _crm_validate_plan_target(
+            db, city, user_id, role, _crm_scope_role(context)
+        )
+        if target_error: return web.json_response({"error": "target", "message": target_error}, status=400)
+        segment = _crm_segment_from_time(start)
+        if user_id is not None:
+            duplicate = await (await db.execute(
+                "SELECT id FROM crm_planned_shifts WHERE city_id=? AND work_date=? "
+                "AND user_id=? AND status='scheduled' AND "
+                "CASE WHEN CAST(substr(start_time,1,2) AS INTEGER)>=5 AND "
+                "CAST(substr(start_time,1,2) AS INTEGER)<17 THEN 'day' ELSE 'night' END=? LIMIT 1",
+                (city["id"], work_date.isoformat(), user_id, segment),
+            )).fetchone()
+            if duplicate:
+                return web.json_response({"error": "duplicate", "plan_id": duplicate[0]}, status=409)
+        now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
+        cur = await db.execute(
+            "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,role,"
+            "district,note,status,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?, 'scheduled',?,?,?,?)",
+            (city["id"], work_date.isoformat(), start, end, user_id, role,
+             str(body.get("district") or "")[:200], str(body.get("note") or "")[:2000],
+             admin_uid, now_iso, admin_uid, now_iso),
+        )
+        plan_id = cur.lastrowid
+        row = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
+        await _crm_audit(db, context, "planned_shift.create", "planned_shift", plan_id,
+                         city["id"], after=dict(row)); await db.commit()
+    return web.json_response({"ok": True, "plan": dict(row)}, status=201)
+
+
+async def api_crm_planned_shift_update(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: plan_id = int(request.match_info["plan_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "plan_id"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        current = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
+        if not current or current["city_id"] not in context["allowed_city_ids"]:
+            await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
+        if _crm_scope_role(context) and await _crm_validate_plan_target(
+            db, get_city(current["city_id"]), current["user_id"], current["role"],
+            _crm_scope_role(context)
+        ):
+            await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
+        merged = dict(current)
+        for field in ("work_date", "start_time", "end_time", "user_id", "role", "district", "note", "status"):
+            if field in body: merged[field] = body[field]
+        work_date = _crm_date(merged["work_date"]); start = _valid_time(merged["start_time"])
+        end = _valid_time(merged["end_time"]); role = (merged.get("role") or "").strip() or None
+        try: user_id = int(merged["user_id"]) if merged.get("user_id") not in (None, "") else None
+        except (TypeError, ValueError): await db.rollback(); return web.json_response({"error": "user_id"}, status=400)
+        if not work_date or not start or not end or merged.get("status") not in {"scheduled", "cancelled"}:
+            await db.rollback(); return web.json_response({"error": "fields"}, status=400)
+        target_error = await _crm_validate_plan_target(
+            db, get_city(current["city_id"]), user_id, role, _crm_scope_role(context)
+        )
+        if target_error:
+            await db.rollback(); return web.json_response({"error": "target", "message": target_error}, status=400)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_planned_shifts SET work_date=?,start_time=?,end_time=?,user_id=?,role=?,"
+            "district=?,note=?,status=?,updated_by=?,updated_at=? WHERE id=?",
+            (work_date.isoformat(), start, end, user_id, role, str(merged.get("district") or "")[:200],
+             str(merged.get("note") or "")[:2000], merged["status"],
+             context["telegram_user"]["id"], now_iso, plan_id),
+        )
+        updated = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
+        await _crm_audit(db, context, "planned_shift.update", "planned_shift", plan_id,
+                         current["city_id"], before=dict(current), after=dict(updated)); await db.commit()
+    return web.json_response({"ok": True, "plan": dict(updated)})
+
+
+async def api_crm_context(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    return web.json_response({
+        "ok": True,
+        "user": {"id": context["telegram_user"]["id"],
+                 "name": context["user"].get("full_name") or context["telegram_user"].get("first_name")},
+        "role": context["admin"]["role"],
+        "role_scope": context["admin"].get("role_scope"),
+        "can_write": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
+        "cities": [{"id": city_id, "name": get_city(city_id)["name"]}
+                   for city_id in context["allowed_city_ids"] if get_city(city_id)],
+        "default_city_id": context["city"]["id"] if context.get("city") else None,
+    })
+
+
+async def _crm_target_users(db, city_id, target_type, user_id=None, role=None, role_scope=None):
+    db.row_factory = aiosqlite.Row
+    if target_type == "user":
+        sql = "SELECT user_id, full_name, role FROM users WHERE city_id=? AND user_id=?"
+        params = [city_id, user_id]
+        if role_scope: sql += " AND LOWER(role)=LOWER(?)"; params.append(role_scope)
+        rows = await (await db.execute(
+            sql, params,
+        )).fetchall()
+    elif target_type == "role":
+        if role_scope and (role or "").casefold() != role_scope.casefold():
+            return []
+        rows = await (await db.execute(
+            "SELECT user_id, full_name, role FROM users WHERE city_id=? AND LOWER(role)=LOWER(?) "
+            "ORDER BY full_name", (city_id, role),
+        )).fetchall()
+    else:
+        rows = []
+    return [dict(row) for row in rows]
+
+
+async def _crm_task_in_scope(db, task_id, context):
+    db.row_factory = aiosqlite.Row
+    task = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+    if not task or task["city_id"] not in context["allowed_city_ids"]:
+        return None
+    scope = _crm_scope_role(context)
+    if not scope: return task
+    allowed = await (await db.execute(
+        "SELECT 1 FROM crm_task_targets tt LEFT JOIN users u ON u.user_id=tt.user_id "
+        "AND u.city_id=? WHERE tt.task_id=? AND ((tt.target_type='role' AND LOWER(tt.role)=LOWER(?)) "
+        "OR (tt.target_type='user' AND LOWER(u.role)=LOWER(?))) UNION SELECT 1 FROM "
+        "crm_task_assignees a WHERE a.task_id=? AND LOWER(a.role_snap)=LOWER(?) LIMIT 1",
+        (task["city_id"], task_id, scope, scope, task_id, scope),
+    )).fetchone()
+    return task if allowed else None
+
+
+async def _crm_task_role_denied(db, task_id, context):
+    if not _crm_scope_role(context): return False
+    row = await (await db.execute("SELECT city_id FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+    return bool(row and row[0] in context["allowed_city_ids"])
+
+
+async def api_crm_task_assignee_preview(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    target_type = request.query.get("target_type")
+    try: user_id = int(request.query["user_id"]) if request.query.get("user_id") else None
+    except ValueError: return web.json_response({"error": "user_id"}, status=400)
+    role = (request.query.get("role") or "").strip() or None
+    if (target_type == "user" and user_id is None) or (target_type == "role" and not role):
+        return web.json_response({"error": "target"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        items = await _crm_target_users(
+            db, city["id"], target_type, user_id, role, _crm_scope_role(context)
+        )
+    return web.json_response({"city_id": city["id"], "target_type": target_type,
+                              "count": len(items), "items": items})
+
+
+async def _crm_publish_task(db, task_id, expected_city_id=None, actor_user_id=None):
+    db.row_factory = aiosqlite.Row
+    task = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+    if not task or (expected_city_id is not None and task["city_id"] != expected_city_id):
+        raise LookupError("Задание не найдено.")
+    if task["status"] == "cancelled": raise ValueError("Отменённое задание нельзя опубликовать.")
+    if task["status"] == "published": return dict(task), False
+    targets = await (await db.execute(
+        "SELECT * FROM crm_task_targets WHERE task_id=? ORDER BY id", (task_id,)
+    )).fetchall()
+    recipients = {}
+    for target in targets:
+        for user in await _crm_target_users(
+            db, task["city_id"], target["target_type"], target["user_id"], target["role"]
+        ):
+            recipients[user["user_id"]] = user
+    if not recipients: raise ValueError("У задания нет получателей в выбранном городе.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.executemany(
+        "INSERT OR IGNORE INTO crm_task_assignees "
+        "(task_id,user_id,full_name_snap,role_snap,status,updated_at) "
+        "VALUES (?,?,?,?, 'assigned', ?)",
+        [(task_id, uid, user.get("full_name"), user.get("role"), now_iso)
+         for uid, user in recipients.items()],
+    )
+    await db.execute(
+        "UPDATE crm_tasks SET status='published',published_at=?,updated_at=? WHERE id=?",
+        (now_iso, now_iso, task_id),
+    )
+    if actor_user_id is not None:
+        await _crm_task_event(db, task_id, actor_user_id, "task.published",
+                              {"assignee_count": len(recipients)})
+    updated = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+    return dict(updated), True
+
+
+def _crm_progress(rows):
+    counts = {key: 0 for key in
+              ("assigned", "seen", "in_progress", "submitted", "accepted", "blocked")}
+    for row in rows:
+        if row["status"] in counts: counts[row["status"]] += 1
+    counts["total"] = sum(counts.values())
+    counts["completed"] = counts["accepted"]
+    return counts
+
+
+async def _crm_task_payloads(db, rows, detailed=False, viewer_user_id=None):
+    result = []
+    for raw in rows:
+        task = dict(raw)
+        targets = await (await db.execute(
+            "SELECT target_type,user_id,role FROM crm_task_targets WHERE task_id=? ORDER BY id",
+            (task["id"],),
+        )).fetchall()
+        assignees = await (await db.execute(
+            "SELECT task_id,user_id,full_name_snap,role_snap,status,status_comment,updated_at "
+            "FROM crm_task_assignees WHERE task_id=? ORDER BY full_name_snap,user_id", (task["id"],)
+        )).fetchall()
+        attachment_sql = (
+            "SELECT id,original_name,mime_type,size_bytes,sha256,kind,assignee_user_id,created_at "
+            "FROM crm_task_attachments WHERE task_id=?"
+        )
+        attachment_params = [task["id"]]
+        if viewer_user_id is not None:
+            attachment_sql += " AND (kind='brief' OR (kind='result' AND assignee_user_id=?))"
+            attachment_params.append(viewer_user_id)
+        attachment_sql += " ORDER BY id"
+        attachments = await (await db.execute(attachment_sql, attachment_params)).fetchall()
+        attachment_items = [
+            {**dict(row), "download_url": f"/api/crm/task-attachments/{row['id']}"}
+            for row in attachments
+        ]
+        item = {
+            "task_id": task["id"], "city_id": task["city_id"], "work_date": task["work_date"],
+            "title": task["title"], "description": task["description"],
+            "priority": task["priority"], "status": task["status"],
+            "requires_photo": bool(task.get("requires_photo")),
+            "created_by": task["created_by"], "created_at": task["created_at"],
+            "updated_at": task["updated_at"], "published_at": task["published_at"],
+            "targets": [dict(row) for row in targets], "progress": _crm_progress(assignees),
+            "attachments": [item for item in attachment_items if item["kind"] == "brief"],
+            "result_attachments": [item for item in attachment_items if item["kind"] == "result"],
+        }
+        if detailed:
+            item["assignees"] = [dict(row) for row in assignees]
+            comments = await (await db.execute(
+                "SELECT id,author_user_id,body,created_at FROM crm_task_comments "
+                "WHERE task_id=? ORDER BY id", (task["id"],)
+            )).fetchall()
+            item["comments"] = [dict(row) for row in comments]
+        result.append(item)
+    return result
+
+
+async def api_crm_tasks(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    city, error = _crm_city(context, request=request)
+    if error: return error
+    date_range, error = _crm_range(request, city, default_days=31)
+    if error: return error
+    paging = _crm_paging(request)
+    if not paging: return web.json_response({"error": "paging"}, status=400)
+    clauses = ["city_id=?", "work_date>=?", "work_date<=?"]
+    params = [city["id"], date_range["from"], date_range["to"]]
+    status = request.query.get("status")
+    if status: clauses.append("status=?"); params.append(status)
+    role_scope = _crm_scope_role(context)
+    if role_scope:
+        clauses.append("(EXISTS (SELECT 1 FROM crm_task_targets tt LEFT JOIN users u "
+                       "ON u.user_id=tt.user_id AND u.city_id=crm_tasks.city_id "
+                       "WHERE tt.task_id=crm_tasks.id AND ((tt.target_type='role' AND "
+                       "LOWER(tt.role)=LOWER(?)) OR (tt.target_type='user' AND "
+                       "LOWER(u.role)=LOWER(?)))) OR EXISTS (SELECT 1 FROM crm_task_assignees a "
+                       "WHERE a.task_id=crm_tasks.id AND LOWER(a.role_snap)=LOWER(?)))")
+        params.extend([role_scope, role_scope, role_scope])
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM crm_tasks WHERE " + " AND ".join(clauses) +
+            " ORDER BY work_date DESC,id DESC", params
+        )).fetchall()
+        items = await _crm_task_payloads(db, rows)
+    limit, offset = paging
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+        "range": {"from": date_range["from"], "to": date_range["to"]},
+        "items": items[offset:offset + limit], "page": {"limit": limit, "offset": offset,
+        "total": len(items), "has_more": offset + limit < len(items)}})
+
+
+async def api_crm_task_detail(request):
+    context, error = await _crm_admin(request)
+    if error: return error
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await _crm_task_in_scope(db, task_id, context)
+        if not row:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            return web.json_response({"error": "admin_role_scope" if denied else "not_found"},
+                                     status=403 if denied else 404)
+        item = (await _crm_task_payloads(db, [row], detailed=True))[0]
+    return web.json_response({"task": item})
+
+
+async def api_crm_task_create(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error: return error
+    work_date = _crm_date(body.get("work_date")); title = str(body.get("title") or "").strip()
+    description = str(body.get("description") or "").strip(); priority = body.get("priority", "normal")
+    target_type = body.get("target_type")
+    try: target_user_id = int(body["target_user_id"]) if body.get("target_user_id") else None
+    except (TypeError, ValueError): return web.json_response({"error": "target_user_id"}, status=400)
+    target_role = str(body.get("target_role") or "").strip() or None
+    if not work_date or not title or len(title) > 200 or len(description) > 10000 \
+            or priority not in {"low", "normal", "high", "urgent"}:
+        return web.json_response({"error": "fields"}, status=400)
+    if (target_type == "user" and target_user_id is None) or (target_type == "role" and not target_role):
+        return web.json_response({"error": "target"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        recipients = await _crm_target_users(
+            db, city["id"], target_type, target_user_id, target_role, _crm_scope_role(context)
+        )
+        if not recipients:
+            await db.rollback(); return web.json_response(
+                {"error": "target", "message": "Получатели не найдены."}, status=400)
+        now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
+        cur = await db.execute(
+            "INSERT INTO crm_tasks (city_id,work_date,title,description,priority,status,created_by,"
+            "created_at,updated_by,updated_at,requires_photo) VALUES (?,?,?,?,?,'draft',?,?,?,?,?)",
+            (city["id"], work_date.isoformat(), title, description, priority,
+             admin_uid, now_iso, admin_uid, now_iso, 1 if body.get("requires_photo") else 0),
+        )
+        task_id = cur.lastrowid
+        await db.execute(
+            "INSERT INTO crm_task_targets (task_id,target_type,user_id,role) VALUES (?,?,?,?)",
+            (task_id, target_type, target_user_id if target_type == "user" else None,
+             target_role if target_type == "role" else None),
+        )
+        task = dict(await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone())
+        if body.get("publish") is True:
+            task, _ = await _crm_publish_task(db, task_id, city["id"], admin_uid)
+        await _crm_audit(db, context, "task.create", "task", task_id, city["id"], after=task)
+        await db.commit()
+        row = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+        payload = (await _crm_task_payloads(db, [row], detailed=True))[0]
+    return web.json_response({"ok": True, "task": payload}, status=201)
+
+
+async def api_crm_task_publish(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        row = await _crm_task_in_scope(db, task_id, context)
+        if not row:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            await db.rollback(); return web.json_response(
+                {"error": "admin_role_scope" if denied else "not_found"}, status=403 if denied else 404)
+        before = dict(row)
+        try: task, changed = await _crm_publish_task(
+            db, task_id, row["city_id"], context["telegram_user"]["id"]
+        )
+        except ValueError as exc:
+            await db.rollback(); return web.json_response({"error": "publish", "message": str(exc)}, status=409)
+        if changed: await _crm_audit(db, context, "task.publish", "task", task_id,
+                                     row["city_id"], before=before, after=task)
+        await db.commit()
+        payload = (await _crm_task_payloads(db, [await (await db.execute(
+            "SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()], detailed=True))[0]
+    return web.json_response({"ok": True, "task": payload, "already_published": not changed})
+
+
+async def api_crm_task_update(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        row = await _crm_task_in_scope(db, task_id, context)
+        if not row:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            await db.rollback(); return web.json_response(
+                {"error": "admin_role_scope" if denied else "not_found"}, status=403 if denied else 404)
+        merged = dict(row)
+        for field in ("work_date", "title", "description", "priority", "status", "requires_photo"):
+            if field in body: merged[field] = body[field]
+        if not _crm_date(merged["work_date"]) or not str(merged["title"]).strip() \
+                or merged["priority"] not in {"low", "normal", "high", "urgent"} \
+                or merged["status"] not in {"draft", "published", "cancelled"}:
+            await db.rollback(); return web.json_response({"error": "fields"}, status=400)
+        if row["status"] == "published" and merged["status"] == "draft":
+            await db.rollback(); return web.json_response({"error": "status"}, status=409)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_tasks SET work_date=?,title=?,description=?,priority=?,status=?,"
+            "requires_photo=?,updated_by=?,updated_at=? WHERE id=?",
+            (_crm_date(merged["work_date"]).isoformat(), str(merged["title"]).strip()[:200],
+             str(merged["description"] or "")[:10000], merged["priority"], merged["status"],
+             1 if merged.get("requires_photo") else 0,
+             context["telegram_user"]["id"], now_iso, task_id),
+        )
+        updated = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+        await _crm_audit(db, context, "task.update", "task", task_id, row["city_id"],
+                         before=dict(row), after=dict(updated)); await db.commit()
+    return web.json_response({"ok": True, "task": dict(updated)})
+
+
+async def api_crm_task_assignee_status(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: task_id = int(request.match_info["task_id"]); user_id = int(request.match_info["user_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "id"}, status=400)
+    status = body.get("status"); comment = str(body.get("comment") or "").strip()[:2000]
+    if status not in {"accepted", "in_progress"}:
+        return web.json_response({"error": "status"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        task = await _crm_task_in_scope(db, task_id, context)
+        assignee = await (await db.execute(
+            "SELECT * FROM crm_task_assignees WHERE task_id=? AND user_id=?", (task_id, user_id)
+        )).fetchone()
+        if not task:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            await db.rollback(); return web.json_response(
+                {"error": "admin_role_scope" if denied else "not_found"}, status=403 if denied else 404)
+        if not assignee or (_crm_scope_role(context) and
+                (assignee["role_snap"] or "").casefold() != _crm_scope_role(context).casefold()):
+            await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
+        if assignee["status"] != "submitted":
+            await db.rollback(); return web.json_response(
+                {"error": "review", "message": "Проверять можно только отправленный результат."}, status=409)
+        if status == "in_progress" and not comment:
+            await db.rollback(); return web.json_response(
+                {"error": "return_reason", "message": "Укажите причину возврата в работу."}, status=400)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_task_assignees SET status=?,status_comment=?,updated_at=? "
+            "WHERE task_id=? AND user_id=?", (status, comment, now_iso, task_id, user_id),
+        )
+        if comment:
+            await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
+                             "VALUES (?,?,?,?)", (task_id, context["telegram_user"]["id"], comment, now_iso))
+        updated = await (await db.execute(
+            "SELECT * FROM crm_task_assignees WHERE task_id=? AND user_id=?", (task_id, user_id)
+        )).fetchone()
+        await _crm_task_event(db, task_id, context["telegram_user"]["id"],
+                              "assignee.review", {"user_id": user_id, "status": status,
+                                                  "comment": comment})
+        await _crm_audit(db, context, "task.assignee_status", "task_assignee",
+                         f"{task_id}:{user_id}", task["city_id"], before=dict(assignee),
+                         after=dict(updated)); await db.commit()
+    return web.json_response({"ok": True, "assignee": dict(updated)})
+
+
+async def api_crm_task_admin_comment(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    text_body = str(body.get("body") or "").strip()
+    if not text_body or len(text_body) > 4000: return web.json_response({"error": "body"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        task = await _crm_task_in_scope(db, task_id, context)
+        if not task:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            await db.rollback(); return web.json_response(
+                {"error": "admin_role_scope" if denied else "not_found"}, status=403 if denied else 404)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cur = await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
+                               "VALUES (?,?,?,?)", (task_id, context["telegram_user"]["id"], text_body, now_iso))
+        await _crm_task_event(db, task_id, context["telegram_user"]["id"],
+                              "task.comment", {"comment_id": cur.lastrowid})
+        await _crm_audit(db, context, "task.comment", "task_comment", cur.lastrowid,
+                         task["city_id"], after={"task_id": task_id, "body": text_body}); await db.commit()
+    return web.json_response({"ok": True, "comment_id": cur.lastrowid}, status=201)
+
+
+async def api_employee_tasks_mine(request):
+    tg_user = await _auth_user(request)
+    if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    user = await get_user(tg_user["id"])
+    city = get_city((user or {}).get("city_id"))
+    if not city: return web.json_response({"error": "city"}, status=409)
+    date_range, error = _crm_range(request, city, default_days=31)
+    if error: return error
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT t.*,a.status AS my_status,a.status_comment AS my_status_comment,"
+            "a.updated_at AS my_updated_at FROM crm_tasks t JOIN crm_task_assignees a "
+            "ON a.task_id=t.id WHERE a.user_id=? AND t.city_id=? AND t.status='published' "
+            "AND t.work_date>=? AND t.work_date<=? ORDER BY t.work_date,t.id",
+            (tg_user["id"], city["id"], date_range["from"], date_range["to"]),
+        )).fetchall()
+        payloads = await _crm_task_payloads(db, rows, viewer_user_id=tg_user["id"])
+        for payload, row in zip(payloads, rows):
+            payload["my_status"] = row["my_status"]
+            payload["my_status_comment"] = row["my_status_comment"] or ""
+            payload["my_updated_at"] = row["my_updated_at"]
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+                              "items": payloads})
+
+
+async def api_employee_task_progress(request):
+    tg_user = await _auth_user(request)
+    if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    status = body.get("status"); comment = str(body.get("comment") or "").strip()[:2000]
+    if status not in {"seen", "in_progress", "submitted", "blocked"}:
+        return web.json_response({"error": "status"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT a.*,t.status AS task_status,t.requires_photo FROM crm_task_assignees a JOIN crm_tasks t "
+            "ON t.id=a.task_id WHERE a.task_id=? AND a.user_id=?", (task_id, tg_user["id"])
+        )).fetchone()
+        if not row or row["task_status"] != "published":
+            await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
+        allowed_transitions = {
+            "assigned": {"seen", "in_progress"},
+            "seen": {"in_progress"},
+            "in_progress": {"submitted", "blocked"},
+            "blocked": {"in_progress"},
+            "submitted": set(),
+            "accepted": set(),
+        }
+        if status not in allowed_transitions.get(row["status"], set()):
+            await db.rollback(); return web.json_response(
+                {"error": "invalid_transition", "from": row["status"], "to": status}, status=409
+            )
+        if status == "submitted" and row["requires_photo"]:
+            photo = await (await db.execute(
+                "SELECT 1 FROM crm_task_attachments WHERE task_id=? AND kind='result' "
+                "AND assignee_user_id=? LIMIT 1", (task_id, tg_user["id"]),
+            )).fetchone()
+            if not photo:
+                await db.rollback(); return web.json_response(
+                    {"error": "result_photo_required",
+                     "message": "Перед отправкой результата приложите фото."}, status=409
+                )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute("UPDATE crm_task_assignees SET status=?,status_comment=?,updated_at=? "
+                         "WHERE task_id=? AND user_id=?",
+                         (status, comment, now_iso, task_id, tg_user["id"]))
+        if comment:
+            await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
+                             "VALUES (?,?,?,?)", (task_id, tg_user["id"], comment, now_iso))
+        await _crm_task_event(db, task_id, tg_user["id"], "assignee.progress",
+                              {"status": status, "comment": comment})
+        await db.commit()
+    return web.json_response({"ok": True, "status": status, "updated_at": now_iso})
+
+
+async def api_employee_task_comment(request):
+    tg_user = await _auth_user(request)
+    if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    text_body = str(body.get("body") or "").strip()
+    if not text_body or len(text_body) > 4000: return web.json_response({"error": "body"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        assignee = await (await db.execute(
+            "SELECT 1 FROM crm_task_assignees a JOIN crm_tasks t ON t.id=a.task_id "
+            "WHERE a.task_id=? AND a.user_id=? AND t.status='published'",
+            (task_id, tg_user["id"]),
+        )).fetchone()
+        if not assignee: return web.json_response({"error": "not_found"}, status=404)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cur = await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
+                               "VALUES (?,?,?,?)", (task_id, tg_user["id"], text_body, now_iso))
+        await _crm_task_event(db, task_id, tg_user["id"], "assignee.comment",
+                              {"comment_id": cur.lastrowid})
+        await db.commit()
+    return web.json_response({"ok": True, "comment_id": cur.lastrowid}, status=201)
+
+
+def _crm_image_type(data):
+    if data.startswith(b"\xff\xd8\xff"): return "image/jpeg", ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png", ".png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp", ".webp"
+    return None, None
+
+
+async def _crm_task_event(db, task_id, actor_user_id, event_type, payload=None):
+    await db.execute(
+        "INSERT INTO crm_task_events (task_id,actor_user_id,event_type,payload_json,created_at) "
+        "VALUES (?,?,?,?,?)",
+        (task_id, actor_user_id, event_type,
+         json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else None,
+         datetime.now(timezone.utc).isoformat()),
+    )
+
+
+async def api_crm_task_upload(request):
+    context, error = await _crm_admin(request, write=True)
+    if error: return error
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        task = await _crm_task_in_scope(db, task_id, context)
+        if not task:
+            denied = await _crm_task_role_denied(db, task_id, context)
+            return web.json_response({"error": "admin_role_scope" if denied else "not_found"},
+                                     status=403 if denied else 404)
+        existing = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='brief'", (task_id,)
+        )).fetchone())[0]
+    if existing >= CRM_UPLOAD_MAX_FILES:
+        return web.json_response({"error": "attachment_limit"}, status=409)
+    if not request.content_type.startswith("multipart/"):
+        return web.json_response({"error": "multipart"}, status=400)
+    os.makedirs(CRM_UPLOAD_DIR, exist_ok=True)
+    reader = await request.multipart(); saved = []
+    try:
+        while True:
+            field = await reader.next()
+            if field is None: break
+            if field.name != "file": continue
+            if existing + len(saved) >= CRM_UPLOAD_MAX_FILES:
+                raise ValueError(f"Можно прикрепить не больше {CRM_UPLOAD_MAX_FILES} фото.")
+            data = bytearray()
+            while True:
+                chunk = await field.read_chunk(size=64 * 1024)
+                if not chunk: break
+                data.extend(chunk)
+                if len(data) > CRM_UPLOAD_MAX_BYTES:
+                    raise ValueError("Фото превышает лимит 10 МБ.")
+            mime, extension = _crm_image_type(data)
+            if not mime: raise ValueError("Разрешены только JPEG, PNG и WebP.")
+            if shutil.disk_usage(CRM_UPLOAD_DIR).free < len(data) + 50 * 1024 * 1024:
+                raise ValueError("Недостаточно места для нового фото.")
+            storage_key = uuid.uuid4().hex + extension
+            temp_path = os.path.join(CRM_UPLOAD_DIR, storage_key + ".tmp")
+            final_path = os.path.join(CRM_UPLOAD_DIR, storage_key)
+            with open(temp_path, "wb") as upload_file: upload_file.write(data)
+            os.replace(temp_path, final_path)
+            saved.append({"storage_key": storage_key,
+                          "original_name": os.path.basename(field.filename or "photo"),
+                          "mime_type": mime, "size_bytes": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+        if not saved: return web.json_response({"error": "file"}, status=400)
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+            task = await _crm_task_in_scope(db, task_id, context)
+            if not task: raise LookupError("Задание больше недоступно.")
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='brief'", (task_id,)
+            )).fetchone())[0]
+            if count + len(saved) > CRM_UPLOAD_MAX_FILES: raise ValueError("Лимит фото уже изменился.")
+            now_iso = datetime.now(timezone.utc).isoformat(); uploaded = []
+            for item in saved:
+                cur = await db.execute(
+                    "INSERT INTO crm_task_attachments (task_id,storage_key,original_name,mime_type,"
+                    "size_bytes,sha256,kind,assignee_user_id,uploaded_by,created_at) "
+                    "VALUES (?,?,?,?,?,?,'brief',NULL,?,?)",
+                    (task_id, item["storage_key"], item["original_name"], item["mime_type"],
+                     item["size_bytes"], item["sha256"], context["telegram_user"]["id"], now_iso),
+                )
+                uploaded.append({**item, "id": cur.lastrowid, "kind": "brief",
+                                 "assignee_user_id": None,
+                                 "download_url": f"/api/crm/task-attachments/{cur.lastrowid}"})
+            await _crm_audit(db, context, "task.attachments", "task", task_id,
+                             task["city_id"], after={"attachments": uploaded}); await db.commit()
+        return web.json_response({"ok": True, "items": uploaded}, status=201)
+    except (ValueError, LookupError) as exc:
+        for item in saved:
+            try: os.remove(os.path.join(CRM_UPLOAD_DIR, item["storage_key"]))
+            except OSError: pass
+        return web.json_response({"error": "attachment", "message": str(exc)}, status=409)
+    except Exception:
+        for item in saved:
+            try: os.remove(os.path.join(CRM_UPLOAD_DIR, item["storage_key"]))
+            except OSError: pass
+        raise
+
+
+async def api_employee_task_upload(request):
+    tg_user = await _auth_user(request)
+    if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    try: task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
+    user = await get_user(tg_user["id"])
+    if not user or not get_city(user.get("city_id")):
+        return web.json_response({"error": "city"}, status=409)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT t.city_id,t.status AS task_status,a.status AS assignee_status "
+            "FROM crm_tasks t LEFT JOIN crm_task_assignees a ON a.task_id=t.id AND a.user_id=? "
+            "WHERE t.id=?", (tg_user["id"], task_id),
+        )).fetchone()
+        if not row or row["assignee_status"] is None or row["city_id"] != user.get("city_id"):
+            return web.json_response({"error": "not_assigned"}, status=403)
+        if row["task_status"] != "published" or row["assignee_status"] == "accepted":
+            return web.json_response({"error": "task_locked"}, status=409)
+        existing = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='result' "
+            "AND assignee_user_id=?", (task_id, tg_user["id"]),
+        )).fetchone())[0]
+    if existing >= CRM_UPLOAD_MAX_FILES:
+        return web.json_response({"error": "attachment_limit"}, status=409)
+    if not request.content_type.startswith("multipart/"):
+        return web.json_response({"error": "multipart"}, status=400)
+    os.makedirs(CRM_UPLOAD_DIR, exist_ok=True); reader = await request.multipart(); saved = []
+    try:
+        while True:
+            field = await reader.next()
+            if field is None: break
+            if field.name != "file": continue
+            if existing + len(saved) >= CRM_UPLOAD_MAX_FILES:
+                raise ValueError(f"Можно прикрепить не больше {CRM_UPLOAD_MAX_FILES} фото результата.")
+            data = bytearray()
+            while True:
+                chunk = await field.read_chunk(size=64 * 1024)
+                if not chunk: break
+                data.extend(chunk)
+                if len(data) > CRM_UPLOAD_MAX_BYTES: raise ValueError("Фото превышает лимит 10 МБ.")
+            mime, extension = _crm_image_type(data)
+            if not mime: raise ValueError("Разрешены только JPEG, PNG и WebP.")
+            if shutil.disk_usage(CRM_UPLOAD_DIR).free < len(data) + 50 * 1024 * 1024:
+                raise ValueError("Недостаточно места для нового фото.")
+            storage_key = uuid.uuid4().hex + extension
+            temp_path = os.path.join(CRM_UPLOAD_DIR, storage_key + ".tmp")
+            with open(temp_path, "wb") as upload_file: upload_file.write(data)
+            os.replace(temp_path, os.path.join(CRM_UPLOAD_DIR, storage_key))
+            saved.append({"storage_key": storage_key,
+                          "original_name": os.path.basename(field.filename or "result-photo"),
+                          "mime_type": mime, "size_bytes": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+        if not saved: return web.json_response({"error": "file"}, status=400)
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+            row = await (await db.execute(
+                "SELECT t.city_id,t.status AS task_status,a.status AS assignee_status "
+                "FROM crm_tasks t JOIN crm_task_assignees a ON a.task_id=t.id "
+                "WHERE t.id=? AND a.user_id=?", (task_id, tg_user["id"]),
+            )).fetchone()
+            if not row or row["city_id"] != user.get("city_id"):
+                raise PermissionError("Задание больше не назначено сотруднику.")
+            if row["task_status"] != "published" or row["assignee_status"] == "accepted":
+                raise ValueError("Задание уже закрыто или отменено.")
+            count = (await (await db.execute(
+                "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='result' "
+                "AND assignee_user_id=?", (task_id, tg_user["id"]),
+            )).fetchone())[0]
+            if count + len(saved) > CRM_UPLOAD_MAX_FILES: raise ValueError("Лимит фото уже изменился.")
+            now_iso = datetime.now(timezone.utc).isoformat(); uploaded = []
+            for item in saved:
+                cur = await db.execute(
+                    "INSERT INTO crm_task_attachments (task_id,storage_key,original_name,mime_type,"
+                    "size_bytes,sha256,kind,assignee_user_id,uploaded_by,created_at) "
+                    "VALUES (?,?,?,?,?,?,'result',?,?,?)",
+                    (task_id, item["storage_key"], item["original_name"], item["mime_type"],
+                     item["size_bytes"], item["sha256"], tg_user["id"], tg_user["id"], now_iso),
+                )
+                uploaded.append({**item, "id": cur.lastrowid, "kind": "result",
+                                 "assignee_user_id": tg_user["id"], "created_at": now_iso,
+                                 "download_url": f"/api/crm/task-attachments/{cur.lastrowid}"})
+            await _crm_task_event(db, task_id, tg_user["id"], "result.attachments",
+                                  {"attachments": uploaded}); await db.commit()
+        return web.json_response({"ok": True, "items": uploaded}, status=201)
+    except (ValueError, PermissionError) as exc:
+        for item in saved:
+            try: os.remove(os.path.join(CRM_UPLOAD_DIR, item["storage_key"]))
+            except OSError: pass
+        status = 403 if isinstance(exc, PermissionError) else 409
+        return web.json_response({"error": "attachment", "message": str(exc)}, status=status)
+    except Exception:
+        for item in saved:
+            try: os.remove(os.path.join(CRM_UPLOAD_DIR, item["storage_key"]))
+            except OSError: pass
+        raise
+
+
+async def api_crm_attachment(request):
+    tg_user = await _auth_user(request)
+    if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    try: attachment_id = int(request.match_info["attachment_id"])
+    except (KeyError, ValueError): return web.json_response({"error": "attachment_id"}, status=400)
+    context = await _admin_context(request) if request.headers.get("X-Admin-Token") else None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT a.*,t.city_id,t.status AS task_status FROM crm_task_attachments a "
+            "JOIN crm_tasks t ON t.id=a.task_id WHERE a.id=?", (attachment_id,)
+        )).fetchone()
+        allowed = False
+        if row and context:
+            allowed = bool(await _crm_task_in_scope(db, row["task_id"], context))
+        elif row:
+            assigned = await (await db.execute(
+                "SELECT 1 FROM crm_task_assignees WHERE task_id=? AND user_id=?",
+                (row["task_id"], tg_user["id"]),
+            )).fetchone()
+            if row["kind"] == "result":
+                allowed = bool(assigned and row["assignee_user_id"] == tg_user["id"]
+                               and row["task_status"] == "published")
+            else:
+                allowed = bool(assigned and row["task_status"] == "published")
+    if not row or not allowed: return web.json_response({"error": "not_found"}, status=404)
+    path = os.path.join(CRM_UPLOAD_DIR, row["storage_key"])
+    if not os.path.isfile(path): return web.json_response({"error": "file_missing"}, status=404)
+    response = web.FileResponse(path, headers={"Cache-Control": "private, max-age=300",
+                                               "X-Content-Type-Options": "nosniff"})
+    response.content_type = row["mime_type"]
+    response.headers["Content-Disposition"] = f'inline; filename="attachment-{attachment_id}"'
+    return response
+
+
+async def cleanup_crm_uploads():
+    """Удаляет только временные и не привязанные к БД старые файлы."""
+    os.makedirs(CRM_UPLOAD_DIR, exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        referenced = {row[0] for row in await (await db.execute(
+            "SELECT storage_key FROM crm_task_attachments"
+        )).fetchall()}
+    now_ts = time.time(); removed = 0
+    for name in os.listdir(CRM_UPLOAD_DIR):
+        path = os.path.join(CRM_UPLOAD_DIR, name)
+        if not os.path.isfile(path): continue
+        try: age = now_ts - os.path.getmtime(path)
+        except OSError: continue
+        is_temp = name.endswith(".tmp")
+        if (is_temp and age > 3600) or (not is_temp and name not in referenced and age > 86400):
+            try: os.remove(path); removed += 1
+            except OSError: pass
+    if removed: logger.info("CRM uploads: удалено orphan/temp файлов: %s", removed)
+
+
+async def api_crm_admins(request):
+    context, error = await _crm_admin(request, network=True)
+    if error: return error
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM admin_accounts ORDER BY role,user_id"
+        )).fetchall()
+        items = []
+        for row in rows:
+            permissions = await (await db.execute(
+                "SELECT city_id FROM admin_city_permissions WHERE user_id=? ORDER BY city_id",
+                (row["user_id"],),
+            )).fetchall()
+            item = dict(row); item["city_ids"] = [value[0] for value in permissions]
+            items.append(item)
+    return web.json_response({"items": items})
+
+
+async def api_crm_admin_upsert(request):
+    context, error = await _crm_admin(request, write=True, network=True)
+    if error: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    try: user_id = int(body.get("user_id")); city_ids = [int(value) for value in body.get("city_ids", [])]
+    except (TypeError, ValueError): return web.json_response({"error": "fields"}, status=400)
+    role = body.get("role"); role_scope = str(body.get("role_scope") or "").strip() or None
+    is_active = 1 if body.get("is_active", True) else 0
+    if role not in {"city_viewer", "city_manager", "network_admin"} or user_id <= 0:
+        return web.json_response({"error": "role"}, status=400)
+    if role != "network_admin" and (not city_ids or any(city_id not in CITIES_BY_ID for city_id in city_ids)):
+        return web.json_response({"error": "city_ids"}, status=400)
+    if role == "network_admin": role_scope = None; city_ids = []
+    if role_scope and any(
+        role_scope.casefold() not in {item.casefold() for item in city_supported_roles(city_id)}
+        for city_id in city_ids
+    ):
+        return web.json_response({"error": "role_scope"}, status=400)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        before_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
+        before = dict(before_row) if before_row else None
+        await db.execute(
+            "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,created_at,updated_at) "
+            "VALUES (?,?,?,?,1,?,?) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,"
+            "role_scope=excluded.role_scope,is_active=excluded.is_active,"
+            "session_version=admin_accounts.session_version+1,updated_at=excluded.updated_at",
+            (user_id, role, role_scope, is_active, now_iso, now_iso),
+        )
+        await db.execute("DELETE FROM admin_city_permissions WHERE user_id=?", (user_id,))
+        await db.executemany(
+            "INSERT INTO admin_city_permissions (user_id,city_id) VALUES (?,?)",
+            [(user_id, city_id) for city_id in sorted(set(city_ids))],
+        )
+        after_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
+        after = dict(after_row); after["city_ids"] = sorted(set(city_ids))
+        await _crm_audit(db, context, "admin.upsert", "admin_account", user_id, None,
+                         before=before, after=after); await db.commit()
+    return web.json_response({"ok": True, "admin": after})
 
 
 async def api_shift_comment(request):
@@ -5546,17 +7342,30 @@ async def serve_index(request):
         })
     return web.Response(text="BibiBike API ok")
 
+
+async def serve_crm(request):
+    if os.path.exists(CRM_INDEX_PATH):
+        return web.FileResponse(CRM_INDEX_PATH, headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache", "Expires": "0",
+        })
+    return web.Response(text="BibiBike CRM frontend is not installed", status=404)
+
 async def api_health(request):
     return web.json_response({
         "ok": True,
         "service": "bibibike-bot",
         "build_version": BUILD_VERSION,
         "index_html": os.path.exists(INDEX_PATH),
+        "crm_html": os.path.exists(CRM_INDEX_PATH),
     })
 
 async def start_api_server():
     try:
-        app = web.Application(middlewares=[cors_mw])
+        app = web.Application(
+            middlewares=[cors_mw],
+            client_max_size=CRM_UPLOAD_MAX_FILES * CRM_UPLOAD_MAX_BYTES + 1024 * 1024,
+        )
         app.router.add_get("/api/state", api_state)
         app.router.add_post("/api/settings", api_settings)
         app.router.add_post("/api/shift/start", api_shift_start)
@@ -5572,7 +7381,39 @@ async def start_api_server():
         app.router.add_post("/api/admin/force-close", api_admin_force_close)
         app.router.add_post("/api/admin/period/new", api_admin_period_new)
         app.router.add_post("/api/admin/manual/approve", api_admin_manual_approve)
+        # CRM: маршруты с фиксированными суффиксами регистрируются раньше
+        # динамических /{task_id}, чтобы aiohttp не принял имя за ID.
+        app.router.add_get("/api/admin/crm/context", api_crm_context)
+        app.router.add_get("/api/admin/crm/overview", api_crm_overview)
+        app.router.add_get("/api/admin/crm/employees", api_crm_employees)
+        app.router.add_get("/api/admin/crm/employees/{user_id}", api_crm_employee)
+        app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)
+        app.router.add_get("/api/admin/crm/trends", api_crm_trends)
+        app.router.add_get("/api/admin/crm/data-quality", api_crm_data_quality)
+        app.router.add_get("/api/admin/crm/calendar", api_crm_calendar)
+        app.router.add_post("/api/admin/crm/planned-shifts", api_crm_planned_shift_create)
+        app.router.add_patch("/api/admin/crm/planned-shifts/{plan_id}", api_crm_planned_shift_update)
+        app.router.add_get("/api/admin/crm/tasks/assignee-preview", api_crm_task_assignee_preview)
+        app.router.add_get("/api/admin/crm/tasks", api_crm_tasks)
+        app.router.add_post("/api/admin/crm/tasks", api_crm_task_create)
+        app.router.add_get("/api/admin/crm/tasks/{task_id}", api_crm_task_detail)
+        app.router.add_patch("/api/admin/crm/tasks/{task_id}", api_crm_task_update)
+        app.router.add_post("/api/admin/crm/tasks/{task_id}/publish", api_crm_task_publish)
+        app.router.add_post("/api/admin/crm/tasks/{task_id}/comments", api_crm_task_admin_comment)
+        app.router.add_post("/api/admin/crm/tasks/{task_id}/attachments", api_crm_task_upload)
+        app.router.add_post(
+            "/api/admin/crm/tasks/{task_id}/assignees/{user_id}/status",
+            api_crm_task_assignee_status,
+        )
+        app.router.add_get("/api/admin/crm/admins", api_crm_admins)
+        app.router.add_post("/api/admin/crm/admins", api_crm_admin_upsert)
+        app.router.add_get("/api/crm/tasks/mine", api_employee_tasks_mine)
+        app.router.add_post("/api/crm/tasks/{task_id}/attachments", api_employee_task_upload)
+        app.router.add_post("/api/crm/tasks/{task_id}/progress", api_employee_task_progress)
+        app.router.add_post("/api/crm/tasks/{task_id}/comments", api_employee_task_comment)
+        app.router.add_get("/api/crm/task-attachments/{attachment_id}", api_crm_attachment)
         app.router.add_get("/health", api_health)
+        app.router.add_get("/crm.html", serve_crm)
         app.router.add_get("/index.html", serve_index)
         app.router.add_get("/", serve_index)
         runner = web.AppRunner(app)
@@ -5590,6 +7431,7 @@ async def start_api_server():
 # ============================================================================
 async def main():
     await init_db()
+    await cleanup_crm_uploads()
     await rebuild_monthly_aggregates()
     await start_api_server()   # === НОВОЕ: поднимаем API рядом с ботом ===
     kpi_task = asyncio.create_task(kpi_background_worker())

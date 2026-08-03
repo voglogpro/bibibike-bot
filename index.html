@@ -303,6 +303,23 @@
   .manual-controls .tinput{min-width:0}
   @media(max-width:420px){.manual-controls{grid-template-columns:1fr 1fr}.manual-controls .mini{grid-column:1/-1}}
   .mini{border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:8px 11px;font-weight:800}
+  /* Задания сотрудника: изолированный экран внутри «Ещё» */
+  .task-count{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 7px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;font-weight:900}
+  .my-task-list{display:grid;gap:9px}.my-task-card{width:100%;text-align:left;border:1px solid var(--line);border-radius:14px;background:var(--bg);padding:12px;color:var(--ink);font:inherit;cursor:pointer}
+  .my-task-card:active{transform:scale(.99)}.my-task-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;min-width:0}.my-task-title{font-weight:900;font-size:14px;line-height:1.3;min-width:0;overflow-wrap:anywhere}.my-task-top .formhead{min-width:0;overflow-wrap:anywhere}.my-task-meta{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.4}
+  .my-task-status{display:inline-flex;align-items:center;border-radius:99px;padding:4px 8px;background:#E7ECDE;color:var(--muted);font-size:10px;font-weight:900;white-space:nowrap}.my-task-status.work{background:#FFF2CF;color:#815500}.my-task-status.review{background:#E8F1FF;color:#2F65A7}.my-task-status.done{background:#DDF5DE;color:var(--green-deep)}.my-task-status.blocked{background:#FDECEC;color:#B3261E}
+  .my-task-desc{white-space:pre-wrap;font-size:13px;line-height:1.55;margin:10px 0;color:var(--ink)}.my-task-required{padding:8px 10px;border-radius:10px;background:#FFF2CF;color:#6D4A00;font-size:11.5px;font-weight:800;margin:9px 0}
+  .my-task-actions{display:grid;gap:8px;margin-top:12px}.my-task-actions textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;font-size:16px;resize:vertical;background:#fff;color:var(--ink)}.my-task-actions .buttons{display:flex;gap:8px;flex-wrap:wrap}.my-task-actions .buttons button{flex:1;min-width:120px}
+  .task-photos{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.task-photo{aspect-ratio:1;border-radius:10px;background:#E7ECDE;overflow:hidden;display:grid;place-items:center;color:var(--muted);font-size:10px;border:0;padding:0}.task-photo img{width:100%;height:100%;object-fit:cover;display:block}.task-upload-preview{display:grid;gap:7px;margin-top:8px}.task-upload-row{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:#fff}.task-upload-row img{width:40px;height:40px;object-fit:cover;border-radius:8px}.task-upload-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
+  .task-api-state{text-align:center;color:var(--muted);padding:22px 10px;font-size:13px;line-height:1.5}.task-api-error{background:#FDECEC;color:#B3261E;border-radius:12px;padding:11px 12px;font-size:12px;margin-bottom:10px}
+  @media(max-width:420px){
+    #myTasksView .admin-head{display:grid;grid-template-columns:1fr 1fr;align-items:center}
+    #myTasksView .admin-head .formhead{grid-column:1/-1;grid-row:1;text-align:left}
+    #myTasksBack{grid-column:1;grid-row:2;justify-self:start}
+    #myTasksReload{grid-column:2;grid-row:2;justify-self:end}
+    .my-task-actions .buttons{display:grid;grid-template-columns:1fr}
+    .my-task-actions .buttons button{width:100%;min-width:0}
+  }
 </style>
 </head>
 <body>
@@ -607,6 +624,12 @@
       <div class="panel" id="morePanel">
         <div class="formhead">Ещё</div>
         <div class="more-list">
+          <button class="more-item" id="btnMyTasks">
+            <span class="ic">✅</span>
+            <span class="tx"><b>Мои задания</b><i>Задания руководителя и результаты</i></span>
+            <span class="task-count hidden" id="myTasksBadge">0</span>
+            <span class="chev">›</span>
+          </button>
           <button class="more-item" id="btnAdminOpen">
             <span class="ic">🛡️</span>
             <span class="tx"><b>Админка</b><i>Смены, КПД и история по твоему городу</i></span>
@@ -651,6 +674,11 @@
         </div>
         <div class="admin-note" id="adminUpdated"></div>
         <div class="more-list" style="margin-top:12px">
+          <button class="more-item" id="btnOpenCrm">
+            <span class="ic">📊</span>
+            <span class="tx"><b>Открыть CRM</b><i>Календарь, задания, команда и контроль</i></span>
+            <span class="chev">›</span>
+          </button>
           <button class="more-item" data-admin-view="adminViewOpen">
             <span class="ic">🟢</span>
             <span class="tx"><b>Открытые смены</b><i>Кто сейчас на смене — через бота и без него</i></span>
@@ -700,6 +728,18 @@
         </div>
         <div class="admin-section">Все сотрудники города</div>
         <div class="admin-role-groups" id="adminEmployees"><div class="hempty">Загружаю…</div></div>
+      </div>
+
+      <!-- Личный кабинет заданий сотрудника. От смен и старой админки изолирован. -->
+      <div class="panel hidden" id="myTasksView">
+        <div class="admin-head">
+          <button class="mini" id="myTasksBack">← Назад</button>
+          <div class="formhead">Мои задания</div>
+          <button class="mini" id="myTasksReload">Обновить</button>
+        </div>
+        <div class="task-api-error hidden" id="myTasksError"></div>
+        <div id="myTasksList"><div class="task-api-state">Загружаю задания…</div></div>
+        <div class="hidden" id="myTaskDetail"></div>
       </div>
     </div>
 
@@ -1039,6 +1079,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     $('tab-'+t.dataset.tab).classList.remove('hidden');
     if(t.dataset.tab === 'rating' && !histLoaded) loadHistory();
     if(t.dataset.tab === 'settings') fillSettings();
+    if(t.dataset.tab === 'more') loadMyTasks(true);
     window.scrollTo(0,0);
   };
 });
@@ -1374,7 +1415,7 @@ $('saveSettings').onclick = async ()=>{
 };
 
 /* ---------- админка (живёт во вкладке «Ещё») ---------- */
-const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory'];
+const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory','myTasksView'];
 
 function showAdminScreen(id){
   /* id = null → показать обычный экран «Ещё» */
@@ -1439,6 +1480,11 @@ $('adminLoginBtn').onclick = async ()=>{
 };
 
 $('adminLogout').onclick = ()=>{ closeAdmin(); toast('Вышел из админки.'); };
+$('btnOpenCrm').onclick = ()=>{
+  /* CRM использует тот же серверный токен, но отдельный ключ хранилища. */
+  if(adminToken) localStorage.setItem('bb_crm_admin_token', adminToken);
+  window.location.href = '/crm.html';
+};
 /* Новая декада — всегда с подтверждением */
 /* Новая декада — всегда с подтверждением, отдельно для каждой группы */
 $('btnNewPeriodDay').onclick = ()=> confirmAction(
@@ -1460,6 +1506,202 @@ document.querySelectorAll('.admin-back').forEach(b=>{
 document.querySelectorAll('.admin-reload').forEach(b=>{
   b.onclick = ()=>loadAdmin();
 });
+
+/* ---------- задания сотрудника (CRM, не вмешивается в смены) ---------- */
+const EMPLOYEE_TASK_API = {
+  mine: '/api/crm/tasks/mine',
+  progress: id => `/api/crm/tasks/${id}/progress`,
+  upload: id => `/api/crm/tasks/${id}/attachments`,
+};
+const EMPLOYEE_TASK_STATUS = {
+  assigned:{label:'Новое', cls:''}, seen:{label:'Просмотрено', cls:''},
+  in_progress:{label:'В работе', cls:'work'}, submitted:{label:'На проверке', cls:'review'},
+  accepted:{label:'Принято', cls:'done'}, blocked:{label:'Есть проблема', cls:'blocked'},
+};
+let employeeTasks=[];
+let employeeTaskId=null;
+let employeeTaskFiles=[];
+let employeeTaskBlobUrls=[];
+let employeeTaskLoading=false;
+
+function taskIsoDate(date){
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function employeeTaskRange(){
+  const from=nowInTz(), to=nowInTz();
+  from.setDate(from.getDate()-14); to.setDate(to.getDate()+62);
+  return `?from=${taskIsoDate(from)}&to=${taskIsoDate(to)}`;
+}
+function taskStatus(status){ return EMPLOYEE_TASK_STATUS[status] || {label:status||'Задание',cls:''}; }
+function taskDate(value){
+  if(!value) return 'Без даты';
+  const d=new Date(value+'T12:00:00');
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+}
+function setTasksError(message=''){
+  const el=$('myTasksError'); el.textContent=message; el.classList.toggle('hidden',!message);
+}
+function updateTasksBadge(){
+  const count=employeeTasks.filter(t=>!['submitted','accepted'].includes(t.my_status)).length;
+  const badge=$('myTasksBadge'); badge.textContent=count>99?'99+':String(count);
+  badge.classList.toggle('hidden',count===0);
+}
+function renderMyTasks(){
+  const list=$('myTasksList');
+  if(!employeeTasks.length){
+    list.innerHTML='<div class="task-api-state">Пока нет назначенных заданий.</div>'; return;
+  }
+  const weight={assigned:0,seen:1,in_progress:2,blocked:3,submitted:4,accepted:5};
+  const sorted=[...employeeTasks].sort((a,b)=>(weight[a.my_status]??9)-(weight[b.my_status]??9)||String(a.work_date).localeCompare(String(b.work_date)));
+  list.innerHTML=`<div class="my-task-list">${sorted.map(task=>{
+    const status=taskStatus(task.my_status);
+    return `<button class="my-task-card" data-my-task="${Number(task.task_id)}">
+      <div class="my-task-top"><span class="my-task-title">${esc(task.title)}</span><span class="my-task-status ${status.cls}">${esc(status.label)}</span></div>
+      <div class="my-task-meta">${esc(taskDate(task.work_date))}${task.requires_photo?' · 📷 нужен фотоотчёт':''}${task.priority==='urgent'?' · Срочно':''}</div>
+    </button>`;
+  }).join('')}</div>`;
+  list.querySelectorAll('[data-my-task]').forEach(btn=>btn.onclick=()=>openMyTask(Number(btn.dataset.myTask)));
+}
+async function loadMyTasks(silent=false){
+  if(employeeTaskLoading) return;
+  employeeTaskLoading=true;
+  if(!silent){ $('myTasksList').innerHTML='<div class="task-api-state">Загружаю задания…</div>'; setTasksError(); }
+  try{
+    const data=await api(EMPLOYEE_TASK_API.mine+employeeTaskRange());
+    employeeTasks=Array.isArray(data.items)?data.items:[];
+    updateTasksBadge(); renderMyTasks();
+    if(employeeTaskId && !$('myTaskDetail').classList.contains('hidden')) renderMyTaskDetail(employeeTaskId);
+  }catch(e){
+    if(!silent){ setTasksError(e.message||'Не удалось загрузить задания.'); $('myTasksList').innerHTML='<div class="task-api-state">Потяни экран или нажми «Обновить».</div>'; }
+  }finally{ employeeTaskLoading=false; }
+}
+
+async function employeeTaskUpload(taskId, files){
+  const form=new FormData(); files.forEach(file=>form.append('file',file,file.name));
+  const res=await fetch(API_BASE+EMPLOYEE_TASK_API.upload(taskId),{
+    method:'POST', headers:{'Authorization':'tma '+initData,'X-Init-Data':initData}, body:form
+  });
+  let data=null; try{data=await res.json();}catch(e){}
+  if(res.status===401) throw {auth:true,message:'Открой приложение заново через Telegram.'};
+  if(!res.ok) throw {status:res.status,message:(data&&data.message)||'Не удалось загрузить фото.',data};
+  return data;
+}
+function releaseEmployeeTaskPhotos(){
+  employeeTaskBlobUrls.forEach(url=>URL.revokeObjectURL(url)); employeeTaskBlobUrls=[];
+}
+async function paintTaskPhotos(container, attachments){
+  if(!container || !attachments || !attachments.length) return;
+  for(const attachment of attachments){
+    const cell=container.querySelector(`[data-task-photo="${Number(attachment.id)}"]`);
+    if(!cell) continue;
+    try{
+      const res=await fetch(API_BASE+attachment.download_url,{headers:{'Authorization':'tma '+initData,'X-Init-Data':initData}});
+      if(!res.ok) throw new Error('photo');
+      const url=URL.createObjectURL(await res.blob()); employeeTaskBlobUrls.push(url);
+      const img=document.createElement('img'); img.src=url; img.alt=attachment.original_name||'Фото задания';
+      cell.textContent=''; cell.appendChild(img); cell.onclick=()=>window.open(url,'_blank');
+    }catch(e){ cell.textContent='Фото недоступно'; }
+  }
+}
+function taskPhotoSection(title, attachments){
+  if(!attachments || !attachments.length) return '';
+  return `<div class="admin-section">${esc(title)}</div><div class="task-photos">${attachments.map(a=>
+    `<button class="task-photo" data-task-photo="${Number(a.id)}" aria-label="${esc(a.original_name||'Открыть фото')}">Загрузка…</button>`).join('')}</div>`;
+}
+function renderSelectedTaskFiles(){
+  const box=$('taskUploadPreview'); if(!box) return;
+  box.innerHTML=employeeTaskFiles.map((file,index)=>{
+    const url=URL.createObjectURL(file); employeeTaskBlobUrls.push(url);
+    return `<div class="task-upload-row"><img src="${url}" alt=""><span>${esc(file.name)}</span><button class="mini" type="button" data-remove-task-photo="${index}">Удалить</button></div>`;
+  }).join('');
+  box.querySelectorAll('[data-remove-task-photo]').forEach(btn=>btn.onclick=()=>{
+    employeeTaskFiles.splice(Number(btn.dataset.removeTaskPhoto),1); renderMyTaskDetail(employeeTaskId,true);
+  });
+}
+function renderMyTaskDetail(taskId,keepFiles=false){
+  const task=employeeTasks.find(item=>Number(item.task_id)===Number(taskId)); if(!task) return;
+  employeeTaskId=Number(taskId); if(!keepFiles) employeeTaskFiles=[]; releaseEmployeeTaskPhotos();
+  const status=taskStatus(task.my_status), locked=['submitted','accepted'].includes(task.my_status), working=task.my_status==='in_progress';
+  const existing=Array.isArray(task.result_attachments)?task.result_attachments:[];
+  $('myTasksList').classList.add('hidden'); $('myTaskDetail').classList.remove('hidden');
+  $('myTaskDetail').innerHTML=`
+    <button class="mini" id="myTaskDetailBack">← Ко всем заданиям</button>
+    <div class="my-task-top" style="margin-top:12px"><div class="formhead">${esc(task.title)}</div><span class="my-task-status ${status.cls}">${esc(status.label)}</span></div>
+    <div class="my-task-meta">${esc(taskDate(task.work_date))}${task.priority==='urgent'?' · Срочно':''}</div>
+    <div class="my-task-desc">${esc(task.description||'Описание не добавлено.')}</div>
+    ${task.requires_photo?'<div class="my-task-required">📷 Для отправки результата нужно хотя бы одно фото.</div>':''}
+    ${taskPhotoSection('Фото от руководителя',task.attachments)}
+    ${taskPhotoSection('Ваши фото результата',existing)}
+    ${locked?`<div class="task-api-state">${task.my_status==='accepted'?'Результат принят руководителем.':'Результат отправлен на проверку.'}${task.my_status_comment?'<br>'+esc(task.my_status_comment):''}</div>`:!working?`
+      ${task.my_status==='blocked'&&task.my_status_comment?`<div class="task-api-error">Проблема: ${esc(task.my_status_comment)}</div>`:''}
+      <div class="my-task-actions"><button class="save" id="taskStartWork">${task.my_status==='blocked'?'Вернуться к выполнению':'Начать выполнение'}</button></div>`:`
+      <div class="my-task-actions">
+        <textarea id="taskResultComment" maxlength="2000" placeholder="Комментарий о результате или проблеме">${esc(task.my_status_comment||'')}</textarea>
+        <label class="mini" style="text-align:center;cursor:pointer">Добавить фото (до 5)<input id="taskResultPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>
+        <div class="task-upload-preview" id="taskUploadPreview"></div>
+        <div class="buttons"><button class="save" id="taskSubmitResult">Отправить результат</button><button class="mini" id="taskReportBlocked">Сообщить о проблеме</button></div>
+      </div>`}
+  `;
+  $('myTaskDetailBack').onclick=showMyTaskList;
+  paintTaskPhotos($('myTaskDetail'),[...(task.attachments||[]),...existing]);
+  if(locked) return;
+  const start=$('taskStartWork'); if(start){ start.onclick=()=>changeMyTaskProgress(task,'in_progress',''); return; }
+  renderSelectedTaskFiles();
+  const input=$('taskResultPhotos');
+  input.onchange=()=>{
+    const selected=[...input.files], room=Math.max(0,5-existing.length);
+    const valid=selected.filter(f=>['image/jpeg','image/png','image/webp'].includes(f.type)&&f.size<=10*1024*1024);
+    if(valid.length!==selected.length) toast('Разрешены JPEG, PNG или WebP до 10 МБ.');
+    employeeTaskFiles=[...employeeTaskFiles,...valid].slice(0,room);
+    if(selected.length>room) toast(`Можно добавить ещё ${room} фото.`);
+    renderMyTaskDetail(taskId,true);
+  };
+  $('taskSubmitResult').onclick=()=>submitMyTask(task);
+  $('taskReportBlocked').onclick=()=>{
+    const comment=$('taskResultComment').value.trim();
+    if(!comment) return toast('Напиши, что мешает выполнить задание.');
+    changeMyTaskProgress(task,'blocked',comment);
+  };
+}
+function showMyTaskList(){
+  employeeTaskId=null; employeeTaskFiles=[]; releaseEmployeeTaskPhotos();
+  $('myTaskDetail').classList.add('hidden'); $('myTasksList').classList.remove('hidden');
+}
+async function changeMyTaskProgress(task,status,comment){
+  setTasksError();
+  try{
+    await api(EMPLOYEE_TASK_API.progress(task.task_id),{method:'POST',body:JSON.stringify({status,comment})});
+    await loadMyTasks(true); employeeTaskId=Number(task.task_id); renderMyTaskDetail(task.task_id);
+    toast(status==='blocked'?'Проблема отправлена руководителю.':'Статус обновлён.');
+  }catch(e){ setTasksError(e.message||'Не удалось обновить задание.'); }
+}
+async function submitMyTask(task){
+  const comment=$('taskResultComment').value.trim();
+  const existing=(task.result_attachments||[]).length;
+  if(task.requires_photo && existing+employeeTaskFiles.length===0) return toast('Добавь фото результата.');
+  const btn=$('taskSubmitResult'); btn.disabled=true; btn.textContent='Отправляю…'; setTasksError();
+  try{
+    if(employeeTaskFiles.length) await employeeTaskUpload(task.task_id,employeeTaskFiles);
+    await api(EMPLOYEE_TASK_API.progress(task.task_id),{method:'POST',body:JSON.stringify({status:'submitted',comment})});
+    employeeTaskFiles=[]; await loadMyTasks(true); employeeTaskId=Number(task.task_id); renderMyTaskDetail(task.task_id);
+    toast('Результат отправлен руководителю.');
+  }catch(e){ setTasksError(e.message||'Не удалось отправить результат.'); btn.disabled=false; btn.textContent='Отправить результат'; }
+}
+async function openMyTask(taskId){
+  const task=employeeTasks.find(item=>Number(item.task_id)===Number(taskId)); if(!task) return;
+  renderMyTaskDetail(taskId);
+  if(task.my_status==='assigned'){
+    try{
+      await api(EMPLOYEE_TASK_API.progress(taskId),{method:'POST',body:JSON.stringify({status:'seen',comment:''})});
+      task.my_status='seen'; updateTasksBadge(); renderMyTaskDetail(taskId);
+    }catch(e){}
+  }
+}
+$('btnMyTasks').onclick=()=>{ showAdminScreen('myTasksView'); showMyTaskList(); loadMyTasks(); };
+$('myTasksReload').onclick=()=>loadMyTasks();
+$('myTasksBack').onclick=()=>{
+  if(!$('myTaskDetail').classList.contains('hidden')) showMyTaskList(); else showAdminScreen(null);
+};
 
 const ADMIN_ROLE_GROUPS = [
   {key:'scout', label:'Скауты'},
@@ -1824,7 +2066,7 @@ if(tg){
   tg.expand();
   try{ tg.setHeaderColor('#0A100C'); tg.setBackgroundColor('#0A100C'); }catch(e){}
 }
-load();
+load().then(ok=>{ if(ok) loadMyTasks(true); });
 let periodicLoadRunning=false;
 /* Открыта ли форма начала или окончания смены. Пока она открыта, фоновое
    обновление не запускаем: перерисовка между открытием формы и тапом по полю

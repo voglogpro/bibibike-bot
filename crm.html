@@ -518,20 +518,25 @@ function openDetail(title,html){$("detailTitle").textContent=title;$("detailRoot
 function closeModal(id){$(id).classList.remove("open")}
 function openMore(){$("moreSheet").classList.add("open")}
 function closeMore(){$("moreSheet").classList.remove("open")}
+function fullscreenActive(){return !!document.fullscreenElement||!!(tg&&tg.isFullscreen)}
+function syncFullscreenButton(){
+  const button=$('fullscreenButton');if(!button)return;
+  const active=fullscreenActive(),label=active?'Вернуть прежний размер':'На весь экран';
+  button.title=label;button.setAttribute('aria-label',label);button.classList.toggle('active',active)
+}
 async function requestFullscreen(){
-  const root=document.documentElement,isDesktop=window.matchMedia('(min-width: 769px)').matches;
-  try{if(document.fullscreenElement){await document.exitFullscreen();toast('Обычный режим.');return}}catch(_){}
-  if(isDesktop&&root.requestFullscreen){
-    try{await root.requestFullscreen({navigationUI:'hide'});toast('Полноэкранный режим включён.');return}catch(_){}
+  const root=document.documentElement;
+  if(tg&&tg.isFullscreen&&typeof tg.exitFullscreen==='function'){
+    try{tg.exitFullscreen();return}catch(_){}
   }
-  try{
-    if(tg){
-      if(tg.expand)tg.expand();
-      if(tg.requestFullscreen){tg.requestFullscreen();setTimeout(()=>{if(!tg.isFullscreen&&!document.fullscreenElement)toast('Telegram не включил полный экран. Обновите Telegram Desktop.')},900);return}
-    }
-  }catch(_){}
+  if(document.fullscreenElement){
+    try{await document.exitFullscreen();return}catch(_){}
+  }
+  if(tg&&typeof tg.requestFullscreen==='function'){
+    try{if(tg.expand)tg.expand();tg.requestFullscreen();return}catch(_){}
+  }
   if(root.requestFullscreen){
-    try{await root.requestFullscreen({navigationUI:'hide'});toast('Полноэкранный режим включён.');return}catch(_){}
+    try{await root.requestFullscreen({navigationUI:'hide'});return}catch(_){}
   }
   toast('Полный экран недоступен. Обновите Telegram Desktop или откройте CRM в браузере.')
 }
@@ -543,6 +548,11 @@ $("loginForm").addEventListener("submit",login);$("logoutButton").onclick=()=>lo
 $$('[data-route]').forEach(b=>b.onclick=()=>setRoute(b.dataset.route));$("mobileMoreButton").onclick=()=>setRoute('more');$("moreSheet").onclick=e=>{if(e.target===$("moreSheet"))closeMore()};
 $("scopeSelect").onchange=()=>{state.cityId=Number($("scopeSelect").value);state.cache={};state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());updateDistrictSuggestions();loadRoute()};
 $("refreshButton").onclick=()=>{delete state.cache[`${state.route}:${state.cityId}`];loadRoute()};$("fullscreenButton").onclick=requestFullscreen;$("staleRetry").onclick=()=>loadRoute();
+document.addEventListener('fullscreenchange',syncFullscreenButton);
+if(tg&&typeof tg.onEvent==='function'){
+  try{tg.onEvent('fullscreenChanged',syncFullscreenButton);tg.onEvent('fullscreenFailed',()=>toast('Telegram не разрешил полноэкранный режим. Обновите Telegram Desktop.'))}catch(_){}
+}
+syncFullscreenButton();
 $$('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));$$('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)closeModal(m.id)});
 $("planForm").addEventListener("submit",createPlan);$("taskForm").addEventListener("submit",createTask);$("taskPhotos").onchange=selectTaskFiles;$("taskRole").onchange=refreshAssigneePreview;
 $$('#planSegment button').forEach(b=>b.onclick=()=>{$$('#planSegment button').forEach(x=>x.classList.toggle("active",x===b));if(b.dataset.value==="day"){$("planStart").value="08:00";$("planEnd").value="18:00"}else{$("planStart").value="20:00";$("planEnd").value="05:00"}});

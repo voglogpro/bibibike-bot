@@ -6231,13 +6231,72 @@ async def api_crm_trends(request):
     if error: return error
     date_range, error = _crm_range(request, city, default_days=10)
     if error: return error
-    if request.query.get("bucket", "day") != "day":
-        return web.json_response({"error": "bucket", "message": "Доступна группировка day."}, status=400)
+    bucket = request.query.get("bucket", "day")
+    if bucket not in {"day", "hour"}:
+        return web.json_response(
+            {"error": "bucket", "message": "Доступна группировка day или hour."}, status=400)
     action_filter = request.query.get("action_type")
     if action_filter and action_filter not in CRM_ACTION_TYPES:
         return web.json_response({"error": "action_type"}, status=400)
     role, error = _crm_scoped_role(context, request.query.get("role"))
     if error: return error
+
+    if bucket == "hour":
+        if date_range["from"] != date_range["to"]:
+            return web.json_response(
+                {"error": "date_range", "message": "Почасовой график доступен для одного дня."},
+                status=400,
+            )
+        event_time_sql = "COALESCE(w.created_at,m.created_at,s.start_at,s.created_at)"
+        sql = (
+            "SELECT a.user_id,a.action_type,a.bike_codes,a.quantity," + event_time_sql +
+            " AS event_at FROM actions a JOIN shifts s ON s.id=a.shift_id "
+            "LEFT JOIN work_message_links w ON w.city_id=a.city_id "
+            "AND w.chat_id=COALESCE(a.chat_id,0) AND w.user_id=a.user_id "
+            "AND w.message_id=a.message_id AND w.shift_id=a.shift_id "
+            "LEFT JOIN manual_reports m ON m.city_id=a.city_id AND m.user_id=a.user_id "
+            "AND m.message_id=a.message_id AND m.shift_id=a.shift_id "
+            "WHERE a.city_id=? AND datetime(" + event_time_sql + ")>=datetime(?) "
+            "AND datetime(" + event_time_sql + ")<datetime(?)"
+        )
+        params = [city["id"], date_range["start_at"].isoformat(),
+                  date_range["end_at"].isoformat()]
+        if role:
+            sql += " AND LOWER(COALESCE(s.role,''))=LOWER(?)"
+            params.append(role)
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            action_rows = await (await db.execute(sql, params)).fetchall()
+        hours = [{"hour": hour, "label": f"{hour:02d}:00", "actions": 0,
+                  "types": {kind: 0 for kind in CRM_ACTION_TYPES}, "employees": set()}
+                 for hour in range(24)]
+        tz = _city_tz(city)
+        target_date = _crm_date(date_range["from"])
+        for row in action_rows:
+            event_at = _parse_datetime(row["event_at"])
+            if not event_at:
+                continue
+            local = event_at.astimezone(tz)
+            if local.date() != target_date or row["action_type"] not in CRM_ACTION_TYPES:
+                continue
+            item = hours[local.hour]
+            units = _action_units(row)
+            item["types"][row["action_type"]] += units
+            item["employees"].add(row["user_id"])
+        for item in hours:
+            for kind in CRM_ACTION_TYPES:
+                item["types"][kind] = max(0, item["types"][kind])
+            if action_filter:
+                item["actions"] = item["types"][action_filter]
+            else:
+                item["actions"] = sum(item["types"].values())
+            item["employees"] = len(item["employees"])
+        return web.json_response({
+            "city": {"id": city["id"], "name": city["name"]},
+            "range": {"from": date_range["from"], "to": date_range["to"]},
+            "bucket": "hour", "action_type": action_filter, "series": hours,
+        })
+
     rows, stats = await _crm_load_shifts(city, date_range, role=role)
     days = {}
     for row in rows:

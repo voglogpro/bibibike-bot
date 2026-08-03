@@ -143,6 +143,14 @@ async def run():
         admin_token=scout_token,
     ))
     assert overview.status == 200 and payload(overview)["totals"]["actions"] == 2
+    hourly = await bot.api_crm_trends(Request(
+        900002, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "bucket": "hour"}, admin_token=scout_token,
+    ))
+    hourly_payload = payload(hourly)
+    assert hourly.status == 200 and len(hourly_payload["series"]) == 24
+    assert hourly_payload["series"][8]["types"]["move"] == 2
+    assert sum(item["actions"] for item in hourly_payload["series"]) == 2
     denied_city = await bot.api_crm_overview(Request(
         900002, query={"city_id": str(other_city["id"])}, admin_token=scout_token,
     ))

@@ -5321,7 +5321,7 @@ async def api_admin_manual_approve(request):
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
     scoped_error = _legacy_admin_scope_error(context)
-    if scoped_error: return scoped_error
+    if scoped_error is not None: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5399,7 +5399,7 @@ async def api_admin_dashboard(request):
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
     scoped_error = _legacy_admin_scope_error(context)
-    if scoped_error: return scoped_error
+    if scoped_error is not None: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5644,7 +5644,7 @@ async def api_admin_history(request):
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401
         )
     scoped_error = _legacy_admin_scope_error(context)
-    if scoped_error: return scoped_error
+    if scoped_error is not None: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5775,7 +5775,7 @@ async def api_admin_force_close(request):
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401)
     scoped_error = _legacy_admin_scope_error(context)
-    if scoped_error: return scoped_error
+    if scoped_error is not None: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -5812,7 +5812,7 @@ async def api_admin_period_new(request):
         return web.json_response(
             {"error": "admin_auth", "message": "Нужен вход в админку."}, status=401)
     scoped_error = _legacy_admin_scope_error(context)
-    if scoped_error: return scoped_error
+    if scoped_error is not None: return scoped_error
     city = context.get("city")
     if not city:
         return web.json_response(
@@ -6020,13 +6020,13 @@ def _crm_shift_item(shift, city, stats, now=None):
 
 async def api_crm_overview(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city)
-    if error: return error
+    if error is not None: return error
     role, error = _crm_scoped_role(context)
-    if error: return error
+    if error is not None: return error
     rows, stats_by_shift = await _crm_load_shifts(city, date_range, role=role)
     now = datetime.now(_city_tz(city))
     items = [_crm_shift_item(row, city, stats_by_shift.get(row["id"]), now) for row in rows]
@@ -6090,16 +6090,16 @@ async def api_crm_overview(request):
 
 async def api_crm_employees(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=10)
-    if error: return error
+    if error is not None: return error
     paging = _crm_paging(request)
     if not paging:
         return web.json_response({"error": "paging"}, status=400)
     role, error = _crm_scoped_role(context, request.query.get("role"))
-    if error: return error
+    if error is not None: return error
     rows, stats_by_shift = await _crm_load_shifts(city, date_range, role=role or None)
     employees = {}
     for shift in rows:
@@ -6159,13 +6159,13 @@ async def api_crm_employees(request):
 
 async def api_crm_employee(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     try: user_id = int(request.match_info["user_id"])
     except (KeyError, ValueError): return web.json_response({"error": "user_id"}, status=400)
     date_range, error = _crm_range(request, city, default_days=30)
-    if error: return error
+    if error is not None: return error
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         user = await (await db.execute(
@@ -6173,7 +6173,7 @@ async def api_crm_employee(request):
             (user_id, city["id"]),
         )).fetchone()
     scoped_role, error = _crm_scoped_role(context)
-    if error: return error
+    if error is not None: return error
     if user and scoped_role and (user["role"] or "").casefold() != scoped_role.casefold():
         return web.json_response({"error": "not_found"}, status=404)
     rows, stats_by_shift = await _crm_load_shifts(
@@ -6198,17 +6198,17 @@ async def api_crm_employee(request):
 
 async def api_crm_shifts(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=10)
-    if error: return error
+    if error is not None: return error
     paging = _crm_paging(request)
     if not paging: return web.json_response({"error": "paging"}, status=400)
     try: user_id = int(request.query["user_id"]) if request.query.get("user_id") else None
     except ValueError: return web.json_response({"error": "user_id"}, status=400)
     role, error = _crm_scoped_role(context, request.query.get("role"))
-    if error: return error
+    if error is not None: return error
     rows, stats = await _crm_load_shifts(
         city, date_range, user_id=user_id, role=role,
         status=request.query.get("status"), source=request.query.get("source"),
@@ -6226,11 +6226,11 @@ async def api_crm_shifts(request):
 
 async def api_crm_trends(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=10)
-    if error: return error
+    if error is not None: return error
     bucket = request.query.get("bucket", "day")
     if bucket not in {"day", "hour"}:
         return web.json_response(
@@ -6239,7 +6239,7 @@ async def api_crm_trends(request):
     if action_filter and action_filter not in CRM_ACTION_TYPES:
         return web.json_response({"error": "action_type"}, status=400)
     role, error = _crm_scoped_role(context, request.query.get("role"))
-    if error: return error
+    if error is not None: return error
 
     if bucket == "hour":
         if date_range["from"] != date_range["to"]:
@@ -6322,13 +6322,13 @@ async def api_crm_trends(request):
 
 async def api_crm_data_quality(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=30)
-    if error: return error
+    if error is not None: return error
     role, error = _crm_scoped_role(context)
-    if error: return error
+    if error is not None: return error
     rows, stats = await _crm_load_shifts(city, date_range, role=role)
     issues = []
     valid_roles = {role.casefold() for role in city_supported_roles(city["id"])}
@@ -6416,11 +6416,11 @@ async def _crm_validate_plan_target(db, city, user_id, role, role_scope=None):
 
 async def api_crm_calendar(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=31)
-    if error: return error
+    if error is not None: return error
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         plans = await (await db.execute(
@@ -6431,7 +6431,7 @@ async def api_crm_calendar(request):
             (city["id"], date_range["from"], date_range["to"]),
         )).fetchall()
     role_scope, error = _crm_scoped_role(context)
-    if error: return error
+    if error is not None: return error
     if role_scope:
         plans = [row for row in plans if
                  ((row["role"] or "").casefold() == role_scope.casefold()) or row["user_id"] is not None]
@@ -6512,11 +6512,11 @@ async def api_crm_calendar(request):
 
 async def api_crm_planned_shift_create(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     city, error = _crm_city(context, body=body)
-    if error: return error
+    if error is not None: return error
     work_date = _crm_date(body.get("work_date")); start = _valid_time(body.get("start_time"))
     end = _valid_time(body.get("end_time")); role = (body.get("role") or "").strip() or None
     try: user_id = int(body["user_id"]) if body.get("user_id") not in (None, "") else None
@@ -6566,11 +6566,11 @@ async def api_crm_planned_shift_create(request):
 
 async def api_crm_planned_shifts_batch(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     city, error = _crm_city(context, body=body)
-    if error: return error
+    if error is not None: return error
     start_date = _crm_date(body.get("date_from")); end_date = _crm_date(body.get("date_to"))
     start = _valid_time(body.get("start_time")); end = _valid_time(body.get("end_time"))
     district = str(body.get("district") or "")[:200]
@@ -6665,7 +6665,7 @@ async def api_crm_planned_shifts_batch(request):
 
 async def api_crm_planned_shift_update(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: plan_id = int(request.match_info["plan_id"])
@@ -6710,7 +6710,7 @@ async def api_crm_planned_shift_update(request):
 
 async def api_crm_context(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     return web.json_response({
         "ok": True,
         "user": {"id": context["telegram_user"]["id"],
@@ -6782,9 +6782,9 @@ async def _enqueue_crm_notification(db, city_id, user_id, kind, entity_id, paylo
 
 async def api_crm_task_assignee_preview(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     target_type = request.query.get("target_type")
     try: user_id = int(request.query["user_id"]) if request.query.get("user_id") else None
     except ValueError: return web.json_response({"error": "user_id"}, status=400)
@@ -6913,11 +6913,11 @@ async def _crm_task_payloads(db, rows, detailed=False, viewer_user_id=None):
 
 async def api_crm_tasks(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     city, error = _crm_city(context, request=request)
-    if error: return error
+    if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=31)
-    if error: return error
+    if error is not None: return error
     paging = _crm_paging(request)
     if not paging: return web.json_response({"error": "paging"}, status=400)
     clauses = ["city_id=?", "COALESCE(date_to,work_date)>=?", "COALESCE(date_from,work_date)<=?"]
@@ -6949,7 +6949,7 @@ async def api_crm_tasks(request):
 
 async def api_crm_task_detail(request):
     context, error = await _crm_admin(request)
-    if error: return error
+    if error is not None: return error
     try: task_id = int(request.match_info["task_id"])
     except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -6965,11 +6965,11 @@ async def api_crm_task_detail(request):
 
 async def api_crm_task_create(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     city, error = _crm_city(context, body=body)
-    if error: return error
+    if error is not None: return error
     date_from = _crm_date(body.get("date_from") or body.get("work_date"))
     date_to = _crm_date(body.get("date_to") or body.get("date_from") or body.get("work_date"))
     title = str(body.get("title") or "").strip()
@@ -7044,7 +7044,7 @@ async def api_crm_task_create(request):
 
 async def api_crm_task_publish(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     try: task_id = int(request.match_info["task_id"])
     except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -7070,7 +7070,7 @@ async def api_crm_task_publish(request):
 
 async def api_crm_task_update(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: task_id = int(request.match_info["task_id"])
@@ -7118,7 +7118,7 @@ async def api_crm_task_update(request):
 
 async def api_crm_task_assignee_status(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: task_id = int(request.match_info["task_id"]); user_id = int(request.match_info["user_id"])
@@ -7167,7 +7167,7 @@ async def api_crm_task_assignee_status(request):
 
 async def api_crm_task_admin_comment(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: task_id = int(request.match_info["task_id"])
@@ -7198,7 +7198,7 @@ async def api_employee_tasks_mine(request):
     city = get_city((user or {}).get("city_id"))
     if not city: return web.json_response({"error": "city"}, status=409)
     date_range, error = _crm_range(request, city, default_days=31)
-    if error: return error
+    if error is not None: return error
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
@@ -7484,7 +7484,7 @@ async def crm_shift_task_sync_worker():
 
 async def api_crm_task_upload(request):
     context, error = await _crm_admin(request, write=True)
-    if error: return error
+    if error is not None: return error
     try: task_id = int(request.match_info["task_id"])
     except (KeyError, ValueError): return web.json_response({"error": "task_id"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -7721,7 +7721,7 @@ async def cleanup_crm_uploads():
 
 async def api_crm_admins(request):
     context, error = await _crm_admin(request, network=True)
-    if error: return error
+    if error is not None: return error
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
@@ -7740,7 +7740,7 @@ async def api_crm_admins(request):
 
 async def api_crm_admin_upsert(request):
     context, error = await _crm_admin(request, write=True, network=True)
-    if error: return error
+    if error is not None: return error
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: user_id = int(body.get("user_id")); city_ids = [int(value) for value in body.get("city_ids", [])]

@@ -132,6 +132,17 @@ async def run():
     network_token, _ = bot._issue_admin_token(900001, 1)
     scout_token, _ = bot._issue_admin_token(900002, 1)
 
+    # Missing or expired CRM sessions must return 401, never crash with
+    # context=None and turn an authentication error into HTTP 500.
+    unauthenticated_trends = await bot.api_crm_trends(Request(
+        900002, query={"city_id": str(city["id"]), "from": today, "to": today},
+    ))
+    assert unauthenticated_trends.status == 401
+    unauthenticated_quality = await bot.api_crm_data_quality(Request(
+        900002, query={"city_id": str(city["id"]), "from": today, "to": today},
+    ))
+    assert unauthenticated_quality.status == 401
+
     # Login/context используют явный account, а не старую admin_city_access.
     login = await bot.api_admin_login(Request(900001, body={"password": "test-admin-password"}))
     assert login.status == 200 and payload(login)["role"] == "network_admin"

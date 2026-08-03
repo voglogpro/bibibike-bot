@@ -191,6 +191,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if(tg){
   try{tg.ready();tg.expand();}catch(_){}
+  try{if(typeof tg.requestFullscreen==='function')tg.requestFullscreen()}catch(_){}
 }
 const initData = tg ? tg.initData : "";
 const $ = id => document.getElementById(id);

@@ -117,6 +117,12 @@ KHIMKI_DRIVERS_TOPIC_MOVES   = 11           # «Подвозы»: 4-значны
 KHIMKI_DRIVERS_TOPIC_REPORTS = 2            # «Отчёты»: начало и конец смены
 KHIMKI_DRIVERS_TOPIC_REPAIR  = 365          # «Ремонт»: обычный парсер по словам
 
+# Чарджеры Химки (t.me/c/4390770669). Бот слушает только тему 4
+# «Пустые АКБ»: любые 4-значные номера считаются заменами АКБ. Отдельной
+# темы отчётов в конфигурации нет, поэтому живой отчёт публикуется в General.
+KHIMKI_CHARGERS_GROUP_ID      = -1004390770669
+KHIMKI_CHARGERS_TOPIC_BATTERY = 4
+
 # Дополнительные рабочие темы, которые бот слушает сверх основных.
 # Тип парсера каждой темы выбирается отдельными таблицами ниже.
 # Формат: {chat_id группы: (id темы, ...)}. Добавить тему — одна цифра сюда.
@@ -143,9 +149,6 @@ BARE_REPAIR_TOPICS = {
 STICKER_TOPICS = {
     KHIMKI_SCOUTS_GROUP_ID: (KHIMKI_SCOUTS_TOPIC_STICKER,),
 }
-
-# Чарджеров в Химках нет. Появятся — добавь сюда третий блок и запись
-# в "role_groups" ниже, больше ничего менять не потребуется.
 
 # === НОВОЕ: живое сообщение обновляется не чаще, чем раз в N секунд ===
 DEBOUNCE_SEC = 20
@@ -184,7 +187,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-07-31 · свободный ремонт + слово Оклейка в Химках"
+BUILD_VERSION = "2026-08-03 · чарджеры Химок + надёжная серия сообщений"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -338,6 +341,15 @@ def _configured_cities():
                 "topic_moves": KHIMKI_DRIVERS_TOPIC_MOVES,
                 "topic_npb": NO_TOPIC,
                 "topic_reports": KHIMKI_DRIVERS_TOPIC_REPORTS,
+            },
+            {
+                "role": "Чарджер",
+                "group_id": KHIMKI_CHARGERS_GROUP_ID,
+                # Только тема 4 «Пустые АКБ» является рабочей.
+                "topic_tasks": KHIMKI_CHARGERS_TOPIC_BATTERY,
+                "topic_moves": None,
+                "topic_npb": KHIMKI_CHARGERS_TOPIC_BATTERY,
+                "topic_reports": NO_TOPIC,
             },
         ],
     }]
@@ -503,6 +515,11 @@ async def init_db():
     repair_shift_ids = []
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON")
+        # WAL и увеличенное ожидание записи защищают от потери действий, когда
+        # сотрудники подряд отправляют много сообщений с номерами байков.
+        await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA synchronous = NORMAL")
+        await db.execute("PRAGMA busy_timeout = 15000")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1537,6 +1554,7 @@ async def replace_message_actions(uid, mid, city_id, shift_id, actions, event_ve
     приводила к тихому отказу записи.
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 15000")
         await db.execute("BEGIN IMMEDIATE")
         version_row = await (await db.execute(
             "SELECT shift_id, last_event_version FROM work_message_links "
@@ -1600,6 +1618,7 @@ async def link_work_message(uid, mid, city_id, shift_id, created_at=None, chat_i
     """
     created_at = created_at or datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 15000")
         await db.execute(
             "INSERT INTO work_message_links (city_id, chat_id, user_id, message_id, shift_id, "
             "created_at) VALUES (?, ?, ?, ?, ?, ?) "
@@ -3142,9 +3161,9 @@ class CityTopicFilter(BaseFilter):
         return {"city": city} if matches else False
 
 
-async def process_work_message(message: Message, city, npb=False, edited=False,
-                               moves=False, repair_topic=False,
-                               bare_repair_topic=False, sticker_topic=False):
+async def _process_work_message_locked(message: Message, city, npb=False, edited=False,
+                                       moves=False, repair_topic=False,
+                                       bare_repair_topic=False, sticker_topic=False):
     text = message.text or message.caption or ""
     if not message.from_user or getattr(message.from_user, "is_bot", False):
         return
@@ -3309,6 +3328,40 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
                     await freeze_earned(sid)
                 schedule_report_update(sid)
         schedule_report_update(shift['id'])
+
+
+# Aiogram обрабатывает несколько входящих обновлений параллельно. Без этой
+# очереди серия сообщений одного сотрудника могла одновременно открыть
+# несколько SQLite-транзакций: одно сообщение записывалось, остальные могли
+# завершиться ошибкой "database is locked". Очередь отдельна для каждого
+# сотрудника и чата, поэтому чужие сообщения друг друга не задерживают.
+_work_ingest_locks = {}  # (city_id, chat_id, user_id) -> {lock, users}
+
+
+async def process_work_message(message: Message, city, npb=False, edited=False,
+                               moves=False, repair_topic=False,
+                               bare_repair_topic=False, sticker_topic=False):
+    sender = getattr(message, "from_user", None)
+    if not sender or getattr(sender, "is_bot", False):
+        return
+    key = (city["id"], message.chat.id, sender.id)
+    entry = _work_ingest_locks.get(key)
+    if entry is None:
+        entry = {"lock": asyncio.Lock(), "users": 0}
+        _work_ingest_locks[key] = entry
+    entry["users"] += 1
+    try:
+        async with entry["lock"]:
+            await _process_work_message_locked(
+                message, city, npb=npb, edited=edited, moves=moves,
+                repair_topic=repair_topic,
+                bare_repair_topic=bare_repair_topic,
+                sticker_topic=sticker_topic,
+            )
+    finally:
+        entry["users"] -= 1
+        if entry["users"] == 0 and _work_ingest_locks.get(key) is entry:
+            _work_ingest_locks.pop(key, None)
 
 # ============================================================
 # ЧАТ 1 (и остальные темы, кроме ОТЧЕТОВ) — НОВЫЕ СООБЩЕНИЯ

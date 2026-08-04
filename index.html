@@ -448,16 +448,6 @@
             <div class="sub" id="earnSub"></div>
           </div>
 
-          <button type="button" class="shift-task hidden" id="shiftTaskCard">
-            <span class="task-ic">◎</span>
-            <span class="task-copy">
-              <span class="task-kicker" id="shiftTaskKicker">Задача дня</span>
-              <span class="task-name" id="shiftTaskName">—</span>
-              <span class="task-note" id="shiftTaskNote">Открыть подробности</span>
-            </span>
-            <span class="task-go">›</span>
-          </button>
-
           <!-- Счётчики; «Оклейка» показывается только для смены в Химках. -->
           <div class="grid" id="countersGrid">
             <div class="tile">
@@ -811,7 +801,6 @@
   <!-- Tab Bar -->
   <nav class="tabbar hidden" id="tabbar">
     <button class="tab on" data-tab="shift"><span class="ti">ϟ</span>Смена</button>
-    <button class="tab" data-tab="tasks"><span class="ti">✓</span><span class="task-count nav-count hidden" id="tasksNavBadge">0</span>Задания</button>
     <button class="tab" data-tab="rating"><span class="ti">◉</span>Профиль</button>
     <button class="tab" data-tab="more"><span class="ti">≡</span>Ещё</button>
   </nav>
@@ -1150,7 +1139,6 @@ document.querySelectorAll('.tab').forEach(t=>{
     }
     if(t.dataset.tab === 'rating' && !histLoaded) loadHistory();
     if(t.dataset.tab === 'settings') fillSettings();
-    if(t.dataset.tab === 'more') loadMyTasks(true);
     window.scrollTo(0,0);
   };
 });

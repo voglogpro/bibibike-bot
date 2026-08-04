@@ -38,6 +38,7 @@ import hashlib
 import base64
 import html
 import math
+import calendar
 import uuid
 import time
 import shutil
@@ -220,7 +221,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-04 · CRM Auto Schedule + информативные уведомления"
+BUILD_VERSION = "2026-08-04 · CRM: авторайоны, зарплата и аналитика декады"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -271,9 +272,17 @@ def _webapp_button():
         )
     return None
 
-# Список районов больше не ограничивает открытие смены (район — любой текст),
-# оставлен для истории:
-DISTRICTS = ["красная", "фмр", "юмр", "восточка", "ставрополька", "гмр"]
+# Район остаётся свободным текстом, но CRM предлагает руководителю единый
+# справочник. Это не влияет на парсер и не ограничивает старые записи.
+CITY_DISTRICTS = {
+    "краснодар": [
+        "ЦМР / Красная", "ФМР", "ЮМР", "ГМР", "КМР", "ЧМР", "РМР",
+        "СМР", "ПМР", "ККБ", "Восточка / ВКР", "Ставропольская",
+        "Пашковка", "ЭНКА", "Немецкая деревня", "Западный обход",
+        "Российская", "40 лет Победы",
+    ],
+}
+DISTRICTS = [value.casefold() for value in CITY_DISTRICTS["краснодар"]]
 
 # ============================================================================
 # [02-RUNTIME] TELEGRAM BOT, РОУТЕРЫ, ЛОГИРОВАНИЕ И ОБЩИЕ ПОМОЩНИКИ
@@ -5462,9 +5471,11 @@ async def api_admin_login(request):
         "expires_at": expires,
         "role": account["role"],
         "role_scope": account.get("role_scope"),
-        "city": {"id": city["id"], "name": city["name"]},
+        "city": {"id": city["id"], "name": city["name"],
+                 "districts": CITY_DISTRICTS.get(city["name"].casefold(), [])},
         "cities": [
-            {"id": item_id, "name": get_city(item_id)["name"]}
+            {"id": item_id, "name": get_city(item_id)["name"],
+             "districts": CITY_DISTRICTS.get(get_city(item_id)["name"].casefold(), [])}
             for item_id in city_ids if get_city(item_id)
         ],
     })
@@ -6562,6 +6573,114 @@ async def api_crm_employee_settings(request):
     }})
 
 
+async def api_crm_payroll(request):
+    """Расчёт зарплаты по выбранной декаде в границах доступного города."""
+    context, error = await _crm_admin(request)
+    if error is not None:
+        return error
+    city, error = _crm_city(context, request=request)
+    if error is not None:
+        return error
+    month = str(request.query.get("month") or "").strip()
+    try:
+        month_date = datetime.strptime(month, "%Y-%m").date().replace(day=1)
+        decade = int(request.query.get("decade", 1))
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "period", "message": "Выберите месяц и декаду."}, status=400
+        )
+    if decade not in {1, 2, 3}:
+        return web.json_response(
+            {"error": "decade", "message": "Декада должна быть 1, 2 или 3."}, status=400
+        )
+    last_day = calendar.monthrange(month_date.year, month_date.month)[1]
+    start_day = {1: 1, 2: 11, 3: 21}[decade]
+    end_day = {1: 10, 2: 20, 3: last_day}[decade]
+    start_date = month_date.replace(day=start_day)
+    end_date = month_date.replace(day=end_day)
+    tz = _city_tz(city)
+    date_range = {
+        "from": start_date.isoformat(),
+        "to": end_date.isoformat(),
+        "start_at": datetime.combine(start_date, datetime.min.time(), tzinfo=tz),
+        "end_at": datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=tz),
+    }
+    role, error = _crm_scoped_role(context)
+    if error is not None:
+        return error
+    rows, stats_by_shift = await _crm_load_shifts(city, date_range, role=role)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        sql = (
+            "SELECT user_id,full_name,role,pay_type,pay_amount FROM users "
+            "WHERE city_id=?"
+        )
+        params = [city["id"]]
+        if role:
+            sql += " AND LOWER(role)=LOWER(?)"
+            params.append(role)
+        sql += " ORDER BY full_name"
+        users = await (await db.execute(sql, params)).fetchall()
+
+    employees = {
+        int(user["user_id"]): {
+            "user_id": int(user["user_id"]),
+            "name": user["full_name"] or "Сотрудник",
+            "role": user["role"] or "",
+            "pay_type": user["pay_type"] or DEFAULT_PAY_TYPE,
+            "pay_amount": float(user["pay_amount"] or 0),
+            "shifts_count": 0,
+            "worked_minutes": 0,
+            "earned": 0.0,
+            "shifts": [],
+        }
+        for user in users
+    }
+    now = datetime.now(tz)
+    for shift_row in rows:
+        shift = dict(shift_row)
+        uid = int(shift.get("user_id") or 0)
+        employee = employees.get(uid)
+        if not employee:
+            continue
+        payload = _crm_shift_item(shift, city, stats_by_shift.get(shift["id"]), now)
+        pay_type = shift.get("pay_type_snap") or employee["pay_type"]
+        pay_amount = shift.get("pay_amount_snap")
+        if pay_amount is None:
+            pay_amount = employee["pay_amount"]
+        battery = payload["actions"].get("battery", 0)
+        if shift.get("is_active"):
+            earned = compute_earned(pay_type, pay_amount, payload["worked_minutes"], battery)
+        else:
+            earned = float(shift.get("earned") or 0)
+        employee["shifts_count"] += 1
+        employee["worked_minutes"] += payload["worked_minutes"]
+        employee["earned"] += earned
+        employee["shifts"].append({
+            "shift_id": shift["id"], "date": payload["date"],
+            "start_time": payload["start_time"], "end_time": payload["end_time"],
+            "worked_minutes": payload["worked_minutes"], "district": payload["district"],
+            "status": payload["status"], "earned": round(earned, 2),
+        })
+    result = list(employees.values())
+    for employee in result:
+        employee["earned"] = round(employee["earned"], 2)
+    result.sort(key=lambda item: (-item["earned"], item["name"].casefold()))
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "month": month, "decade": decade,
+        "range": {"from": start_date.isoformat(), "to": end_date.isoformat()},
+        "totals": {
+            "employees": len(result),
+            "shifts": sum(item["shifts_count"] for item in result),
+            "worked_minutes": sum(item["worked_minutes"] for item in result),
+            "earned": round(sum(item["earned"] for item in result), 2),
+        },
+        "items": result,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 async def api_crm_shifts(request):
     context, error = await _crm_admin(request)
     if error is not None: return error
@@ -7391,7 +7510,11 @@ async def api_crm_context(request):
         "role": context["admin"]["role"],
         "role_scope": context["admin"].get("role_scope"),
         "can_write": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
-        "cities": [{"id": city_id, "name": get_city(city_id)["name"]}
+        "cities": [{
+            "id": city_id,
+            "name": get_city(city_id)["name"],
+            "districts": CITY_DISTRICTS.get(get_city(city_id)["name"].casefold(), []),
+        }
                    for city_id in context["allowed_city_ids"] if get_city(city_id)],
         "default_city_id": context["city"]["id"] if context.get("city") else None,
     })
@@ -8056,8 +8179,8 @@ def _crm_notification_text(kind, payload):
         lines = ["📋 НОВОЕ ЗАДАНИЕ", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
         if district: lines.append(f"📍 Район: {district}")
         if details: lines.extend(["", "📝 Что нужно сделать:", details])
-        if payload.get("requires_photo"): lines.extend(["", "📸 Для завершения потребуется фотоотчёт."])
-        lines.extend(["", "👇 Откройте приложение, чтобы посмотреть задание и отметить выполнение."])
+        if payload.get("requires_photo"): lines.extend(["", "📸 Руководитель ожидает фото результата в личном чате."])
+        lines.extend(["", "✅ Всё задание уже находится в этом сообщении — открывать отдельный раздел не нужно."])
         return "\n".join(lines)
     if kind == "planned_shift":
         is_extra = payload.get("work_kind") == "extra"
@@ -8124,13 +8247,11 @@ async def deliver_crm_notifications_once(limit=50):
         payload = json.loads(row["payload_json"] or "{}")
         text = _crm_notification_text(row["kind"], payload)
         task_id = payload.get("task_id") if row["kind"] == "task_assigned" else None
-        if row["kind"] == "task_assigned":
-            button_text = "📋 Открыть задание"
-        elif row["kind"] in {"planned_shift", "shift_reminder", "shift_auto_started"}:
+        if row["kind"] in {"planned_shift", "shift_reminder", "shift_auto_started"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        keyboard = None if row["kind"] == "task_assigned" else InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
         ]])
         try:
@@ -8782,6 +8903,7 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/context", api_crm_context)
         app.router.add_get("/api/admin/crm/overview", api_crm_overview)
         app.router.add_get("/api/admin/crm/employees", api_crm_employees)
+        app.router.add_get("/api/admin/crm/payroll", api_crm_payroll)
         app.router.add_get("/api/admin/crm/employees/{user_id}", api_crm_employee)
         app.router.add_patch("/api/admin/crm/employees/{user_id}/settings", api_crm_employee_settings)
         app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)

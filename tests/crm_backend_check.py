@@ -553,6 +553,18 @@ async def run():
     assert settings_response.status == 200 and payload(settings_response)["employee"]["pay_amount"] == 420
     assert template_response.status == 201 and len(payload(template_list)["items"]) == 1
 
+    # Зарплата считается за выбранную декаду и не выходит за город доступа.
+    local_today = datetime.now(bot._city_tz(city)).date()
+    payroll_response = await bot.api_crm_payroll(Request(
+        900001,
+        query={"city_id": str(city["id"]), "month": local_today.strftime("%Y-%m"),
+               "decade": str(1 if local_today.day <= 10 else 2 if local_today.day <= 20 else 3)},
+        admin_token=network_token,
+    ))
+    payroll_data = payload(payroll_response)
+    assert payroll_response.status == 200 and payroll_data["city"]["id"] == city["id"]
+    assert all(item["user_id"] != 920004 for item in payroll_data["items"])
+
     # Фото: проверка типов и orphan cleanup без публичной раздачи.
     assert bot._crm_image_type(b"\xff\xd8\xffrest")[0] == "image/jpeg"
     assert bot._crm_image_type(b"not-image")[0] is None

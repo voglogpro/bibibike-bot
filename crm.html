@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="dark">
 <title>BibiBike — управление</title>
 <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root{
   --green:#35d33a;--green-700:#16872a;--green-50:#eefbed;--deep:#071b10;
@@ -63,6 +66,37 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 }
 @media(max-width:370px){.workspace{padding-left:9px;padding-right:9px}.topbar{margin-left:-9px;margin-right:-9px}.kpi-grid{gap:7px}.kpi{padding:11px}.kpi-label{font-size:9px}.kpi-value{font-size:21px}.card{padding:12px}.mobile-nav .nav-btn{font-size:8px}.day-tile{min-height:60px}.day-stat{font-size:7px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* BibiBike CRM redesign v2. Данные и API сохранены, изменён только UI-слой. */
+:root{
+  --green:#31d843;--green-700:#31d843;--green-50:#102b18;--deep:#070c09;
+  --ink:#f2f7f3;--muted:#8b9890;--bg:#090f0b;--card:#111814;--line:rgba(255,255,255,.09);
+  --red:#ff5964;--red-50:#2a1518;--amber:#ffb32c;--amber-50:#2a2211;
+  --blue:#4a91ff;--blue-50:#10213a;--shadow:none;--radius:17px;--sidebar:236px;
+}
+html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+.screen-center{background:radial-gradient(circle at 50% -12%,#123b20 0,#070c09 48%)}
+.auth-card{background:#101713;border:1px solid var(--line);box-shadow:0 28px 80px rgba(0,0,0,.48)}.auth-logo{box-shadow:0 10px 25px rgba(49,216,67,.22)}
+.sidebar{background:#080e0a;border-right:1px solid var(--line);padding:20px 14px}.brand-mark{border-radius:12px}.brand span,.side-profile span{color:#829087}.nav-btn{color:#89978e}.nav-btn:hover{background:#111b15}.nav-btn.active{background:#102618;color:#f5faf6;box-shadow:inset 3px 0 var(--green)}
+.workspace{padding:18px 22px 42px}.topbar{margin-bottom:17px}.top-title h1{font-size:29px}.top-title p{color:var(--muted)}
+.scope-select,.icon-btn,.input,.select,.textarea,.btn-secondary,.chip,.row-card,.table-wrap,.day-tile,.task-card,.more-item{background:#111814;border-color:var(--line);color:var(--ink)}
+.input::placeholder,.textarea::placeholder{color:#66736b}.input:focus,.select:focus,.textarea:focus{background:#131c17;border-color:rgba(49,216,67,.62)}
+.kpi,.card{background:var(--card);border-color:var(--line);box-shadow:none}.ops-kpi-grid .kpi{border-radius:15px;min-height:112px;padding:16px}.ops-kpi-grid .kpi-value{font-size:31px;margin:13px 0 7px}.ops-kpi-grid .kpi-label{font-size:9px}.ops-chart-card{min-height:330px;border-radius:17px}
+.row-card.clickable:hover,.data-table tbody tr.clickable:hover{background:#151f19;border-color:rgba(49,216,67,.30)}.initial{background:#102b18;color:var(--green)}
+.badge{background:#1a221d;color:#aab5ae}.badge.active{background:#102b18;color:#58e568}.badge.warn{background:#2a2211;color:#ffc75c}.badge.danger{background:#2a1518;color:#ff7a82}.badge.blue{background:#10213a;color:#72aaff}
+.data-table th{background:#0e1511;color:#849187}.data-table td,.role-row,.check-row{border-color:var(--line)}.data-table tbody tr:hover{background:#151f19}
+.calendar-toolbar{border-color:var(--line)}.day-tile:hover,.day-tile.selected{border-color:rgba(49,216,67,.62);box-shadow:0 0 0 2px rgba(49,216,67,.10)}.day-tile.today .day-number{background:var(--green);color:#061208}
+.progress,.hour-stack{background:#202923}.state{background:#0e1511;border-color:var(--line)}.state-icon{background:#19211c}.skeleton{background:#1b241e}.skeleton:after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent)}
+.stale{background:#2a2211;border-color:#5c4614;color:#ffd16b}.sheet,.modal{background:#0d1410}.sheet-grab{background:#405047}.modal-close{background:#1a231e;color:var(--ink)}.modal-backdrop,.sheet-backdrop{background:rgba(1,7,3,.72)}
+.seg{background:#19211c}.seg button.active{background:#2a352e;box-shadow:none}.date-preview{background:#0e1511;border-color:var(--line)}
+.hourly-chart{border-color:var(--line)}.daily-line .grid-line{stroke:#202923}.daily-line .point{fill:#111814}.trend-chart{border-color:var(--line)}
+.btn-primary{background:var(--green);color:#061208}.btn-danger{background:#2a1518;color:#ff7a82}.text-btn{color:var(--green)}
+.toast{background:#edf5ef;color:#09110c}.form-error{background:#2a1518;border-color:#5c292f;color:#ff9ba1}
+@media(max-width:720px){
+  .workspace{background:#080e0a}.topbar{background:rgba(8,14,10,.95);border-bottom:1px solid var(--line)}
+  .mobile-nav{background:rgba(7,12,9,.97);border-top:1px solid var(--line)}.mobile-nav .nav-btn.active{background:#102618;color:var(--green)}
+  .ops-kpi-grid .kpi{min-height:104px;padding:13px}.ops-chart-card{min-height:300px}.form-actions{background:#0d1410;border-color:var(--line)}
+}
 </style>
 </head>
 <body>
@@ -100,7 +134,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
   <aside class="sidebar">
     <div class="brand"><div class="brand-mark">bb.</div><div class="brand-text"><b>BibiBike CRM</b><span>Управление операциями</span></div></div>
     <nav class="nav" aria-label="Разделы CRM">
-      <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span class="nav-label">Анализ</span></button>
+      <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span class="nav-label">Сегодня</span></button>
       <button type="button" class="nav-btn" data-route="calendar"><svg class="icon"><use href="#i-calendar"/></svg><span class="nav-label">Календарь</span></button>
       <button type="button" class="nav-btn" data-route="tasks"><svg class="icon"><use href="#i-task"/></svg><span class="nav-label">Задания</span></button>
       <button type="button" class="nav-btn" data-route="team"><svg class="icon"><use href="#i-team"/></svg><span class="nav-label">Команда</span></button>
@@ -111,7 +145,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
 
   <main class="workspace">
     <header class="topbar">
-      <div class="top-title"><h1 id="pageTitle">Анализ</h1><p id="pageSubtitle">Смены, действия и качество работы команды</p></div>
+      <div class="top-title"><h1 id="pageTitle">Сегодня</h1><p id="pageSubtitle">Что происходит в городе прямо сейчас</p></div>
       <div class="top-tools">
         <span class="updated" id="updatedAt"></span>
         <select class="scope-select" id="scopeSelect" aria-label="Город"></select>
@@ -122,7 +156,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
     </header>
     <div class="content">
       <div id="staleBanner" class="stale hidden"><span>Показаны сохранённые данные. Соединение с сервером потеряно.</span><button type="button" class="btn btn-secondary" id="staleRetry">Повторить</button></div>
-      <section class="page active" id="page-analysis" aria-label="Анализ"><div id="todayRoot"></div></section>
+      <section class="page active" id="page-analysis" aria-label="Сегодня"><div id="todayRoot"></div></section>
       <section class="page" id="page-calendar" aria-label="Календарь"><div id="calendarRoot"></div></section>
       <section class="page" id="page-tasks" aria-label="Задания"><div id="tasksRoot"></div></section>
       <section class="page" id="page-team" aria-label="Команда"><div id="teamRoot"></div></section>
@@ -131,7 +165,7 @@ button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}.h
   </main>
 
   <nav class="mobile-nav" aria-label="Основная навигация">
-    <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span>Анализ</span></button>
+    <button type="button" class="nav-btn active" data-route="analysis"><svg class="icon"><use href="#i-report"/></svg><span>Сегодня</span></button>
     <button type="button" class="nav-btn" data-route="calendar"><svg class="icon"><use href="#i-calendar"/></svg><span>Календарь</span></button>
     <button type="button" class="nav-btn" data-route="tasks"><svg class="icon"><use href="#i-task"/></svg><span>Задания</span></button>
     <button type="button" class="nav-btn" data-route="team"><svg class="icon"><use href="#i-team"/></svg><span>Команда</span></button>
@@ -207,7 +241,7 @@ const API = {
   trends:"/api/admin/crm/trends"
 };
 const ROUTES = {
-  analysis:["Операционный обзор","Состояние города, команда и качество работы в одном окне"],
+  analysis:["Сегодня","Что происходит в городе прямо сейчас"],
   calendar:["Календарь","Плановые и фактические смены рядом"],
   tasks:["Задания","Индивидуальный прогресс каждого исполнителя"],
   team:["Команда","Сотрудники, смены и действия"],

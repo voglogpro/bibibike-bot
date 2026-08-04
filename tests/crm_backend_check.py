@@ -105,7 +105,8 @@ async def run():
             [(900001, "Владелец", "Скаут", city["id"]),
              (900002, "Старший скаут", "Скаут", city["id"]),
              (910001, "Скаут Один", "Скаут", city["id"]),
-             (910002, "Водитель Один", "Водитель", city["id"])],
+             (910002, "Водитель Один", "Водитель", city["id"]),
+             (910004, "Скаут Для Закрытия", "Скаут", city["id"])],
         )
         await db.execute(
             "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,"
@@ -126,11 +127,43 @@ async def run():
             "INSERT INTO actions (user_id,shift_id,message_id,action_type,bike_codes,quantity,city_id) "
             "VALUES (?,?,?,?,?,?,?)", (910001, shift_id, 1, "move", "0001,0002", 0, city["id"]),
         )
+        active_start = datetime.now(bot._city_tz(city)) - timedelta(hours=2)
+        cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,is_active,created_at,"
+            "city_id,start_at,end_at,source) VALUES (?,?,?,?,?,1,?,?,?,?, 'bot')",
+            (910004, "Скаут Для Закрытия", "Скаут", active_start.strftime("%H:%M"), None,
+             active_start.isoformat(), city["id"], active_start.isoformat(), None),
+        )
+        active_shift_id = cur.lastrowid
         await db.commit()
 
     base_counts = await counts()
     network_token, _ = bot._issue_admin_token(900001, 1)
     scout_token, _ = bot._issue_admin_token(900002, 1)
+
+    # Руководитель может закрыть только активную смену доступного города и роли.
+    no_confirm = await bot.api_crm_shift_close(Request(
+        900002, body={"city_id": city["id"]},
+        match={"shift_id": str(active_shift_id)}, admin_token=scout_token,
+    ))
+    assert no_confirm.status == 400
+    wrong_city = await bot.api_crm_shift_close(Request(
+        900001, body={"city_id": other_city["id"], "confirm": True},
+        match={"shift_id": str(active_shift_id)}, admin_token=network_token,
+    ))
+    assert wrong_city.status == 404
+    with patch.object(bot, "safe_flush_report_update", new=AsyncMock(return_value=True)):
+        closed = await bot.api_crm_shift_close(Request(
+            900002, body={"city_id": city["id"], "confirm": True},
+            match={"shift_id": str(active_shift_id)}, admin_token=scout_token,
+        ))
+    assert closed.status == 200 and payload(closed)["shift_id"] == active_shift_id
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        closed_row = await (await db.execute(
+            "SELECT is_active,end_at,comment FROM shifts WHERE id=?", (active_shift_id,)
+        )).fetchone()
+    assert closed_row[0] == 0 and closed_row[1]
+    assert closed_row[2] == "Закрыто администратором через CRM"
 
     # Missing or expired CRM sessions must return 401, never crash with
     # context=None and turn an authentication error into HTTP 500.

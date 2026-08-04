@@ -6325,6 +6325,79 @@ async def api_crm_shifts(request):
     })
 
 
+async def api_crm_shift_close(request):
+    """Закрывает конкретную активную смену из CRM в пределах доступного города и роли."""
+    context, error = await _crm_admin(request, write=True)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response(
+            {"error": "json", "message": "Ожидается JSON-объект."}, status=400
+        )
+    if body.get("confirm") is not True:
+        return web.json_response(
+            {"error": "confirm", "message": "Подтвердите закрытие смены."}, status=400
+        )
+    city, error = _crm_city(context, body=body)
+    if error is not None:
+        return error
+    try:
+        shift_id = int(request.match_info["shift_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "shift_id"}, status=400)
+
+    shift = await get_shift_by_id(shift_id)
+    role_scope = _crm_scope_role(context)
+    if (not shift or shift.get("city_id") != city["id"] or
+            (role_scope and (shift.get("role") or "").casefold() != role_scope.casefold())):
+        return web.json_response(
+            {"error": "not_found", "message": "Смена не найдена в доступном городе."},
+            status=404,
+        )
+    if not shift.get("is_active"):
+        return web.json_response({"ok": True, "already_closed": True, "shift_id": shift_id})
+
+    before = dict(shift)
+    now = datetime.now(_city_tz(city))
+    comment = str(body.get("comment") or "Закрыто администратором через CRM").strip()[:2000]
+    try:
+        closed_id = await end_shift(
+            shift["user_id"], now.strftime("%H:%M"), comment, city["id"], now=now
+        )
+    except ValueError as exc:
+        return web.json_response({"error": "end_time", "message": str(exc)}, status=400)
+    if closed_id != shift_id:
+        current = await get_shift_by_id(shift_id)
+        if current and not current.get("is_active"):
+            return web.json_response({"ok": True, "already_closed": True, "shift_id": shift_id})
+        return web.json_response(
+            {"error": "conflict", "message": "Смена изменилась. Обновите CRM и повторите."},
+            status=409,
+        )
+
+    after = await get_shift_by_id(shift_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout=15000")
+        await _crm_audit(
+            db, context, "shift.force_close", "shift", shift_id, city["id"],
+            before=before, after=after,
+        )
+        await db.commit()
+    report_ok = await safe_flush_report_update(shift_id)
+    logger.info(
+        "Смена %s закрыта через CRM администратором %s; город=%s сотрудник=%s",
+        shift_id, context["telegram_user"]["id"], city["name"], shift["user_id"],
+    )
+    return web.json_response({
+        "ok": True,
+        "shift_id": shift_id,
+        "end_time": after.get("end_time") if after else now.strftime("%H:%M"),
+        "end_at": after.get("end_at") if after else now.isoformat(),
+        "report_updated": report_ok,
+    })
+
+
 async def api_crm_trends(request):
     context, error = await _crm_admin(request)
     if error is not None: return error
@@ -7972,6 +8045,7 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/employees", api_crm_employees)
         app.router.add_get("/api/admin/crm/employees/{user_id}", api_crm_employee)
         app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)
+        app.router.add_post("/api/admin/crm/shifts/{shift_id}/close", api_crm_shift_close)
         app.router.add_get("/api/admin/crm/trends", api_crm_trends)
         app.router.add_get("/api/admin/crm/data-quality", api_crm_data_quality)
         app.router.add_get("/api/admin/crm/calendar", api_crm_calendar)

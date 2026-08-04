@@ -217,7 +217,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-03 · CRM P0 + чарджеры Химок + надёжная серия сообщений"
+BUILD_VERSION = "2026-08-04 · CRM Operations v3 + календарь + сигналы + поиск байка"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -232,7 +232,9 @@ AUTO_CLOSE_GRACE_MIN = 10
 # отключена. После проверки сервер выдаёт подписанную сессию на несколько часов.
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "").strip()
-ADMIN_SESSION_TTL_SEC = int(os.getenv("ADMIN_SESSION_TTL_SEC", str(8 * 60 * 60)))
+# CRM запоминает успешный вход на устройстве. Серверная подпись всё равно
+# ограничена по времени и может быть отозвана через session_version.
+ADMIN_SESSION_TTL_SEC = int(os.getenv("ADMIN_SESSION_TTL_SEC", str(30 * 24 * 60 * 60)))
 INIT_DATA_MAX_AGE_SEC = int(os.getenv("INIT_DATA_MAX_AGE_SEC", str(24 * 60 * 60)))
 CITY_MEMBERSHIP_TTL_SEC = int(os.getenv("CITY_MEMBERSHIP_TTL_SEC", "300"))
 # Telegram ID владельцев сети. Только эти ID автоматически получают роль
@@ -799,6 +801,9 @@ async def init_db():
                 role TEXT,
                 district TEXT,
                 note TEXT,
+                work_kind TEXT NOT NULL DEFAULT 'regular' CHECK (
+                    work_kind IN ('regular', 'extra')
+                ),
                 status TEXT NOT NULL DEFAULT 'scheduled' CHECK (
                     status IN ('scheduled', 'cancelled')
                 ),
@@ -1064,6 +1069,7 @@ async def init_db():
             "ALTER TABLE crm_task_attachments ADD COLUMN assignee_user_id INTEGER",
             "ALTER TABLE crm_tasks ADD COLUMN date_from TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN date_to TEXT",
+            "ALTER TABLE crm_planned_shifts ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'regular'",
             "ALTER TABLE crm_tasks ADD COLUMN district TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN completion_mode TEXT NOT NULL DEFAULT 'manual'",
             "ALTER TABLE crm_planned_shifts ADD COLUMN batch_id INTEGER",
@@ -6515,6 +6521,192 @@ async def api_crm_trends(request):
         "bucket": "day", "action_type": action_filter, "series": series})
 
 
+def _crm_action_codes(value):
+    return [code.strip() for code in str(value or "").split(",") if re.fullmatch(r"\d{4}", code.strip())]
+
+
+async def api_crm_activity(request):
+    """Recent parser events and exact bike history without changing parser rules."""
+    context, error = await _crm_admin(request)
+    if error is not None: return error
+    city, error = _crm_city(context, request=request)
+    if error is not None: return error
+    role, error = _crm_scoped_role(context)
+    if error is not None: return error
+    try: limit = min(100, max(1, int(request.query.get("limit", 30))))
+    except (TypeError, ValueError): return web.json_response({"error": "limit"}, status=400)
+    bike_code = str(request.query.get("bike_code") or "").strip()
+    if bike_code and not re.fullmatch(r"\d{4}", bike_code):
+        return web.json_response(
+            {"error": "bike_code", "message": "Номер байка — ровно 4 цифры."}, status=400
+        )
+    event_sql = "COALESCE(w.created_at,m.created_at,s.start_at,s.created_at)"
+    sql = (
+        "SELECT a.id,a.user_id,a.shift_id,a.message_id,a.action_type,a.bike_codes,a.quantity,"
+        "s.full_name,s.role," + event_sql + " AS event_at,"
+        "CASE WHEN m.id IS NOT NULL THEN 'manual_report' ELSE 'telegram' END AS source "
+        "FROM actions a JOIN shifts s ON s.id=a.shift_id "
+        "LEFT JOIN work_message_links w ON w.city_id=a.city_id "
+        "AND w.chat_id=COALESCE(a.chat_id,0) AND w.user_id=a.user_id "
+        "AND w.message_id=a.message_id AND w.shift_id=a.shift_id "
+        "LEFT JOIN manual_reports m ON m.city_id=a.city_id AND m.user_id=a.user_id "
+        "AND m.message_id=a.message_id AND m.shift_id=a.shift_id WHERE a.city_id=?"
+    )
+    params = [city["id"]]
+    if role:
+        sql += " AND LOWER(COALESCE(s.role,''))=LOWER(?)"; params.append(role)
+    if bike_code:
+        sql += " AND (','||REPLACE(COALESCE(a.bike_codes,''),' ','')||',') LIKE ?"
+        params.append(f"%,{bike_code},%")
+    sql += " ORDER BY datetime(" + event_sql + ") DESC,a.id DESC LIMIT ?"
+    params.append(limit * 4)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(sql, params)).fetchall()
+    items = []
+    for row in rows:
+        units = _action_units(row)
+        if units <= 0 or row["action_type"] not in CRM_ACTION_TYPES:
+            continue
+        codes = _crm_action_codes(row["bike_codes"])
+        if bike_code and bike_code not in codes:
+            continue
+        items.append({
+            "action_id": row["id"], "event_at": row["event_at"],
+            "action_type": row["action_type"], "bike_codes": codes,
+            "units": units, "user_id": row["user_id"],
+            "employee_name": row["full_name"] or f"Сотрудник #{row['user_id']}",
+            "role": row["role"] or "", "shift_id": row["shift_id"],
+            "message_id": row["message_id"], "source": row["source"],
+        })
+        if len(items) >= limit: break
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+                              "bike_code": bike_code or None, "items": items})
+
+
+async def api_crm_operational_signals(request):
+    """Only actionable live signals: inactivity, rate drop, overrun and blocked tasks."""
+    context, error = await _crm_admin(request)
+    if error is not None: return error
+    city, error = _crm_city(context, request=request)
+    if error is not None: return error
+    role, error = _crm_scoped_role(context)
+    if error is not None: return error
+    tz = _city_tz(city); now = datetime.now(tz)
+    event_sql = "COALESCE(w.created_at,m.created_at,s.start_at,s.created_at)"
+    shift_sql = "SELECT * FROM shifts WHERE city_id=? AND is_active=1"
+    shift_params = [city["id"]]
+    if role: shift_sql += " AND LOWER(COALESCE(role,''))=LOWER(?)"; shift_params.append(role)
+    action_sql = (
+        "SELECT a.shift_id,a.bike_codes,a.quantity," + event_sql + " AS event_at "
+        "FROM actions a JOIN shifts s ON s.id=a.shift_id "
+        "LEFT JOIN work_message_links w ON w.city_id=a.city_id "
+        "AND w.chat_id=COALESCE(a.chat_id,0) AND w.user_id=a.user_id "
+        "AND w.message_id=a.message_id AND w.shift_id=a.shift_id "
+        "LEFT JOIN manual_reports m ON m.city_id=a.city_id AND m.user_id=a.user_id "
+        "AND m.message_id=a.message_id AND m.shift_id=a.shift_id "
+        "WHERE a.city_id=? AND datetime(" + event_sql + ")>=datetime(?)"
+    )
+    action_params = [city["id"], (now - timedelta(hours=3)).isoformat()]
+    if role: action_sql += " AND LOWER(COALESCE(s.role,''))=LOWER(?)"; action_params.append(role)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        shifts = await (await db.execute(shift_sql, shift_params)).fetchall()
+        events = await (await db.execute(action_sql, action_params)).fetchall()
+        task_sql = (
+            "SELECT a.task_id,a.user_id,a.full_name_snap,a.role_snap,a.updated_at,t.title "
+            "FROM crm_task_assignees a JOIN crm_tasks t ON t.id=a.task_id "
+            "WHERE t.city_id=? AND t.status='published' AND a.status='blocked'"
+        )
+        task_params = [city["id"]]
+        if role: task_sql += " AND LOWER(COALESCE(a.role_snap,''))=LOWER(?)"; task_params.append(role)
+        blocked = await (await db.execute(task_sql, task_params)).fetchall()
+        plan_sql = (
+            "SELECT p.*,u.full_name AS user_name,u.role AS user_role FROM crm_planned_shifts p "
+            "LEFT JOIN users u ON u.user_id=p.user_id AND u.city_id=p.city_id "
+            "WHERE p.city_id=? AND p.work_date=? AND p.status='scheduled'"
+        )
+        plan_params = [city["id"], now.date().isoformat()]
+        if role:
+            plan_sql += " AND LOWER(COALESCE(p.role,u.role,''))=LOWER(?)"; plan_params.append(role)
+        today_plans = await (await db.execute(plan_sql, plan_params)).fetchall()
+    today_range = {"from": now.date().isoformat(), "to": now.date().isoformat(),
+                   "start_at": datetime.combine(now.date(), datetime.min.time(), tzinfo=tz),
+                   "end_at": datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=tz)}
+    actual_rows, _ = await _crm_load_shifts(city, today_range, role=role)
+    by_shift = {}
+    for event in events:
+        event_at = _parse_datetime(event["event_at"])
+        units = _action_units(event)
+        if not event_at or units <= 0: continue
+        by_shift.setdefault(event["shift_id"], []).append((event_at.astimezone(tz), units))
+    items = []
+    working_now = 0; on_lunch = 0
+    actions_last_hour = sum(units for events_for_shift in by_shift.values()
+                            for at, units in events_for_shift if now - timedelta(hours=1) <= at <= now)
+    for row in shifts:
+        shift = dict(row); start = _parse_datetime(shift.get("start_at") or shift.get("created_at"))
+        if not start: continue
+        start = start.astimezone(tz); worked = max(0, int((now - start).total_seconds() // 60))
+        shift_events = by_shift.get(shift["id"], [])
+        recent = sum(units for at, units in shift_events if now - timedelta(hours=1) <= at <= now)
+        previous = sum(units for at, units in shift_events
+                       if now - timedelta(hours=3) <= at < now - timedelta(hours=1))
+        if shift.get("on_lunch"):
+            on_lunch += 1; continue
+        working_now += 1
+        last_at = max((at for at, _ in shift_events), default=start)
+        idle_minutes = max(0, int((now - last_at).total_seconds() // 60))
+        base = {"user_id": shift.get("user_id"), "shift_id": shift["id"],
+                "name": shift.get("full_name") or f"Сотрудник #{shift.get('user_id')}",
+                "role": shift.get("role") or "", "worked_minutes": worked,
+                "recent_actions": recent, "previous_actions": previous}
+        if worked >= 75 and idle_minutes >= 60:
+            items.append({**base, "type": "no_activity", "severity": "high",
+                          "minutes_without_actions": idle_minutes,
+                          "title": f"Нет действий {idle_minutes // 60} ч {idle_minutes % 60:02d} мин"})
+        elif worked >= 180 and previous >= 8 and recent * 2 <= previous * 0.4:
+            items.append({**base, "type": "rate_drop", "severity": "medium",
+                          "title": "Темп заметно снизился"})
+        if worked > 12 * 60 + 10:
+            items.append({**base, "type": "shift_overrun", "severity": "high",
+                          "title": "Смена длится больше 12 часов"})
+    for task in blocked:
+        items.append({"type": "task_blocked", "severity": "high",
+                      "task_id": task["task_id"], "user_id": task["user_id"],
+                      "name": task["full_name_snap"] or f"Сотрудник #{task['user_id']}",
+                      "role": task["role_snap"] or "", "title": f"Задание заблокировано: {task['title']}"})
+    for plan_row in today_plans:
+        plan = dict(plan_row)
+        plan_start = datetime.combine(
+            now.date(), datetime.strptime(plan["start_time"], "%H:%M").time(), tzinfo=tz
+        )
+        if now < plan_start + timedelta(minutes=30):
+            continue
+        segment = _crm_segment_from_time(plan["start_time"])
+        matched = any(
+            _shift_segment(actual, city) == segment and (
+                (plan["user_id"] is not None and actual.get("user_id") == plan["user_id"])
+                or (plan["user_id"] is None and
+                    (actual.get("role") or "").casefold() == (plan.get("role") or "").casefold())
+            ) for actual in actual_rows
+        )
+        if not matched:
+            items.append({"type": "plan_no_show", "severity": "high",
+                          "plan_id": plan["id"], "user_id": plan.get("user_id"),
+                          "name": plan.get("user_name") or plan.get("role") or "Сотрудник",
+                          "role": plan.get("user_role") or plan.get("role") or "",
+                          "title": "Не открыл смену по плану"})
+    severity_order = {"high": 0, "medium": 1}
+    items.sort(key=lambda item: severity_order.get(item.get("severity"), 9))
+    counts = {"total": len(items), "high": sum(i["severity"] == "high" for i in items),
+              "medium": sum(i["severity"] == "medium" for i in items)}
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+        "generated_at": now.isoformat(), "counts": counts, "items": items[:50],
+        "summary": {"active": len(shifts), "working_now": working_now,
+                    "on_lunch": on_lunch, "actions_last_hour": actions_last_hour}})
+
+
 async def api_crm_data_quality(request):
     context, error = await _crm_admin(request)
     if error is not None: return error
@@ -6669,10 +6861,17 @@ async def api_crm_calendar(request):
             candidates = [item for item in actual_items
                           if (item["role"] or "").casefold() == (plan["role"] or "").casefold()
                           and item["date"] == plan["work_date"] and item["segment"] == segment]
+        plan_start = datetime.combine(
+            _crm_date(plan["work_date"]),
+            datetime.strptime(plan["start_time"], "%H:%M").time(),
+            tzinfo=_city_tz(city),
+        )
         if plan["status"] == "cancelled": match_status = "отменено"
-        elif not candidates: match_status = "не вышел"
-        elif len(candidates) == 1: match_status = "вышел"
-        else: match_status = "неоднозначно"
+        elif candidates and len(candidates) == 1: match_status = "вышел"
+        elif candidates: match_status = "неоднозначно"
+        elif datetime.now(_city_tz(city)) < plan_start + timedelta(minutes=30):
+            match_status = "ожидается"
+        else: match_status = "не вышел"
         for item in candidates: matched.add(item["shift_id"])
         plan_items.append({
             "plan_id": plan["id"], "city_id": plan["city_id"],
@@ -6680,25 +6879,31 @@ async def api_crm_calendar(request):
             "end_time": plan["end_time"], "segment": segment,
             "user_id": plan["user_id"], "user_name": plan.get("user_name"),
             "role": plan["role"], "district": plan["district"] or "",
-            "note": plan["note"] or "", "status": plan["status"],
+            "note": plan["note"] or "", "work_kind": plan.get("work_kind") or "regular",
+            "status": plan["status"],
             "match_status": match_status, "actual_shifts": candidates,
             "updated_at": plan["updated_at"],
         })
     unplanned = []
     for item in actual_items:
         if item["shift_id"] not in matched:
-            extra = dict(item); extra["match_status"] = "вне плана"; unplanned.append(extra)
+            extra = dict(item)
+            extra["match_status"] = "подработка"
+            extra["work_kind"] = "extra"
+            unplanned.append(extra)
     day_totals = {}
     for plan in plan_items:
         day = day_totals.setdefault(plan["work_date"], {"planned": 0, "came": 0,
-            "missed": 0, "ambiguous": 0, "unplanned": 0})
+            "missed": 0, "expected": 0, "ambiguous": 0, "unplanned": 0, "extra": 0})
         if plan["status"] != "cancelled": day["planned"] += 1
+        if plan.get("work_kind") == "extra" and plan["status"] != "cancelled": day["extra"] += 1
         if plan["match_status"] == "вышел": day["came"] += 1
         elif plan["match_status"] == "не вышел": day["missed"] += 1
+        elif plan["match_status"] == "ожидается": day["expected"] += 1
         elif plan["match_status"] == "неоднозначно": day["ambiguous"] += 1
     for item in unplanned:
         day_totals.setdefault(item["date"], {"planned": 0, "came": 0, "missed": 0,
-            "ambiguous": 0, "unplanned": 0})["unplanned"] += 1
+            "expected": 0, "ambiguous": 0, "unplanned": 0, "extra": 0})["unplanned"] += 1
     return web.json_response({"city": {"id": city["id"], "name": city["name"]},
         "range": {"from": date_range["from"], "to": date_range["to"]},
         "planned": plan_items, "actual_unplanned": unplanned, "days": day_totals,
@@ -6714,9 +6919,10 @@ async def api_crm_planned_shift_create(request):
     if error is not None: return error
     work_date = _crm_date(body.get("work_date")); start = _valid_time(body.get("start_time"))
     end = _valid_time(body.get("end_time")); role = (body.get("role") or "").strip() or None
+    work_kind = str(body.get("work_kind") or "regular").strip().lower()
     try: user_id = int(body["user_id"]) if body.get("user_id") not in (None, "") else None
     except (TypeError, ValueError): return web.json_response({"error": "user_id"}, status=400)
-    if not work_date or not start or not end:
+    if not work_date or not start or not end or work_kind not in {"regular", "extra"}:
         return web.json_response({"error": "fields", "message": "Нужны дата и время."}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row; await db.execute("PRAGMA busy_timeout=15000")
@@ -6738,10 +6944,10 @@ async def api_crm_planned_shift_create(request):
         now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
         cur = await db.execute(
             "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,role,"
-            "district,note,status,created_by,created_at,updated_by,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?, 'scheduled',?,?,?,?)",
+            "district,note,work_kind,status,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?, 'scheduled',?,?,?,?)",
             (city["id"], work_date.isoformat(), start, end, user_id, role,
-             str(body.get("district") or "")[:200], str(body.get("note") or "")[:2000],
+             str(body.get("district") or "")[:200], str(body.get("note") or "")[:2000], work_kind,
              admin_uid, now_iso, admin_uid, now_iso),
         )
         plan_id = cur.lastrowid
@@ -6751,6 +6957,7 @@ async def api_crm_planned_shift_create(request):
                 db, city["id"], user_id, "planned_shift", plan_id,
                 {"plan_id": plan_id, "work_date": work_date.isoformat(),
                  "start_time": start, "end_time": end,
+                 "work_kind": work_kind,
                  "district": str(body.get("district") or "")[:200],
                  "note": str(body.get("note") or "")[:2000]},
             )
@@ -6770,6 +6977,7 @@ async def api_crm_planned_shifts_batch(request):
     start = _valid_time(body.get("start_time")); end = _valid_time(body.get("end_time"))
     district = str(body.get("district") or "")[:200]
     note = str(body.get("note") or "")[:2000]
+    work_kind = str(body.get("work_kind") or "regular").strip().lower()
     idempotency_key = str(body.get("idempotency_key") or "").strip()[:200]
     try:
         work_days = int(body.get("work_days")); rest_days = int(body.get("rest_days"))
@@ -6777,7 +6985,8 @@ async def api_crm_planned_shifts_batch(request):
     except (TypeError, ValueError):
         return web.json_response({"error": "fields"}, status=400)
     if (not start_date or not end_date or end_date < start_date or not start or not end
-            or not user_ids or not idempotency_key or (work_days, rest_days) not in {(2, 1), (2, 2), (3, 1)}
+            or not user_ids or not idempotency_key or work_kind not in {"regular", "extra"}
+            or (work_days, rest_days) not in {(2, 1), (2, 2), (3, 1)}
             or (end_date - start_date).days + 1 > CRM_MAX_RANGE_DAYS):
         return web.json_response({"error": "fields"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -6810,7 +7019,8 @@ async def api_crm_planned_shifts_batch(request):
         request_snapshot = {"city_id": city["id"], "user_ids": user_ids,
                             "date_from": start_date.isoformat(), "date_to": end_date.isoformat(),
                             "work_days": work_days, "rest_days": rest_days, "start_time": start,
-                            "end_time": end, "district": district, "note": note}
+                            "end_time": end, "district": district, "note": note,
+                            "work_kind": work_kind}
         cur = await db.execute(
             "INSERT INTO crm_planning_batches (city_id,idempotency_key,date_from,date_to,work_days,"
             "rest_days,request_json,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -6834,9 +7044,9 @@ async def api_crm_planned_shifts_batch(request):
                         skipped += 1; counts[str(uid)]["skipped"] += 1; continue
                     await db.execute(
                         "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,role,"
-                        "district,note,status,created_by,created_at,updated_by,updated_at,batch_id) "
-                        "VALUES (?,?,?,?,?,?,?,?,'scheduled',?,?,?,?,?)",
-                        (city["id"], work_date, start, end, uid, None, district, note,
+                        "district,note,work_kind,status,created_by,created_at,updated_by,updated_at,batch_id) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,'scheduled',?,?,?,?,?)",
+                        (city["id"], work_date, start, end, uid, None, district, note, work_kind,
                          admin_uid, now_iso, admin_uid, now_iso, batch_id),
                     )
                     created += 1; counts[str(uid)]["created"] += 1
@@ -6876,13 +7086,17 @@ async def api_crm_planned_shift_update(request):
         ):
             await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
         merged = dict(current)
-        for field in ("work_date", "start_time", "end_time", "user_id", "role", "district", "note", "status"):
+        for field in ("work_date", "start_time", "end_time", "user_id", "role", "district",
+                      "note", "work_kind", "status"):
             if field in body: merged[field] = body[field]
         work_date = _crm_date(merged["work_date"]); start = _valid_time(merged["start_time"])
         end = _valid_time(merged["end_time"]); role = (merged.get("role") or "").strip() or None
         try: user_id = int(merged["user_id"]) if merged.get("user_id") not in (None, "") else None
         except (TypeError, ValueError): await db.rollback(); return web.json_response({"error": "user_id"}, status=400)
-        if not work_date or not start or not end or merged.get("status") not in {"scheduled", "cancelled"}:
+        work_kind = str(merged.get("work_kind") or "regular").strip().lower()
+        if (not work_date or not start or not end
+                or merged.get("status") not in {"scheduled", "cancelled"}
+                or work_kind not in {"regular", "extra"}):
             await db.rollback(); return web.json_response({"error": "fields"}, status=400)
         target_error = await _crm_validate_plan_target(
             db, get_city(current["city_id"]), user_id, role, _crm_scope_role(context)
@@ -6892,9 +7106,9 @@ async def api_crm_planned_shift_update(request):
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute(
             "UPDATE crm_planned_shifts SET work_date=?,start_time=?,end_time=?,user_id=?,role=?,"
-            "district=?,note=?,status=?,updated_by=?,updated_at=? WHERE id=?",
+            "district=?,note=?,work_kind=?,status=?,updated_by=?,updated_at=? WHERE id=?",
             (work_date.isoformat(), start, end, user_id, role, str(merged.get("district") or "")[:200],
-             str(merged.get("note") or "")[:2000], merged["status"],
+             str(merged.get("note") or "")[:2000], work_kind, merged["status"],
              context["telegram_user"]["id"], now_iso, plan_id),
         )
         updated = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
@@ -8068,6 +8282,8 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)
         app.router.add_post("/api/admin/crm/shifts/{shift_id}/close", api_crm_shift_close)
         app.router.add_get("/api/admin/crm/trends", api_crm_trends)
+        app.router.add_get("/api/admin/crm/activity", api_crm_activity)
+        app.router.add_get("/api/admin/crm/operational-signals", api_crm_operational_signals)
         app.router.add_get("/api/admin/crm/data-quality", api_crm_data_quality)
         app.router.add_get("/api/admin/crm/calendar", api_crm_calendar)
         app.router.add_post("/api/admin/crm/planned-shifts/batch", api_crm_planned_shifts_batch)

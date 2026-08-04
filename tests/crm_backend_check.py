@@ -239,6 +239,42 @@ async def run():
     assert hourly.status == 200 and len(hourly_payload["series"]) == 24
     assert hourly_payload["series"][8]["types"]["move"] == 2
     assert sum(item["actions"] for item in hourly_payload["series"]) == 2
+    activity = await bot.api_crm_activity(Request(
+        900002, query={"city_id": str(city["id"]), "bike_code": "0001", "limit": "20"},
+        admin_token=scout_token,
+    ))
+    activity_payload = payload(activity)
+    assert activity.status == 200 and activity_payload["items"][0]["bike_codes"] == ["0001", "0002"]
+    assert payload(await bot.api_crm_activity(Request(
+        900002, query={"city_id": str(city["id"]), "bike_code": "001"},
+        admin_token=scout_token,
+    )))["error"] == "bike_code"
+    idle_start = datetime.now(bot._city_tz(city)) - timedelta(hours=2)
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        idle_cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,is_active,on_lunch,created_at,"
+            "city_id,start_at,source) VALUES (?,?,?,?,1,0,?,?,?,'bot')",
+            (910001, "Скаут Один", "Скаут", idle_start.strftime("%H:%M"),
+             idle_start.isoformat(), city["id"], idle_start.isoformat()),
+        )
+        lunch_cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,is_active,on_lunch,created_at,"
+            "city_id,start_at,source) VALUES (?,?,?,?,1,1,?,?,?,'bot')",
+            (910004, "Скаут На Обеде", "Скаут", idle_start.strftime("%H:%M"),
+             idle_start.isoformat(), city["id"], idle_start.isoformat()),
+        )
+        await db.commit()
+    signals = await bot.api_crm_operational_signals(Request(
+        900002, query={"city_id": str(city["id"])}, admin_token=scout_token,
+    ))
+    signal_payload = payload(signals)
+    assert signals.status == 200 and "actions_last_hour" in signal_payload["summary"]
+    assert any(item["type"] == "no_activity" and item["user_id"] == 910001
+               for item in signal_payload["items"])
+    assert not any(item.get("user_id") == 910004 for item in signal_payload["items"])
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute("DELETE FROM shifts WHERE id IN (?,?)", (idle_cur.lastrowid, lunch_cur.lastrowid))
+        await db.commit()
     denied_city = await bot.api_crm_overview(Request(
         900002, query={"city_id": str(other_city["id"])}, admin_token=scout_token,
     ))
@@ -260,6 +296,24 @@ async def run():
         admin_token=scout_token,
     ))
     assert payload(calendar)["planned"][0]["match_status"] == "вышел"
+    tomorrow = (datetime.fromisoformat(today) + timedelta(days=1)).date().isoformat()
+    extra_plan = await bot.api_crm_planned_shift_create(Request(
+        900002, body={"city_id": city["id"], "work_date": tomorrow,
+                      "start_time": "08:00", "end_time": "16:00", "user_id": 910001,
+                      "work_kind": "extra"}, admin_token=scout_token,
+    ))
+    assert extra_plan.status == 201 and payload(extra_plan)["plan"]["work_kind"] == "extra"
+    tomorrow_calendar = await bot.api_crm_calendar(Request(
+        900002, query={"city_id": str(city["id"]), "from": tomorrow, "to": tomorrow},
+        admin_token=scout_token,
+    ))
+    tomorrow_item = payload(tomorrow_calendar)["planned"][0]
+    assert tomorrow_item["work_kind"] == "extra" and tomorrow_item["match_status"] == "ожидается"
+    cancelled_extra = await bot.api_crm_planned_shift_update(Request(
+        900002, body={"status": "cancelled"},
+        match={"plan_id": str(payload(extra_plan)["plan"]["id"])}, admin_token=scout_token,
+    ))
+    assert cancelled_extra.status == 200 and payload(cancelled_extra)["plan"]["status"] == "cancelled"
 
     # Публикация role-task фиксирует snapshot получателей.
     task_response = await bot.api_crm_task_create(Request(

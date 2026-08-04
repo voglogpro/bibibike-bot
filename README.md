@@ -121,7 +121,7 @@ NETWORK_ADMIN_USER_IDS=<Telegram ID владельца>
 | `BOT_USERNAME` | имя бота без `@` | `bbbotdelaetbot` |
 | `WEBAPP_SHORTNAME` | short name приложения из BotFather | `zp` |
 | `WEBAPP_ALLOW_ORIGIN` | разрешённый CORS origin | `https://voglogpro.github.io` |
-| `ADMIN_SESSION_TTL_SEC` | срок действия админской сессии | 8 часов |
+| `ADMIN_SESSION_TTL_SEC` | срок действия админской сессии | 30 дней |
 | `CITIES_CONFIG_JSON` | дополнительные города в JSON | пусто |
 | `CRM_UPLOAD_MAX_FILES` | максимум фото за одну загрузку | 5 |
 | `CRM_UPLOAD_MAX_BYTES` | максимальный размер одного фото | 10 МБ |

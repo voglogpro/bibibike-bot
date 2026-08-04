@@ -98,6 +98,17 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
   .mobile-nav{background:rgba(7,12,9,.97);border-top:1px solid var(--line)}.mobile-nav .nav-btn.active{background:#102618;color:var(--green)}
   .ops-kpi-grid .kpi{min-height:104px;padding:13px}.ops-chart-card{min-height:300px}.form-actions{background:#0d1410;border-color:var(--line)}
 }
+.fullscreen-only{display:none}
+.decade-tabs{display:flex;gap:7px;flex-wrap:wrap;padding:12px 16px 0}.decade-tabs .chip{flex:1;min-width:110px}
+.day-tile{position:relative}.day-add{position:absolute;right:6px;top:6px;width:25px;height:25px;border:1px solid var(--line);border-radius:8px;background:var(--card);display:grid;place-items:center;color:var(--green);z-index:2}.day-add .icon{width:14px;height:14px}.day-tile.out-decade{opacity:.35}.day-tile.out-decade.selected{opacity:1}
+.plan-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.plan-actions .btn{min-height:31px;padding:5px 9px;font-size:10px}
+.activity-search{display:flex;gap:8px;margin-bottom:12px}.activity-search .input{min-width:0}.activity-feed{display:grid;gap:8px;max-height:430px;overflow:auto}.activity-time{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.activity-code{font-weight:950;color:var(--green);letter-spacing:.04em}.signal-card{border-left:3px solid var(--amber)}.signal-card.high{border-left-color:var(--red)}
+@media(max-width:720px){
+  .workspace{padding:14px max(12px,var(--tg-content-safe-area-inset-right,0px)) calc(var(--bottom) + 22px + env(safe-area-inset-bottom)) max(12px,var(--tg-content-safe-area-inset-left,0px))}
+  .topbar{margin:-14px -12px 14px;padding:calc(12px + var(--tg-content-safe-area-inset-top,0px)) 12px 12px;display:grid;justify-content:stretch}
+  .top-tools{justify-content:flex-start;width:100%;flex-wrap:wrap}.updated,.mobile-more,.fullscreen-only{display:none}.scope-select{display:block;flex:1;max-width:230px;min-width:145px}
+  .decade-tabs{padding:9px 8px 0;flex-wrap:nowrap;overflow:auto}.decade-tabs .chip{min-width:max-content}.day-tile{min-height:72px}.day-add{right:3px;top:3px;width:22px;height:22px}.activity-search{display:grid;grid-template-columns:1fr auto}
+}
 </style>
 </head>
 <body>
@@ -141,7 +152,7 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
       <button type="button" class="nav-btn" data-route="team"><svg class="icon"><use href="#i-team"/></svg><span class="nav-label">Команда</span></button>
       <button type="button" class="nav-btn" data-route="more"><svg class="icon"><use href="#i-more"/></svg><span class="nav-label">Ещё</span></button>
     </nav>
-    <div class="side-profile"><b id="sideUser">—</b><span id="sideRole">—</span><div class="side-actions"><button type="button" class="btn btn-secondary" id="employeeAppButton">Моя смена</button><button type="button" class="btn btn-secondary" id="logoutButton">Выйти</button></div></div>
+    <div class="side-profile"><b id="sideUser">—</b><span id="sideRole">—</span><div class="side-actions"><button type="button" class="btn btn-secondary" id="employeeAppButton">Моя смена</button><button type="button" class="btn btn-secondary" id="sideFullscreenButton">Полный экран</button><button type="button" class="btn btn-secondary" id="logoutButton">Выйти</button></div></div>
   </aside>
 
   <main class="workspace">
@@ -178,6 +189,7 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
 
 <div class="modal-backdrop" id="planModal"><form class="modal modal-wide" id="planForm"><div class="modal-head"><h2>Запланировать смены</h2><button class="modal-close" type="button" data-close="planModal" aria-label="Закрыть">×</button></div><div id="planError" class="form-error hidden"></div>
   <div class="editor-tabs" id="planMode"><button type="button" class="chip active" data-value="single">Одна смена</button><button type="button" class="chip" data-value="batch">График на период</button></div>
+  <div class="field"><label>Тип выхода</label><div class="seg" id="planWorkKind"><button type="button" class="active" data-value="regular">Основная смена</button><button type="button" data-value="extra">Подработка</button></div></div>
   <div class="form-grid" id="planSingleFields">
     <div class="field wide"><label for="planEmployee">Сотрудник</label><select class="select" id="planEmployee"></select><div class="form-hint" id="planScopeHint"></div></div>
     <div class="field"><label for="planDate">Дата</label><input class="input" id="planDate" type="date"></div>
@@ -236,20 +248,24 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 if(tg){
   try{tg.ready();tg.expand();}catch(_){}
-  try{if(typeof tg.requestFullscreen==='function')tg.requestFullscreen()}catch(_){}
 }
 const initData = tg ? tg.initData : "";
 const $ = id => document.getElementById(id);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
 const TOKEN_KEY = "bb_crm_admin_token";
 const CONTEXT_KEY = "bb_crm_context";
+function storageGet(key){try{return localStorage.getItem(key)||""}catch(_){return ""}}
+function storageSet(key,value){try{localStorage.setItem(key,value)}catch(_){}}
+function storageRemove(key){try{localStorage.removeItem(key)}catch(_){}}
+function storageJSON(key){try{return JSON.parse(storageGet(key)||"null")}catch(_){storageRemove(key);return null}}
 const API = {
   login:"/api/admin/login", context:"/api/admin/crm/context",
   overview:"/api/admin/crm/overview", calendar:"/api/admin/crm/calendar",
   plans:"/api/admin/crm/planned-shifts", planBatch:"/api/admin/crm/planned-shifts/batch", tasks:"/api/admin/crm/tasks",
   preview:"/api/admin/crm/tasks/assignee-preview", employees:"/api/admin/crm/employees",
   shifts:"/api/admin/crm/shifts", quality:"/api/admin/crm/data-quality",
-  trends:"/api/admin/crm/trends"
+  trends:"/api/admin/crm/trends", activity:"/api/admin/crm/activity",
+  signals:"/api/admin/crm/operational-signals"
 };
 const ROUTES = {
   analysis:["Сегодня","Что происходит в городе прямо сейчас"],
@@ -261,13 +277,15 @@ const ROUTES = {
 const ACTION_LABELS={move:"Перемещения",fix:"Поправки",repair:"Ремонт",battery:"АКБ",sticker:"Оклейка",to_sc:"Привёз на СЦ",from_sc:"Вывез с СЦ"};
 const ACTION_COLORS={move:"#31cf42",fix:"#2f80ed",repair:"#ef5350",battery:"#f5a623",sticker:"#9b51e0",to_sc:"#18a999",from_sc:"#64748b"};
 const ROLE_LABELS={city_viewer:"Наблюдатель",city_manager:"Старший скаут",network_admin:"Директор"};
-const TASK_STATUS={draft:"Черновик",published:"Опубликовано",cancelled:"Отменено",assigned:"Назначено",seen:"Просмотрено",in_progress:"В работе",submitted:"На проверке",accepted:"Принято",blocked:"Заблокировано"};
+const TASK_STATUS={draft:"Черновик",published:"Активно",cancelled:"Отменено",assigned:"Назначено",seen:"Просмотрено",in_progress:"В работе",submitted:"Выполнено сотрудником",accepted:"Выполнено",blocked:"Есть проблема"};
 const state={
-  token:localStorage.getItem(TOKEN_KEY)||"", context:null, route:"analysis", cityId:null,
+  token:storageGet(TOKEN_KEY), context:null, route:"analysis", cityId:null,
   cache:{}, month:startOfMonth(new Date()), selectedDate:isoDate(new Date()),
   taskFilter:"open", taskDate:isoDate(new Date()), teamQuery:"", teamRole:"", taskFiles:[], targetMode:"role",
-  taskCompletion:"manual", editTaskId:null, planMode:"single", batchWork:2, batchRest:1, batchKey:"",
-  closeShiftId:null, closeShiftHours:10, shiftLookup:{}, requestSeq:{}, online:navigator.onLine
+  taskCompletion:"manual", editTaskId:null, planMode:"single", planWorkKind:"regular",
+  batchWork:2, batchRest:1, batchKey:"", calendarDecade:Math.min(3,Math.floor((new Date().getDate()-1)/10)+1),
+  closeShiftId:null, closeShiftHours:10, shiftLookup:{}, requestSeq:{}, online:navigator.onLine,
+  fullscreenPending:false, desktopFullscreenTried:false
 };
 
 function esc(value){return String(value==null?"":value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
@@ -290,7 +308,7 @@ function showError(id,message){const el=$(id);el.textContent=message||"Не уд
 function clearError(id){const el=$(id);el.textContent="";el.classList.add("hidden")}
 function stateBlock(title,text,retry=""){return `<div class="state"><div class="state-icon">${icon("i-empty")}</div><b>${esc(title)}</b><p>${esc(text)}</p>${retry?`<button class="btn btn-secondary" data-retry="${esc(retry)}">Повторить</button>`:""}</div>`}
 function loadingCards(){return `<div class="loading-grid">${Array.from({length:4},()=>'<div class="skeleton"></div>').join("")}</div>`}
-function badge(status,label){let cls="";if(["active","accepted","done","вышел"].includes(status))cls="active";else if(["submitted","seen","in_progress","scheduled","неоднозначно"].includes(status))cls="warn";else if(["blocked","cancelled","не вышел","high"].includes(status))cls="danger";else if(status==="вне плана")cls="blue";return `<span class="badge ${cls}">${esc(label||TASK_STATUS[status]||status||"—")}</span>`}
+function badge(status,label){let cls="";if(["active","accepted","done","вышел"].includes(status))cls="active";else if(["submitted","seen","in_progress","scheduled","неоднозначно","ожидается","medium"].includes(status))cls="warn";else if(["blocked","cancelled","не вышел","high"].includes(status))cls="danger";else if(["вне плана","подработка","blue"].includes(status))cls="blue";return `<span class="badge ${cls}">${esc(label||TASK_STATUS[status]||status||"—")}</span>`}
 
 async function request(path,options={}){
   const headers={"Authorization":"tma "+initData,"X-Init-Data":initData,"X-Admin-Token":state.token,...(options.headers||{})};
@@ -310,29 +328,29 @@ function withSeq(key,fn){const id=(state.requestSeq[key]||0)+1;state.requestSeq[
 function saveContext(data){
   const context={role:data.role||data.admin?.role,role_scope:data.role_scope||data.admin?.role_scope||null,can_write:data.can_write,city:data.city||null,cities:data.cities||data.allowed_cities||[],user:data.user||null,admin:data.admin||null,default_city_id:data.default_city_id||data.city?.id||null};
   if(!context.cities.length&&context.city)context.cities=[context.city];
-  state.context=context;localStorage.setItem(CONTEXT_KEY,JSON.stringify(context));
+  state.context=context;storageSet(CONTEXT_KEY,JSON.stringify(context));
   if(!state.cityId||!context.cities.some(c=>Number(c.id)===Number(state.cityId)))state.cityId=context.default_city_id||context.city?.id||context.cities[0]?.id||null;
 }
 function showLogin(message=""){$("bootScreen").classList.add("hidden");$("crmApp").classList.add("hidden");$("authScreen").classList.remove("hidden");if(message)showError("loginError",message)}
-function logout(show=true){state.token="";state.context=null;state.cache={};localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(CONTEXT_KEY);if(show)toast("Вы вышли из CRM.");showLogin()}
+function logout(show=true){state.token="";state.context=null;state.cache={};storageRemove(TOKEN_KEY);storageRemove(CONTEXT_KEY);if(show)toast("Вы вышли из CRM.");showLogin()}
 async function restoreSession(){
   if(!state.token)return showLogin();
   try{
-    const cached=JSON.parse(localStorage.getItem(CONTEXT_KEY)||"null");if(cached)state.context=cached;
+    const cached=storageJSON(CONTEXT_KEY);if(cached)state.context=cached;
     const context=await request(API.context);saveContext(context);showApp();
   }catch(err){if(err.status!==401&&state.context){showApp();toast("Контекст будет обновлён при следующем входе.");}else showLogin(err.message)}
 }
 async function login(event){
   event.preventDefault();clearError("loginError");const button=$("loginButton"),password=$("adminPassword").value;
   if(!password)return showError("loginError","Введите пароль.");button.disabled=true;button.textContent="Проверяем…";
-  try{const data=await request(API.login,{method:"POST",body:JSON.stringify({password})});state.token=data.token;localStorage.setItem(TOKEN_KEY,state.token);saveContext(data);$("adminPassword").value="";showApp()}
+  try{const data=await request(API.login,{method:"POST",body:JSON.stringify({password})});state.token=data.token;storageSet(TOKEN_KEY,state.token);saveContext(data);$("adminPassword").value="";showApp()}
   catch(err){showError("loginError",err.message)}finally{button.disabled=false;button.textContent="Войти"}
 }
 function showApp(){
   $("bootScreen").classList.add("hidden");$("authScreen").classList.add("hidden");$("crmApp").classList.remove("hidden");
   const name=state.context?.user?.name||state.context?.admin?.name||state.context?.admin?.full_name||"Администратор";
   $("sideUser").textContent=name;$("sideRole").textContent=ROLE_LABELS[state.context?.role]||state.context?.role||"—";
-  renderScopes();setRoute(state.route,true);
+  renderScopes();setRoute(state.route,true);attemptInitialFullscreen();
 }
 function renderScopes(){
   const select=$("scopeSelect"),cities=state.context?.cities||[];select.innerHTML=cities.map(c=>`<option value="${Number(c.id)}">${esc(c.name)}</option>`).join("");
@@ -361,10 +379,11 @@ async function loadToday(){
     const city_id=state.cityId, today=isoDate(new Date()),from=isoDate(addDays(new Date(),-9));
     const results=await withSeq("analysis",()=>Promise.allSettled([
       request(API.overview+query({city_id})),request(API.shifts+query({city_id,from:today,to:today,status:"active",limit:100})),
-      request(API.tasks+query({city_id,from:today,to:today,status:"published",limit:100})),request(API.quality+query({city_id,from:today,to:today})),
-      request(API.trends+query({city_id,from:today,to:today,bucket:"hour"})),request(API.trends+query({city_id,from,to:today,bucket:"day"}))
+      request(API.tasks+query({city_id,from:today,to:today,status:"published",limit:100})),request(API.signals+query({city_id})),
+      request(API.trends+query({city_id,from:today,to:today,bucket:"hour"})),request(API.trends+query({city_id,from,to:today,bucket:"day"})),
+      request(API.activity+query({city_id,limit:30}))
     ]));
-    const data={overview:valueOf(results[0]),shifts:valueOf(results[1]),tasks:valueOf(results[2]),quality:valueOf(results[3]),hourly:valueOf(results[4]),trends:valueOf(results[5])};state.cache[`analysis:${city_id}`]=data;renderToday(data);
+    const data={overview:valueOf(results[0]),shifts:valueOf(results[1]),tasks:valueOf(results[2]),signals:valueOf(results[3]),hourly:valueOf(results[4]),trends:valueOf(results[5]),activity:valueOf(results[6])};state.cache[`analysis:${city_id}`]=data;renderToday(data);
   }catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить анализ",err.message,"analysis")}
 }
 function valueOf(result){return result?.status==="fulfilled"?result.value:null}
@@ -382,22 +401,25 @@ function renderTenDayLine(series){
   const line=smoothLinePath(points),area=`${line} L ${points[points.length-1].x} ${height-bottom} L ${points[0].x} ${height-bottom} Z`;
   return `<svg class="daily-line" viewBox="0 0 ${width} ${height}" role="img" aria-label="Количество действий за 10 дней"><defs><linearGradient id="dailyArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#35d33a" stop-opacity=".34"/><stop offset="1" stop-color="#35d33a" stop-opacity=".03"/></linearGradient></defs>${[.25,.5,.75,1].map(step=>`<line class="grid-line" x1="${left}" y1="${top+usableH*step}" x2="${width-right}" y2="${top+usableH*step}"/>`).join("")}<path class="area" d="${area}"/><path class="line" d="${line}"/>${points.map(point=>`<circle class="point" cx="${point.x}" cy="${point.y}" r="4"><title>${esc(fmtDate(point.date))}: ${point.value}</title></circle>`).join("")}</svg><div class="daily-labels">${rows.map(item=>`<span>${esc(fmtDate(item.date,{day:"numeric",month:"short"}))}</span>`).join("")}</div>`;
 }
+function renderSignals(items){if(!items?.length)return stateBlock("Всё спокойно","Нет сотрудников, которым прямо сейчас нужна связь.");return `<div class="list">${items.slice(0,5).map(item=>`<div class="row-card clickable signal-card ${esc(item.severity)}" ${item.user_id?`data-employee="${Number(item.user_id)}"`:""}><div><div class="row-title">${esc(item.title)}</div><div class="row-meta">${esc(item.name||"Команда")}${item.role?` · ${esc(item.role)}`:""}</div></div>${badge(item.severity,item.severity==="high"?"Связаться":"Наблюдать")}</div>`).join("")}</div>`}
+function actionVerb(type){return {move:"переместил",fix:"поправил",repair:"отправил в ремонт",battery:"заменил АКБ",sticker:"оклеил",to_sc:"привёз на СЦ",from_sc:"вывез с СЦ"}[type]||ACTION_LABELS[type]||type}
+function renderActivity(items,empty="Действий пока нет."){if(!items?.length)return stateBlock("Ничего не найдено",empty);return `<div class="activity-feed">${items.map(item=>`<div class="row-card"><div><div class="row-title">${esc(item.employee_name)} · ${esc(actionVerb(item.action_type))}</div><div class="row-meta">${(item.bike_codes||[]).length?(item.bike_codes||[]).map(code=>`<span class="activity-code">${esc(code)}</span>`).join(" · "):`${fmtNum(item.units)} действий`} · ${esc(item.role||"")}</div></div><div class="activity-time">${item.event_at?new Date(item.event_at).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}):"—"}</div></div>`).join("")}</div>`}
+async function searchBike(event){event.preventDefault();const input=$("bikeSearch"),code=input.value.trim(),feed=$("activityFeed");if(!/^\d{4}$/.test(code)){toast("Введите ровно 4 цифры номера байка.");return}feed.innerHTML=loadingCards();try{const data=await request(API.activity+query({city_id:state.cityId,bike_code:code,limit:30}));feed.innerHTML=renderActivity(data.items,`По байку ${code} действий не найдено.`)}catch(err){feed.innerHTML=stateBlock("Поиск не выполнен",err.message) }}
 function renderToday(data){
   const root=$("todayRoot"),ov=data.overview;
   if(!ov)return root.innerHTML=stateBlock("Сводка пока недоступна","Сервер не вернул данные обзора.","analysis");setUpdated(ov.generated_at);
-  const t=ov.totals||{},cur=ov.current||{},dq=ov.data_quality||{},task=ov.tasks||{};
-  const attention=n(dq.manual_reports_waiting)+n(dq.long_open_shifts);
-  const shifts=data.shifts?.items||[],tasks=data.tasks?.items||[],issues=data.quality?.items||[];
-  const taskDone=n(task.accepted??task.done),taskLeft=Math.max(0,n(task.assignees)-taskDone),hourly=data.hourly?.series||[],trend=data.trends?.series||[];
-  const roles={};shifts.forEach(s=>{const key=s.role||"Без роли",item=roles[key]||(roles[key]={people:0,actions:0,minutes:0});item.people++;item.actions+=n(s.actions_total);item.minutes+=n(s.worked_minutes)});
+  const t=ov.totals||{},cur=ov.current||{},signals=data.signals||{},summary=signals.summary||{};
+  const shifts=data.shifts?.items||[],tasks=data.tasks?.items||[],signalItems=signals.items||[],activity=data.activity?.items||[];
+  const taskTotal=tasks.reduce((sum,item)=>sum+n(item.progress?.total),0),taskDone=tasks.reduce((sum,item)=>sum+n(item.progress?.accepted)+n(item.progress?.submitted),0),taskBlocked=tasks.reduce((sum,item)=>sum+n(item.progress?.blocked),0),hourly=data.hourly?.series||[],trend=data.trends?.series||[];
+  const noActivity=signalItems.filter(item=>item.type==="no_activity").length,rateDrop=signalItems.filter(item=>item.type==="rate_drop").length;
   root.innerHTML=`
     <div class="ops-kpi-grid">
-      ${kpi("Сейчас на смене",cur.active,`${n(cur.on_lunch)} сейчас на обеде`,"team")}
-      ${kpi("Смен сегодня",t.shifts,`${n(t.employees)} сотрудников`,"team")}
-      ${kpi("Отработано",`${fmtMinutes(t.worked_minutes)} ч`,"по активным и закрытым сменам","team")}
-      ${kpi("Действий",t.actions,"выполнено сегодня","analysis")}
-      ${kpi("Действий / час",t.actions_per_hour??"—","сравнивается внутри роли","team")}
-      ${kpi("Требуют внимания",attention,"смены и ручные отчёты","more",attention>0)}
+      ${kpi("На линии сейчас",summary.working_now??Math.max(0,n(cur.active)-n(cur.on_lunch)),`${n(cur.active)} активных смен`,"team")}
+      ${kpi("На обеде",summary.on_lunch??cur.on_lunch,"не попадают в сигналы простоя","team")}
+      ${kpi("За последний час",summary.actions_last_hour??0,"действий команды","analysis")}
+      ${kpi("Результат сегодня",t.actions,"всех учтённых действий","analysis")}
+      ${kpi("Задачи дня",`${Math.min(taskDone,taskTotal)}/${taskTotal}`,taskBlocked?`${taskBlocked} с проблемой`:"выполнено / назначено","tasks",taskBlocked>0)}
+      ${kpi("Нужна связь",signalItems.length,`${noActivity} без действий · ${rateDrop} снизили темп`,"analysis",signalItems.length>0)}
     </div>
     <div class="ops-chart-grid">
       <div class="card ops-chart-card"><div class="card-head"><div><h3>Действия сегодня по часам</h3><p>Когда и какие операции выполняла команда</p></div>${renderActionLegend()}</div>${renderHourlyActions(hourly)}</div>
@@ -405,13 +427,13 @@ function renderToday(data){
     </div>
     <div class="analysis-grid">
       <div class="card"><div class="card-head"><div><h3>Сейчас на смене</h3><p>${fmtNum(shifts.length)} сотрудников в выбранном городе</p></div><button class="text-btn" data-go="team">Вся команда →</button></div>${renderShiftCards(shifts.slice(0,8),"Открытых смен сейчас нет.")}</div>
-      <div class="stack">
-        <div class="card"><div class="card-head"><div><h3>Команда по ролям</h3><p>Действий на один рабочий час</p></div></div>${Object.keys(roles).length?`<div class="role-list">${Object.entries(roles).map(([role,item])=>`<div class="role-row"><div><b>${esc(role)}</b><span>${fmtNum(item.people)} на смене</span></div><div class="role-numbers"><strong>${item.minutes?Math.round(item.actions*600/item.minutes)/10:'—'}</strong><span>действ./час</span></div></div>`).join("")}</div>`:stateBlock("Смена пуста","Сотрудников на активной смене нет.")}</div>
-        <div class="card"><div class="card-head"><div><h3>Требует внимания</h3><p>${attention} событий качества данных</p></div><button class="text-btn" data-go="more">Все →</button></div>${renderIssueCards(issues.slice(0,3))}</div>
-      </div>
+      <div class="card"><div class="card-head"><div><h3>Оперативные сигналы</h3><p>Только простой, падение темпа и реальные проблемы</p></div><span class="badge ${signalItems.length?"danger":"active"}">${signalItems.length}</span></div>${renderSignals(signalItems)}</div>
     </div>
-    <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Задания на сегодня</h3><p>${taskDone} выполнено · ${taskLeft} осталось</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Задание</button>':""}</div>${renderTaskCards(tasks.slice(0,6))}</div>`;
-  wireCommon(root);
+    <div class="analysis-grid" style="margin-top:14px">
+      <div class="card"><div class="card-head"><div><h3>Последние действия</h3><p>Живая лента сообщений, записанных парсером</p></div></div><form class="activity-search" id="bikeSearchForm"><input class="input" id="bikeSearch" inputmode="numeric" maxlength="4" placeholder="Найти байк, например 0001"><button class="btn btn-primary" type="submit">Найти</button><button class="btn btn-secondary" id="bikeSearchReset" type="button">Сбросить</button></form><div id="activityFeed">${renderActivity(activity)}</div></div>
+      <div class="card"><div class="card-head"><div><h3>Задания на сегодня</h3><p>${Math.min(taskDone,taskTotal)} выполнено · ${Math.max(0,taskTotal-taskDone)} осталось</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Задание</button>':""}</div>${renderTaskCards(tasks.slice(0,6))}</div>
+    </div>`;
+  wireCommon(root);$("bikeSearchForm").onsubmit=searchBike;$("bikeSearchReset").onclick=()=>{$("bikeSearch").value="";$("activityFeed").innerHTML=renderActivity(activity)};
 }
 function kpi(label,value,sub,route,alert=false){return `<button class="kpi action ${alert?"alert":""}" data-go="${route}"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${value===null||value===undefined?"—":esc(value)}</div><div class="kpi-sub">${esc(sub)}</div></button>`}
 function renderShiftCards(items,empty){if(!items.length)return stateBlock("Нет активных смен",empty);items.forEach(s=>state.shiftLookup[String(s.shift_id)]=s);return `<div class="list">${items.map(s=>`<div class="row-card clickable" data-employee="${Number(s.user_id)}"><div class="person-line"><div class="initial">${esc(initials(s.name))}</div><div class="row-main"><div class="row-title">${esc(s.name)}</div><div class="row-meta">${esc(s.role||"Без роли")} · ${esc(s.district||"район не указан")}</div></div></div><div class="row-side">${badge(s.on_lunch?"seen":s.status,s.on_lunch?"Обед":"На смене")}<span>${fmtMinutes(s.worked_minutes)} · ${fmtNum(s.actions_total)} действ.</span>${canWrite()&&s.status==="active"?`<button class="btn btn-danger shift-close-btn" data-close-shift="${Number(s.shift_id)}">Закрыть смену</button>`:""}</div></div>`).join("")}</div>`}
@@ -421,28 +443,34 @@ async function loadCalendar(){
   try{const results=await withSeq("calendar",()=>Promise.allSettled([request(API.calendar+query(params)),request(API.tasks+query({...params,limit:200}))]));const data={calendar:valueOf(results[0]),tasks:valueOf(results[1])};if(!data.calendar)throw new Error("Календарь пока недоступен.");state.cache[`calendar:${state.cityId}`]=data;renderCalendar(data.calendar,data.tasks)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить календарь",err.message,"calendar")}
 }
 function calendarCells(month){const first=startOfMonth(month),mondayOffset=(first.getDay()+6)%7,start=addDays(first,-mondayOffset);return Array.from({length:42},(_,i)=>addDays(start,i))}
+function decadeForDate(value){const day=new Date(`${value}T12:00:00`).getDate();return day<=10?1:day<=20?2:3}
 function taskCoversDate(task,date){const from=task.date_from||task.work_date,to=task.date_to||from;return !!from&&from<=date&&to>=date}
 function renderCalendar(data,taskData){
   /* В календаре считаются только опубликованные задания: черновики и
      отменённые не должны выглядеть как реальная нагрузка сотрудников. */
   const root=$("calendarRoot"),days=data.days||{},plans=data.planned||[],unplanned=data.actual_unplanned||[],tasks=(taskData?.items||[]).filter(task=>task.status==="published");
   const monthKey=state.month.getMonth(),today=isoDate(new Date()),selected=state.selectedDate;
-  const cells=calendarCells(state.month).map(date=>{const key=isoDate(date),d=days[key]||{},taskCount=tasks.filter(t=>taskCoversDate(t,key)).length;return `<button class="day-tile ${date.getMonth()!==monthKey?"outside":""} ${key===today?"today":""} ${key===selected?"selected":""}" data-day="${key}"><span class="day-number">${date.getDate()}</span><span class="day-stat"><b>План ${n(d.planned)}</b> · вышли ${n(d.came)}</span><span class="day-stat detail">Вне плана ${n(d.unplanned)} · задач ${taskCount}</span>${n(d.missed)||n(d.ambiguous)?`<span class="day-alert">Проверить ${n(d.missed)+n(d.ambiguous)}</span>`:""}</button>`}).join("");
+  const cells=calendarCells(state.month).map(date=>{const key=isoDate(date),outside=date.getMonth()!==monthKey,d=days[key]||{},taskCount=tasks.filter(t=>taskCoversDate(t,key)).length,otherDecade=!outside&&decadeForDate(key)!==state.calendarDecade;return `<div role="button" tabindex="0" class="day-tile ${outside?"outside":""} ${otherDecade?"out-decade":""} ${key===today?"today":""} ${key===selected?"selected":""}" data-day="${key}">${canWrite()&&!outside?`<button class="day-add" data-day-add="${key}" aria-label="Добавить на ${key}">${icon("i-plus")}</button>`:""}<span class="day-number">${date.getDate()}</span><span class="day-stat"><b>План ${n(d.planned)}</b> · вышли ${n(d.came)}</span><span class="day-stat detail">Подработки ${n(d.unplanned)+n(d.extra)} · задач ${taskCount}</span>${n(d.missed)||n(d.ambiguous)?`<span class="day-alert">Нужна связь ${n(d.missed)+n(d.ambiguous)}</span>`:n(d.expected)?`<span class="day-stat">Ожидаются ${n(d.expected)}</span>`:""}</div>`}).join("");
   const dayPlans=plans.filter(p=>p.work_date===selected),dayUnplanned=unplanned.filter(s=>s.date===selected),dayTasks=tasks.filter(t=>taskCoversDate(t,selected));
-  root.innerHTML=`<div class="calendar-shell"><div class="card calendar-card"><div class="calendar-toolbar"><div class="calendar-actions"><button class="icon-btn" data-month="-1" aria-label="Предыдущий месяц">${icon("i-left")}</button></div><h3>${fmtDate(isoDate(state.month),{month:"long",year:"numeric"})}</h3><div class="calendar-actions">${canWrite()?'<button class="btn btn-primary" data-batch-plan>График</button>':''}<button class="btn btn-secondary" data-today-calendar>Сегодня</button><button class="icon-btn" data-month="1" aria-label="Следующий месяц">${icon("i-right")}</button></div></div><div class="weekdays">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(x=>`<span>${x}</span>`).join("")}</div><div class="month-grid">${cells}</div></div>
-  <aside class="card day-panel"><div class="card-head"><div><div class="day-panel-date">${fmtDate(selected,{weekday:"long",day:"numeric",month:"long"})}</div><p>План и факт хранятся отдельно</p></div>${canWrite()?`<button class="icon-btn" data-day-add aria-label="Добавить">${icon("i-plus")}</button>`:""}</div>${renderDayPanel(dayPlans,dayUnplanned,dayTasks)}</aside></div>`;
-  $$("[data-day]",root).forEach(b=>b.onclick=()=>{state.selectedDate=b.dataset.day;renderCalendar(data,taskData)});
-  $$("[data-month]",root).forEach(b=>b.onclick=()=>{state.month=new Date(state.month.getFullYear(),state.month.getMonth()+Number(b.dataset.month),1);state.selectedDate=isoDate(state.month);loadCalendar()});
-  const todayBtn=root.querySelector("[data-today-calendar]");if(todayBtn)todayBtn.onclick=()=>{state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());loadCalendar()};
-  const add=root.querySelector("[data-day-add]"),batch=root.querySelector('[data-batch-plan]');if(add)add.onclick=()=>openDayCreate(state.selectedDate);if(batch)batch.onclick=()=>openPlanModal(state.selectedDate,null,'batch');wireCommon(root);
+  const decadeSummary=[1,2,3].map(decade=>{const entries=Object.entries(days).filter(([key])=>new Date(`${key}T12:00:00`).getMonth()===monthKey&&decadeForDate(key)===decade),sum=entries.reduce((acc,[,d])=>({planned:acc.planned+n(d.planned),came:acc.came+n(d.came),missed:acc.missed+n(d.missed)}),{planned:0,came:0,missed:0});return {...sum,decade}});
+  root.innerHTML=`<div class="calendar-shell"><div class="card calendar-card"><div class="calendar-toolbar"><div class="calendar-actions"><button class="icon-btn" data-month="-1" aria-label="Предыдущий месяц">${icon("i-left")}</button></div><h3>${fmtDate(isoDate(state.month),{month:"long",year:"numeric"})}</h3><div class="calendar-actions">${canWrite()?'<button class="btn btn-primary" data-batch-plan>График</button>':''}<button class="btn btn-secondary" data-today-calendar>Сегодня</button><button class="icon-btn" data-month="1" aria-label="Следующий месяц">${icon("i-right")}</button></div></div><div class="decade-tabs">${decadeSummary.map(item=>`<button class="chip ${state.calendarDecade===item.decade?"active":""}" data-decade="${item.decade}">${item.decade===1?"1–10":item.decade===2?"11–20":"21–конец"} · ${item.came}/${item.planned}${item.missed?` · !${item.missed}`:""}</button>`).join("")}</div><div class="weekdays">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(x=>`<span>${x}</span>`).join("")}</div><div class="month-grid">${cells}</div></div>
+  <aside class="card day-panel"><div class="card-head"><div><div class="day-panel-date">${fmtDate(selected,{weekday:"long",day:"numeric",month:"long"})}</div><p>Назначения и фактические выходы</p></div>${canWrite()?`<button class="icon-btn" data-day-add="${selected}" aria-label="Добавить">${icon("i-plus")}</button>`:""}</div>${renderDayPanel(dayPlans,dayUnplanned,dayTasks)}</aside></div>`;
+  $$("[data-day]",root).forEach(b=>{b.onclick=()=>{state.selectedDate=b.dataset.day;if(new Date(`${b.dataset.day}T12:00:00`).getMonth()===monthKey)state.calendarDecade=decadeForDate(b.dataset.day);renderCalendar(data,taskData)};b.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();b.click()}}});
+  $$("[data-day-add]",root).forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();state.selectedDate=b.dataset.dayAdd;openDayCreate(b.dataset.dayAdd)});
+  $$("[data-decade]",root).forEach(b=>b.onclick=()=>{state.calendarDecade=Number(b.dataset.decade);const day=state.calendarDecade===1?1:state.calendarDecade===2?11:21;state.selectedDate=isoDate(new Date(state.month.getFullYear(),state.month.getMonth(),day));renderCalendar(data,taskData)});
+  $$("[data-month]",root).forEach(b=>b.onclick=()=>{state.month=new Date(state.month.getFullYear(),state.month.getMonth()+Number(b.dataset.month),1);state.selectedDate=isoDate(state.month);state.calendarDecade=1;loadCalendar()});
+  const todayBtn=root.querySelector("[data-today-calendar]");if(todayBtn)todayBtn.onclick=()=>{state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());state.calendarDecade=decadeForDate(state.selectedDate);loadCalendar()};
+  const batch=root.querySelector('[data-batch-plan]');if(batch)batch.onclick=()=>openPlanModal(state.selectedDate,null,'batch','regular');wireCommon(root);wirePlanActions(root);
 }
-function renderDayPanel(plans,unplanned,tasks){return `<div class="day-section"><div class="day-section-head"><b>По плану</b><span>${plans.length}</span></div>${plans.length?plans.map(renderPlanFact).join(""):stateBlock("Плана нет","Добавьте плановую смену или оставьте день без плана.")}</div><div class="day-section"><div class="day-section-head"><b>Вышли вне плана</b><span>${unplanned.length}</span></div>${unplanned.length?unplanned.map(s=>`<div class="plan-fact"><div class="pf-name">${esc(s.name)}</div><div class="pf-role">${esc(s.role)}</div><div class="pf-times"><span>Факт</span><b class="pf-fact">${esc(s.start_time||"—")}–${esc(s.end_time||"…")}</b></div></div>`).join(""):stateBlock("Нет","Все фактические смены сопоставлены с планом.")}</div><div class="day-section"><div class="day-section-head"><b>Задания</b><span>${tasks.length}</span></div>${renderTaskCards(tasks)}</div>`}
-function renderPlanFact(p){const actual=p.actual_shifts||[],fact=actual[0];return `<div class="plan-fact"><div class="pf-name">${esc(p.user_name||p.role||"Плановая смена")}</div><div class="pf-role">${esc(p.user_name?p.role||"":p.role?"План на роль":"")} ${badge(p.match_status,p.match_status)}</div><div class="pf-times"><span>План</span><b>${esc(p.start_time)}–${esc(p.end_time)}</b><span>Факт</span><b class="${p.match_status==="не вышел"?"pf-missing":"pf-fact"}">${fact?`${esc(fact.start_time||"—")}–${esc(fact.end_time||"…")}`:p.match_status==="не вышел"?"Не начата":"—"}</b></div>${p.district?`<div class="row-meta">${esc(p.district)}</div>`:""}</div>`}
+function renderDayPanel(plans,unplanned,tasks){return `<div class="day-section"><div class="day-section-head"><b>Назначено</b><span>${plans.length}</span></div>${plans.length?plans.map(renderPlanFact).join(""):stateBlock("Назначений нет","Нажмите плюс и назначьте смену, подработку или задачу.")}</div><div class="day-section"><div class="day-section-head"><b>Подработки без назначения</b><span>${unplanned.length}</span></div>${unplanned.length?unplanned.map(s=>`<div class="plan-fact"><div class="pf-name">${esc(s.name)}</div><div class="pf-role">${esc(s.role)}</div><div class="pf-times"><span>Факт</span><b class="pf-fact">${esc(s.start_time||"—")}–${esc(s.end_time||"…")}</b></div></div>`).join(""):stateBlock("Нет","Незапланированных выходов нет.")}</div><div class="day-section"><div class="day-section-head"><b>Задания</b><span>${tasks.length}</span></div>${renderTaskCards(tasks)}</div>`}
+function renderPlanFact(p){const actual=p.actual_shifts||[],fact=actual[0],cancelled=p.status==="cancelled";return `<div class="plan-fact"><div class="pf-name">${esc(p.user_name||p.role||"Плановая смена")}</div><div class="pf-role">${badge(p.work_kind==="extra"?"blue":"active",p.work_kind==="extra"?"Подработка":"Смена")} ${badge(p.match_status,p.match_status)}</div><div class="pf-times"><span>План</span><b>${esc(p.start_time)}–${esc(p.end_time)}</b><span>Факт</span><b class="${p.match_status==="не вышел"?"pf-missing":"pf-fact"}">${fact?`${esc(fact.start_time||"—")}–${esc(fact.end_time||"…")}`:p.match_status==="не вышел"?"Не начата":p.match_status==="ожидается"?"Ожидается":"—"}</b></div>${p.district?`<div class="row-meta">${esc(p.district)}</div>`:""}${canWrite()?`<div class="plan-actions"><button class="btn ${cancelled?"btn-secondary":"btn-danger"}" data-plan-status="${Number(p.plan_id)}" data-status="${cancelled?"scheduled":"cancelled"}">${cancelled?"Вернуть в план":"Не сможет выйти"}</button></div>`:""}</div>`}
+function wirePlanActions(root){$$('[data-plan-status]',root).forEach(button=>button.onclick=async event=>{event.preventDefault();event.stopPropagation();button.disabled=true;try{await request(`${API.plans}/${button.dataset.planStatus}`,{method:"PATCH",body:JSON.stringify({status:button.dataset.status})});toast(button.dataset.status==="cancelled"?"Выход отменён. Сотрудник не считается неявкой.":"Смена возвращена в план.");delete state.cache[`calendar:${state.cityId}`];loadCalendar()}catch(err){toast(err.message)}finally{button.disabled=false}})}
 function openDayCreate(date){
   if(!canWrite())return;
-  openDetail(`Добавить · ${fmtDate(date)}`,`<div class="stack"><button class="more-item" id="dayCreatePlan">${icon("i-calendar")}<span><b>Одна смена</b><span class="row-meta">План не меняет фактические часы</span></span></button><button class="more-item" id="dayCreateBatch">${icon("i-calendar")}<span><b>График на период</b><span class="row-meta">Несколько сотрудников · режим работы/отдыха</span></span></button><button class="more-item" id="dayCreateTask">${icon("i-task")}<span><b>Создать задание</b><span class="row-meta">Текст, фото и исполнители</span></span></button></div>`);
-  $("dayCreatePlan").onclick=()=>{closeModal("detailModal");openPlanModal(date)};
-  $("dayCreateBatch").onclick=()=>{closeModal("detailModal");openPlanModal(date,null,'batch')};
+  openDetail(`Добавить · ${fmtDate(date)}`,`<div class="stack"><button class="more-item" id="dayCreatePlan">${icon("i-calendar")}<span><b>Назначить смену</b><span class="row-meta">Основной выход сотрудника</span></span></button><button class="more-item" id="dayCreateExtra">${icon("i-plus")}<span><b>Дать подработку</b><span class="row-meta">Дополнительный выход</span></span></button><button class="more-item" id="dayCreateBatch">${icon("i-calendar")}<span><b>График на период</b><span class="row-meta">2/1, 2/2 или 3/1 на декаду</span></span></button><button class="more-item" id="dayCreateTask">${icon("i-task")}<span><b>Выдать задачу / район</b><span class="row-meta">Текст, фото и исполнители</span></span></button></div>`);
+  $("dayCreatePlan").onclick=()=>{closeModal("detailModal");openPlanModal(date,null,'single','regular')};
+  $("dayCreateExtra").onclick=()=>{closeModal("detailModal");openPlanModal(date,null,'single','extra')};
+  $("dayCreateBatch").onclick=()=>{closeModal("detailModal");openPlanModal(date,null,'batch','regular')};
   $("dayCreateTask").onclick=()=>{closeModal("detailModal");openTaskModal(date)};
 }
 
@@ -466,8 +494,8 @@ function setBatchDecade(number){
   $('batchFrom').value=isoDate(new Date(year,month,fromDay));$('batchTo').value=isoDate(new Date(year,month,toDay));
   $$('#batchDecadePreset button').forEach(button=>button.classList.toggle('active',Number(button.dataset.decade)===number));updateBatchPreview();
 }
-async function openPlanModal(date=state.selectedDate,userId=null,mode='single'){
-  clearError('planError');state.batchKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;$('planDate').value=date||isoDate(new Date());$('batchFrom').value=date||isoDate(new Date());$('batchTo').value=isoDate(addDays(new Date((date||isoDate(new Date()))+'T12:00:00'),9));$('planModal').classList.add('open');setPlanMode(mode);
+async function openPlanModal(date=state.selectedDate,userId=null,mode='single',workKind='regular'){
+  clearError('planError');state.planWorkKind=workKind;$$('#planWorkKind button').forEach(b=>b.classList.toggle('active',b.dataset.value===workKind));state.batchKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;$('planDate').value=date||isoDate(new Date());$('batchFrom').value=date||isoDate(new Date());$('batchTo').value=isoDate(addDays(new Date((date||isoDate(new Date()))+'T12:00:00'),9));$('planModal').classList.add('open');setPlanMode(mode);
   $('planEmployee').innerHTML='<option value="">Загружаю…</option>';$('batchEmployees').innerHTML='<div class="check-row">Загружаю…</div>';
   try{
     const data=await request(API.employees+query({city_id:state.cityId,role:roleScope(),limit:200})),items=data.items||[];
@@ -485,22 +513,22 @@ async function createPlan(event){
       const userIds=$$('input[name="batchUser"]:checked').map(input=>Number(input.value));
       if(!userIds.length)throw new Error('Выберите хотя бы одного сотрудника.');
       if(!$('batchFrom').value||!$('batchTo').value)throw new Error('Укажите период графика.');
-      const body={city_id:Number(state.cityId),user_ids:userIds,date_from:$('batchFrom').value,date_to:$('batchTo').value,work_days:state.batchWork,rest_days:state.batchRest,start_time:$('batchStart').value,end_time:$('batchEnd').value,district:$('batchDistrict').value.trim(),note:$('batchNote').value.trim(),idempotency_key:state.batchKey};
+      const body={city_id:Number(state.cityId),user_ids:userIds,date_from:$('batchFrom').value,date_to:$('batchTo').value,work_days:state.batchWork,rest_days:state.batchRest,start_time:$('batchStart').value,end_time:$('batchEnd').value,district:$('batchDistrict').value.trim(),note:$('batchNote').value.trim(),work_kind:state.planWorkKind,idempotency_key:state.batchKey};
       await request(API.planBatch,{method:'POST',body:JSON.stringify(body)});toast(`График создан: ${userIds.length} ${plural(userIds.length,'сотрудник','сотрудника','сотрудников')}.`);
     }else{
       const userId=Number($('planEmployee').value);if(!userId)throw new Error('Выберите сотрудника.');
-      const body={city_id:Number(state.cityId),work_date:$('planDate').value,start_time:$('planStart').value,end_time:$('planEnd').value,user_id:userId,role:null,district:$('planDistrict').value.trim(),note:$('planNote').value.trim()};
-      await request(API.plans,{method:'POST',body:JSON.stringify(body)});toast('Смена запланирована.');
+      const body={city_id:Number(state.cityId),work_date:$('planDate').value,start_time:$('planStart').value,end_time:$('planEnd').value,user_id:userId,role:null,district:$('planDistrict').value.trim(),note:$('planNote').value.trim(),work_kind:state.planWorkKind};
+      await request(API.plans,{method:'POST',body:JSON.stringify(body)});toast(state.planWorkKind==='extra'?'Подработка назначена.':'Смена запланирована.');
     }
     closeModal('planModal');delete state.cache[`calendar:${state.cityId}`];loadCalendar();
   }catch(err){showError('planError',err.status===409?'Часть смен уже существует. Измените период или сотрудников.':err.message)}finally{button.disabled=false;button.textContent=state.planMode==='batch'?'Создать график':'Запланировать'}
 }
 
 async function loadTasks(){const root=$("tasksRoot");root.innerHTML=loadingCards();try{const date=state.taskDate||isoDate(new Date()),data=await withSeq("tasks",()=>request(API.tasks+query({city_id:state.cityId,from:date,to:date,limit:200})));state.cache[`tasks:${state.cityId}`]=data;renderTasks(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Не удалось загрузить задания",err.message,"tasks")}}
-function taskCounts(task){const p=task.progress||{};return {total:n(p.total),accepted:n(p.accepted??p.done),submitted:n(p.submitted),inProgress:n(p.in_progress),blocked:n(p.blocked)}}
-function taskFilterMatch(task){const c=taskCounts(task);if(state.taskFilter==="review")return c.submitted>0;if(state.taskFilter==="done")return c.total>0&&c.accepted===c.total;if(state.taskFilter==="draft")return task.status==="draft";if(state.taskFilter==="open")return task.status==="published"&&c.accepted<c.total;return true}
-function renderTasks(data){const root=$("tasksRoot"),items=(data.items||[]).filter(taskFilterMatch);root.innerHTML=`<div class="page-head"><div><h2>Задания</h2><p>${fmtDate(state.taskDate)} · ${fmtNum(data.page?.total??data.items?.length??0)} заданий</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Создать</button>':""}</div><div class="toolbar"><input class="input" id="taskDayFilter" type="date" value="${esc(state.taskDate)}" aria-label="Дата заданий"><div class="filters">${[["open","Открытые"],["review","На проверке"],["done","Принятые"],["draft","Черновики"],["all","Все"]].map(([v,l])=>`<button class="chip ${state.taskFilter===v?"active":""}" data-task-filter="${v}">${l}</button>`).join("")}</div></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr))">${items.length?items.map(renderTaskCard).join(""):`<div class="empty-full">${stateBlock("Заданий нет","Для выбранной даты и статуса ничего не найдено.")}</div>`}</div>`;$('taskDayFilter').onchange=e=>{state.taskDate=e.target.value||isoDate(new Date());delete state.cache[`tasks:${state.cityId}`];loadTasks()};$$('[data-task-filter]',root).forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTasks(data)});wireCommon(root)}
-function renderTaskCard(task){const c=taskCounts(task),percent=c.total?Math.round(c.accepted*100/c.total):0,from=task.date_from||task.work_date,to=task.date_to||from;return `<article class="task-card clickable" data-task="${Number(task.task_id||task.id)}"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(from)}${to!==from?` — ${fmtDate(to)}`:''}${task.district?` · ${esc(task.district)}`:''} · ${esc(task.priority||"normal")}</div></div>${badge(task.status,task.status==="published"?"Опубликовано":TASK_STATUS[task.status])}</div><div class="progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div><div class="task-progress"><span>Принято ${c.accepted} из ${c.total}</span><span>${c.submitted?`На проверке ${c.submitted}`:c.blocked?`Проблем ${c.blocked}`:""}</span></div></article>`}
+function taskCounts(task){const p=task.progress||{},accepted=n(p.accepted??p.done),submitted=n(p.submitted);return {total:n(p.total),accepted,submitted,done:accepted+submitted,inProgress:n(p.in_progress)+n(p.seen)+n(p.assigned),blocked:n(p.blocked)}}
+function taskFilterMatch(task){const c=taskCounts(task);if(state.taskFilter==="done")return c.total>0&&c.done>=c.total;if(state.taskFilter==="draft")return task.status==="draft";if(state.taskFilter==="open")return task.status==="published"&&c.done<c.total;return true}
+function renderTasks(data){const root=$("tasksRoot"),items=(data.items||[]).filter(taskFilterMatch);root.innerHTML=`<div class="page-head"><div><h2>Задания</h2><p>${fmtDate(state.taskDate)} · работа команды без лишнего этапа проверки</p></div>${canWrite()?'<button class="btn btn-primary" data-create-task>+ Создать</button>':""}</div><div class="toolbar"><input class="input" id="taskDayFilter" type="date" value="${esc(state.taskDate)}" aria-label="Дата заданий"><div class="filters">${[["open","В работе"],["done","Выполнены"],["draft","Черновики"],["all","Все"]].map(([v,l])=>`<button class="chip ${state.taskFilter===v?"active":""}" data-task-filter="${v}">${l}</button>`).join("")}</div></div><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr))">${items.length?items.map(renderTaskCard).join(""):`<div class="empty-full">${stateBlock("Заданий нет","Для выбранной даты и статуса ничего не найдено.")}</div>`}</div>`;$('taskDayFilter').onchange=e=>{state.taskDate=e.target.value||isoDate(new Date());delete state.cache[`tasks:${state.cityId}`];loadTasks()};$$('[data-task-filter]',root).forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTasks(data)});wireCommon(root)}
+function renderTaskCard(task){const c=taskCounts(task),percent=c.total?Math.round(c.done*100/c.total):0,from=task.date_from||task.work_date,to=task.date_to||from;return `<article class="task-card clickable" data-task="${Number(task.task_id||task.id)}"><div class="task-top"><div><div class="task-title">${esc(task.title)}</div><div class="task-meta">${fmtDate(from)}${to!==from?` — ${fmtDate(to)}`:''}${task.district?` · ${esc(task.district)}`:''}</div></div>${badge(task.status,task.status==="published"?"Активно":TASK_STATUS[task.status])}</div><div class="progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div><div class="task-progress"><span>Готово ${Math.min(c.done,c.total)} · в работе ${Math.max(0,c.total-c.done-c.blocked)}</span><span>${c.blocked?`Проблем: ${c.blocked}`:`Исполнителей: ${c.total}`}</span></div></article>`}
 function renderTaskCards(tasks){if(!tasks||!tasks.length)return stateBlock("Заданий нет","На выбранную дату задания не опубликованы.");return `<div class="list">${tasks.map(renderTaskCard).join("")}</div>`}
 async function openTaskModal(date=state.selectedDate,task=null,presetUserId=null){
   clearError('taskError');state.taskFiles=[];state.editTaskId=task?Number(task.task_id||task.id):null;state.editTaskTargetIds=(task?.targets||[]).filter(t=>t.target_type==='user').map(t=>Number(t.user_id));if(presetUserId)state.editTaskTargetIds=[Number(presetUserId)];
@@ -544,7 +572,7 @@ async function openTaskDetail(taskId){
 }
 async function fetchProtectedBlob(url){const response=await fetch(url,{headers:{"Authorization":"tma "+initData,"X-Init-Data":initData,"X-Admin-Token":state.token}});if(!response.ok)throw new Error("Фото недоступно.");return URL.createObjectURL(await response.blob())}
 function hydrateProtectedImages(root){$$('[data-protected-image]',root).forEach(async button=>{try{const objectUrl=await fetchProtectedBlob(button.dataset.protectedImage),img=document.createElement("img");img.src=objectUrl;img.alt="Фото задания";img.style.cssText="width:100%;aspect-ratio:1;object-fit:cover;border-radius:11px;display:block";button.replaceChildren(img);button.onclick=()=>window.open(objectUrl,"_blank","noopener")}catch(err){button.innerHTML=stateBlock("Нет фото",err.message)}})}
-function renderAssignee(taskId,a){const status=a.status||"assigned",review=status==="submitted"&&canWrite()?`<div style="display:flex;gap:6px;margin-top:9px"><button class="btn btn-primary" data-review-task="${taskId}" data-review-user="${Number(a.user_id)}" data-review-status="accepted">Принять</button><button class="btn btn-secondary" data-review-task="${taskId}" data-review-user="${Number(a.user_id)}" data-review-status="in_progress">Вернуть</button></div>`:"";return `<div class="row-card"><div class="person-line"><div class="initial">${esc(initials(a.full_name_snap||a.name))}</div><div class="row-main"><div class="row-title">${esc(a.full_name_snap||a.name||`#${a.user_id}`)}</div><div class="row-meta">${esc(a.role_snap||a.role||"")}${a.status_comment?` · ${esc(a.status_comment)}`:""}</div>${review}</div></div><div>${badge(status,TASK_STATUS[status])}</div></div>`}
+function renderAssignee(taskId,a){const status=a.status||"assigned",review=status==="submitted"&&canWrite()?`<div style="display:flex;gap:6px;margin-top:9px"><button class="btn btn-secondary" data-review-task="${taskId}" data-review-user="${Number(a.user_id)}" data-review-status="in_progress">Вернуть в работу</button></div>`:"";return `<div class="row-card"><div class="person-line"><div class="initial">${esc(initials(a.full_name_snap||a.name))}</div><div class="row-main"><div class="row-title">${esc(a.full_name_snap||a.name||`#${a.user_id}`)}</div><div class="row-meta">${esc(a.role_snap||a.role||"")}${a.status_comment?` · ${esc(a.status_comment)}`:""}</div>${review}</div></div><div>${badge(status,TASK_STATUS[status])}</div></div>`}
 function wireTaskReview(root){$$('[data-review-task]',root).forEach(b=>b.onclick=()=>{if(b.dataset.reviewStatus==="accepted")reviewAssignee(b,"accepted","");else openReturnEditor(b)})}
 function openReturnEditor(button){const card=button.closest(".row-card"),old=card.querySelector(".return-editor");if(old)return old.remove();card.insertAdjacentHTML("beforeend",`<div class="return-editor" style="grid-column:1/-1"><div class="field"><label>Почему возвращаем в работу</label><textarea class="textarea" maxlength="2000" placeholder="Что нужно исправить"></textarea></div><div style="display:flex;gap:7px;justify-content:flex-end"><button class="btn btn-secondary" data-return-cancel>Отмена</button><button class="btn btn-primary" data-return-confirm>Вернуть</button></div></div>`);const editor=card.querySelector(".return-editor");editor.querySelector("[data-return-cancel]").onclick=()=>editor.remove();editor.querySelector("[data-return-confirm]").onclick=()=>{const comment=editor.querySelector("textarea").value.trim();if(!comment)return toast("Укажите, что нужно исправить.");reviewAssignee(button,"in_progress",comment)}}
 async function reviewAssignee(button,status,comment){button.disabled=true;try{await request(`${API.tasks}/${button.dataset.reviewTask}/assignees/${button.dataset.reviewUser}/status`,{method:"POST",body:JSON.stringify({status,comment})});toast(status==="accepted"?"Результат принят.":"Задание возвращено в работу.");openTaskDetail(button.dataset.reviewTask);delete state.cache[`tasks:${state.cityId}`]}catch(err){toast(err.message)}finally{button.disabled=false}}
@@ -557,8 +585,8 @@ function renderShiftHistory(items){if(!items.length)return stateBlock("Смен 
 function issueText(issue){const labels={long_open_shift:["Длинная открытая смена","Открыта больше 14 часов"],missing_start_at:["Нет точного начала","Нужно проверить данные смены"],missing_end_at:["Нет точного окончания","Закрытая смена требует проверки"],unknown_role:["Неизвестная роль","Роль не соответствует настройкам города"],manual_report_waiting:["Ручной отчёт","Ожидает проверки руководителем"],attachment_missing:["Фото недоступно","Файл задания отсутствует в хранилище"]};return labels[issue.type]||[issue.type,"Событие качества данных"]}
 function renderIssueCards(items){if(!items||!items.length)return stateBlock("Всё спокойно","Проверяемых событий за период нет.");return `<div class="list">${items.map(issue=>{const [title,sub]=issueText(issue),shift=issue.shift||{};return `<div class="row-card"><div><div class="row-title">${esc(title)}</div><div class="row-meta">${esc(shift.name||issue.report?.sender_name||sub)}${shift.shift_id?` · смена #${shift.shift_id}`:""}</div></div><div>${badge(issue.severity,issue.severity==="high"?"Важно":"Проверить")}</div></div>`}).join("")}</div>`}
 
-async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const results=await withSeq("more",()=>Promise.allSettled([request(API.trends+query({city_id:state.cityId})),request(API.quality+query({city_id:state.cityId}))])),data={trends:valueOf(results[0]),quality:valueOf(results[1])};state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Раздел пока недоступен",err.message,"more")}}
-function renderMore(data){const root=$("moreRoot"),trend=data.trends||{},quality=data.quality||{},series=trend.series||[],max=Math.max(1,...series.map(x=>n(x.actions))),issues=quality.items||[],counts=quality.counts||{};root.innerHTML=`<div class="more-grid"><div class="card"><div class="card-head"><div><h3>Качество данных</h3><p>Реальные события, требующие проверки</p></div><span class="badge ${issues.length?'danger':'active'}">${issues.length}</span></div>${Object.keys(counts).length?`<div class="filters" style="margin-bottom:12px">${Object.entries(counts).filter(([,count])=>n(count)>0).map(([type,count])=>`<span class="badge">${esc(issueText({type})[0])}: ${fmtNum(count)}</span>`).join('')}</div>`:''}${renderIssueCards(issues)}</div><div class="card"><div class="card-head"><div><h3>Действия по дням</h3><p>${fmtDate(trend.range?.from)} — ${fmtDate(trend.range?.to)}</p></div></div>${series.length?`<div class="stack">${series.map(x=>`<div class="role-row"><div><b>${fmtDate(x.date,{day:"numeric",month:"short"})}</b><span>${fmtMinutes(x.worked_minutes)} · ${fmtNum(x.employees)} чел.</span></div><div class="role-numbers" style="min-width:45%"><strong>${fmtNum(x.actions)}</strong><div class="progress"><i style="width:${Math.round(n(x.actions)*100/max)}%"></i></div></div></div>`).join("")}</div>`:stateBlock("Данных нет","За период действия не найдены.")}</div><div class="card"><div class="card-head"><div><h3>Отчёты</h3><p>Только реально подключённые возможности</p></div></div>${stateBlock("Экспорт готовится","Неработающие кнопки скачивания не показываются.")}</div><div class="card"><div class="card-head"><div><h3>Доступ</h3><p>${esc(ROLE_LABELS[state.context?.role]||state.context?.role||'Администратор')} · ${esc(selectedCity()?.name||'')}</p></div></div><div class="stack"><button class="more-item" id="moreEmployeeApp">${icon('i-today')}Вернуться к моей смене</button><button class="more-item" id="moreFullscreen">${icon('i-fullscreen')}Открыть на весь экран</button><button class="more-item" id="moreLogout">${icon('i-close')}Выйти из CRM</button></div></div></div>`;const back=$('moreEmployeeApp'),full=$('moreFullscreen'),out=$('moreLogout');if(back)back.onclick=()=>location.href='/';if(full)full.onclick=requestFullscreen;if(out)out.onclick=()=>logout()}
+async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const results=await withSeq("more",()=>Promise.allSettled([request(API.trends+query({city_id:state.cityId})),request(API.signals+query({city_id:state.cityId}))])),data={trends:valueOf(results[0]),signals:valueOf(results[1])};state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Раздел пока недоступен",err.message,"more")}}
+function renderMore(data){const root=$("moreRoot"),trend=data.trends||{},signals=data.signals||{},series=trend.series||[],max=Math.max(1,...series.map(x=>n(x.actions)));root.innerHTML=`<div class="more-grid"><div class="card"><div class="card-head"><div><h3>Оперативные сигналы</h3><p>Простой, падение темпа, длинные смены и проблемы с задачами</p></div><span class="badge ${(signals.items||[]).length?'danger':'active'}">${(signals.items||[]).length}</span></div>${renderSignals(signals.items||[])}</div><div class="card"><div class="card-head"><div><h3>Действия по дням</h3><p>${fmtDate(trend.range?.from)} — ${fmtDate(trend.range?.to)}</p></div></div>${series.length?`<div class="stack">${series.map(x=>`<div class="role-row"><div><b>${fmtDate(x.date,{day:"numeric",month:"short"})}</b><span>${fmtNum(x.employees)} сотрудников</span></div><div class="role-numbers" style="min-width:45%"><strong>${fmtNum(x.actions)}</strong><div class="progress"><i style="width:${Math.round(n(x.actions)*100/max)}%"></i></div></div></div>`).join("")}</div>`:stateBlock("Данных нет","За период действия не найдены.")}</div><div class="card"><div class="card-head"><div><h3>Доступ</h3><p>${esc(ROLE_LABELS[state.context?.role]||state.context?.role||'Администратор')} · ${esc(selectedCity()?.name||'')}</p></div></div><div class="stack"><button class="more-item" id="moreRefresh">${icon('i-refresh')}Обновить данные</button><button class="more-item" id="moreEmployeeApp">${icon('i-today')}Вернуться к моей смене</button><button class="more-item" id="moreFullscreen">${icon('i-fullscreen')}<span id="moreFullscreenLabel">${fullscreenActive()?'Вернуть прежний размер':'Открыть на весь экран'}</span></button><button class="more-item" id="moreLogout">${icon('i-close')}Выйти из CRM</button></div></div></div>`;const refresh=$('moreRefresh'),back=$('moreEmployeeApp'),full=$('moreFullscreen'),out=$('moreLogout');if(refresh)refresh.onclick=()=>{state.cache={};loadMore()};if(back)back.onclick=()=>location.href='/';if(full)full.onclick=requestFullscreen;if(out)out.onclick=()=>logout();wireCommon(root)}
 
 function openDetail(title,html){$("detailTitle").textContent=title;$("detailRoot").innerHTML=html;$("detailModal").classList.add("open")}
 function closeModal(id){$(id).classList.remove("open")}
@@ -566,26 +594,29 @@ function openMore(){$("moreSheet").classList.add("open")}
 function closeMore(){$("moreSheet").classList.remove("open")}
 function fullscreenActive(){return !!document.fullscreenElement||!!(tg&&tg.isFullscreen)}
 function syncFullscreenButton(){
-  const button=$('fullscreenButton');if(!button)return;
   const active=fullscreenActive(),label=active?'Вернуть прежний размер':'На весь экран';
-  button.title=label;button.setAttribute('aria-label',label);button.classList.toggle('active',active)
+  ['fullscreenButton','sideFullscreenButton'].forEach(id=>{const button=$(id);if(!button)return;button.title=label;button.setAttribute('aria-label',label);button.classList.toggle('active',active);if(id==='sideFullscreenButton')button.textContent=active?'Вернуть размер':'Полный экран'});const more=$('moreFullscreenLabel');if(more)more.textContent=active?'Вернуть прежний размер':'Открыть на весь экран';state.fullscreenPending=false
 }
 async function requestFullscreen(){
+  if(state.fullscreenPending)return;state.fullscreenPending=true;
   const root=document.documentElement;
   if(tg&&tg.isFullscreen&&typeof tg.exitFullscreen==='function'){
-    try{tg.exitFullscreen();return}catch(_){}
+    try{tg.exitFullscreen();setTimeout(()=>{state.fullscreenPending=false;syncFullscreenButton()},1200);return}catch(_){state.fullscreenPending=false}
   }
   if(document.fullscreenElement){
-    try{await document.exitFullscreen();return}catch(_){}
+    try{await document.exitFullscreen();syncFullscreenButton();return}catch(_){state.fullscreenPending=false}
   }
   if(tg&&typeof tg.requestFullscreen==='function'){
-    try{if(tg.expand)tg.expand();tg.requestFullscreen();return}catch(_){}
+    try{if(tg.expand)tg.expand();tg.requestFullscreen();setTimeout(()=>{state.fullscreenPending=false;syncFullscreenButton()},1500);return}catch(_){state.fullscreenPending=false}
   }
   if(root.requestFullscreen){
-    try{await root.requestFullscreen({navigationUI:'hide'});return}catch(_){}
+    try{await root.requestFullscreen({navigationUI:'hide'});syncFullscreenButton();return}catch(_){state.fullscreenPending=false}
   }
+  state.fullscreenPending=false;
   toast('Полный экран недоступен. Обновите Telegram Desktop или откройте CRM в браузере.')
 }
+function desktopClient(){const platform=String(tg?.platform||'').toLowerCase();return ['tdesktop','macos','unigram','web','weba'].includes(platform)||(innerWidth>=900&&matchMedia('(pointer:fine)').matches)}
+function attemptInitialFullscreen(){if(state.desktopFullscreenTried||!desktopClient()||!tg||typeof tg.requestFullscreen!=='function')return;state.desktopFullscreenTried=true;setTimeout(()=>{if(!fullscreenActive())requestFullscreen()},250)}
 function wireCommon(root){
   $$('[data-go]',root).forEach(b=>b.onclick=()=>setRoute(b.dataset.go));$$('[data-create-task]',root).forEach(b=>b.onclick=()=>openTaskModal(state.route==='calendar'?state.selectedDate:state.taskDate));$$('[data-task]',root).forEach(b=>b.onclick=()=>openTaskDetail(Number(b.dataset.task)));$$('[data-employee]',root).forEach(b=>b.onclick=()=>openEmployee(Number(b.dataset.employee)));$$('[data-retry]',root).forEach(b=>b.onclick=()=>loadRoute(b.dataset.retry));wireCloseShift(root)
 }
@@ -606,17 +637,18 @@ async function closeShiftFromCrm(event){
 
 $("loginForm").addEventListener("submit",login);$("logoutButton").onclick=()=>logout();$("mobileLogout").onclick=()=>logout();$("employeeAppButton").onclick=()=>location.href="/";$("mobileEmployeeApp").onclick=()=>location.href="/";
 $$('[data-route]').forEach(b=>b.onclick=()=>setRoute(b.dataset.route));$("mobileMoreButton").onclick=()=>setRoute('more');$("moreSheet").onclick=e=>{if(e.target===$("moreSheet"))closeMore()};
-$("scopeSelect").onchange=()=>{state.cityId=Number($("scopeSelect").value);state.cache={};state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());updateDistrictSuggestions();loadRoute()};
-$("refreshButton").onclick=()=>{delete state.cache[`${state.route}:${state.cityId}`];loadRoute()};$("fullscreenButton").onclick=requestFullscreen;$("staleRetry").onclick=()=>loadRoute();
+$("scopeSelect").onchange=()=>{state.cityId=Number($("scopeSelect").value);state.cache={};state.month=startOfMonth(new Date());state.selectedDate=isoDate(new Date());state.calendarDecade=decadeForDate(state.selectedDate);updateDistrictSuggestions();loadRoute()};
+$("refreshButton").onclick=()=>{delete state.cache[`${state.route}:${state.cityId}`];loadRoute()};$("fullscreenButton").onclick=requestFullscreen;$("sideFullscreenButton").onclick=requestFullscreen;$("staleRetry").onclick=()=>loadRoute();
 document.addEventListener('fullscreenchange',syncFullscreenButton);
 if(tg&&typeof tg.onEvent==='function'){
-  try{tg.onEvent('fullscreenChanged',syncFullscreenButton);tg.onEvent('fullscreenFailed',()=>toast('Telegram не разрешил полноэкранный режим. Обновите Telegram Desktop.'))}catch(_){}
+  try{tg.onEvent('fullscreenChanged',syncFullscreenButton);tg.onEvent('fullscreenFailed',()=>{state.fullscreenPending=false;syncFullscreenButton();toast('Telegram не разрешил полноэкранный режим. Кнопка готова к повторной попытке.')})}catch(_){}
 }
 syncFullscreenButton();
 $$('[data-close]').forEach(b=>b.onclick=()=>closeModal(b.dataset.close));$$('.modal-backdrop').forEach(m=>m.onclick=e=>{if(e.target===m)closeModal(m.id)});
 $("planForm").addEventListener("submit",createPlan);$("taskForm").addEventListener("submit",createTask);$("closeShiftForm").addEventListener("submit",closeShiftFromCrm);$("taskPhotos").onchange=selectTaskFiles;$("taskRole").onchange=refreshAssigneePreview;
 $$('#closeShiftDuration button').forEach(button=>button.onclick=()=>{state.closeShiftHours=Number(button.dataset.hours);$$('#closeShiftDuration button').forEach(item=>item.classList.toggle('active',item===button));updateCloseShiftPreview()});
 $$('#planSegment button').forEach(b=>b.onclick=()=>{$$('#planSegment button').forEach(x=>x.classList.toggle("active",x===b));if(b.dataset.value==="day"){$("planStart").value="08:00";$("planEnd").value="18:00"}else{$("planStart").value="20:00";$("planEnd").value="05:00"}});
+$$('#planWorkKind button').forEach(b=>b.onclick=()=>{state.planWorkKind=b.dataset.value;$$('#planWorkKind button').forEach(x=>x.classList.toggle('active',x===b))});
 $$('#taskTargetMode button').forEach(b=>b.onclick=()=>toggleTargetMode(b.dataset.value));
 $$('#taskCompletion button').forEach(b=>b.onclick=()=>{state.taskCompletion=b.dataset.value;$$('#taskCompletion button').forEach(x=>x.classList.toggle('active',x===b))});
 $$('#planMode button').forEach(b=>b.onclick=()=>setPlanMode(b.dataset.value));

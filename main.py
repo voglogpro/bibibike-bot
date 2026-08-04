@@ -220,7 +220,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-04 · CRM Auto Schedule + напоминания + ставки + шаблоны"
+BUILD_VERSION = "2026-08-04 · CRM Auto Schedule + информативные уведомления"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -7552,6 +7552,7 @@ async def _crm_publish_task(db, task_id, expected_city_id=None, actor_user_id=No
             {"task_id": task_id, "title": task["title"], "date_from": date_from,
              "date_to": date_to, "district": task["district"] or "",
              "description": task["description"] or "",
+             "requires_photo": bool(task["requires_photo"]),
              "brief_attachment_id": brief[0] if brief else None},
         )
     await db.execute(
@@ -8036,46 +8037,77 @@ def _crm_miniapp_link(task_id=None):
     return f"{base}?startapp=task_{task_id}" if task_id is not None else base
 
 
+def _crm_human_date(value):
+    try:
+        parsed = datetime.strptime(str(value), "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return str(value or "—")
+    weekdays = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+    return f"{parsed:%d.%m.%Y} ({weekdays[parsed.weekday()]})"
+
+
 def _crm_notification_text(kind, payload):
-    details = str(payload.get("description") or payload.get("note") or "").strip()
-    details = f"\n\n{details[:1200]}" if details else ""
+    details = str(payload.get("description") or payload.get("note") or "").strip()[:1200]
+    district = str(payload.get("district") or "").strip()
     if kind == "task_assigned":
-        dates = payload.get("date_from") or ""
-        if payload.get("date_to") and payload.get("date_to") != dates:
-            dates += f" — {payload['date_to']}"
-        district = f"\nРайон: {payload['district']}" if payload.get("district") else ""
-        return (f"📋 Новое задание: {payload.get('title') or 'Без названия'}\n"
-                f"Срок: {dates}{district}{details}")
+        date_from = _crm_human_date(payload.get("date_from"))
+        date_to = payload.get("date_to")
+        dates = date_from if not date_to or date_to == payload.get("date_from") else f"{date_from} — {_crm_human_date(date_to)}"
+        lines = ["📋 НОВОЕ ЗАДАНИЕ", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
+        if district: lines.append(f"📍 Район: {district}")
+        if details: lines.extend(["", "📝 Что нужно сделать:", details])
+        if payload.get("requires_photo"): lines.extend(["", "📸 Для завершения потребуется фотоотчёт."])
+        lines.extend(["", "👇 Откройте приложение, чтобы посмотреть задание и отметить выполнение."])
+        return "\n".join(lines)
     if kind == "planned_shift":
-        district = f"\nРайон: {payload['district']}" if payload.get("district") else ""
-        label = "подработка" if payload.get("work_kind") == "extra" else "смена"
-        return (f"🗓 Вам назначена {label}\n{payload.get('work_date', '')} · "
-                f"{payload.get('start_time', '')}–{payload.get('end_time', '')}{district}\n"
-                f"Бот откроет и закроет смену автоматически.{details}")
+        is_extra = payload.get("work_kind") == "extra"
+        lines = ["💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА", "",
+                 f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
+                 f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
+        if district: lines.append(f"📍 Район: {district}")
+        if details: lines.extend(["", "📝 Комментарий руководителя:", details])
+        lines.extend(["", "🤖 Бот автоматически откроет смену в указанное время и закроет её по окончании.",
+                      "✅ Если вы откроете смену самостоятельно, вторая смена не появится."])
+        return "\n".join(lines)
     if kind == "shift_reminder":
-        district = f"\nРайон: {payload['district']}" if payload.get("district") else ""
-        return (f"⏰ Напоминание о смене завтра\nНачало: {payload.get('start_time', '')}\n"
-                f"Окончание: {payload.get('end_time', '')}{district}\n\n"
-                "Смена откроется и закроется автоматически. Если вы откроете её сами, дубля не будет."
-                f"{details}")
+        lines = ["⏰ НАПОМИНАНИЕ: ЗАВТРА СМЕНА", "",
+                 f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
+                 f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
+        if district: lines.append(f"📍 Район: {district}")
+        if details: lines.extend(["", "📝 Задача / комментарий:", details])
+        lines.extend(["", f"🚀 В {payload.get('start_time', 'назначенное время')} бот сам откроет вашу смену.",
+                      f"🏁 В {payload.get('end_time', 'конце смены')} бот автоматически её закроет.",
+                      "✅ Дополнительных действий сейчас не требуется."])
+        return "\n".join(lines)
     if kind == "shift_auto_started":
-        district = f"\nРайон: {payload['district']}" if payload.get("district") else ""
-        return (f"▶️ Плановая смена открыта автоматически\n"
-                f"{payload.get('start_time', '')}–{payload.get('end_time', '')}{district}")
+        lines = ["🟢 СМЕНА ОТКРЫТА АВТОМАТИЧЕСКИ", "",
+                 f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
+        if district: lines.append(f"📍 Район: {district}")
+        lines.extend(["", "📊 Отчёт смены уже активен — действия можно писать в рабочую тему как обычно.",
+                      f"🏁 В {payload.get('end_time', 'конце смены')} смена закроется автоматически."])
+        return "\n".join(lines)
     if kind == "shift_auto_conflict":
-        return ("⚠️ Плановая смена не открыта: у вас уже активна смена в другом городе. "
-                "Закройте её или свяжитесь с руководителем.")
+        return ("⚠️ СМЕНА НЕ ОТКРЫТА\n\n"
+                "У вас уже активна смена в другом городе, поэтому бот не стал создавать вторую.\n\n"
+                "🔧 Что сделать: закройте предыдущую смену и сообщите руководителю.")
     if kind == "shift_auto_missed":
-        return (f"⚠️ Плановая смена {payload.get('work_date', '')} в "
-                f"{payload.get('start_time', '')} не была открыта автоматически. "
-                "Сообщите руководителю.")
-    district = f"\nРайон: {payload['district']}" if payload.get("district") else ""
+        return ("⚠️ ПЛАНОВАЯ СМЕНА НЕ ОТКРЫЛАСЬ\n\n"
+                f"📅 Дата: {_crm_human_date(payload.get('work_date'))}\n"
+                f"🕒 Начало: {payload.get('start_time', '—')}\n\n"
+                "Время плановой смены уже прошло. Бот не создаёт смену задним числом, чтобы не исказить часы и зарплату.\n"
+                "📞 Сообщите руководителю.")
     dates = payload.get("dates") or []
-    date_line = "\nДни: " + ", ".join(dates) if dates else ""
-    label = "подработок" if payload.get("work_kind") == "extra" else "смен"
-    return (f"🗓 Опубликован график {label}\n{payload.get('date_from', '')} — "
-            f"{payload.get('date_to', '')}{date_line}\nВремя: {payload.get('start_time', '')}–"
-            f"{payload.get('end_time', '')}\nНазначено: {payload.get('created', 0)}{district}{details}")
+    is_extra = payload.get("work_kind") == "extra"
+    lines = ["💼 ДОБАВЛЕН ГРАФИК ПОДРАБОТОК" if is_extra else "🗓 ОПУБЛИКОВАН НОВЫЙ ГРАФИК", "",
+             f"📆 Период: {_crm_human_date(payload.get('date_from'))} — {_crm_human_date(payload.get('date_to'))}",
+             f"🕒 Время смен: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}",
+             f"✅ Назначено выходов: {payload.get('created', 0)}"]
+    if dates: lines.extend(["", "📌 Ваши рабочие дни:", *[f"• {_crm_human_date(item)}" for item in dates]])
+    if district: lines.extend(["", f"📍 Район: {district}"])
+    if details: lines.extend(["", "📝 Комментарий руководителя:", details])
+    lines.extend(["", "⏰ Накануне каждой смены в 20:00 придёт отдельное напоминание.",
+                  "🤖 Каждая смена откроется и закроется автоматически."])
+    return "\n".join(lines)
 
 
 async def deliver_crm_notifications_once(limit=50):
@@ -8092,8 +8124,14 @@ async def deliver_crm_notifications_once(limit=50):
         payload = json.loads(row["payload_json"] or "{}")
         text = _crm_notification_text(row["kind"], payload)
         task_id = payload.get("task_id") if row["kind"] == "task_assigned" else None
+        if row["kind"] == "task_assigned":
+            button_text = "📋 Открыть задание"
+        elif row["kind"] in {"planned_shift", "shift_reminder", "shift_auto_started"}:
+            button_text = "⚡ Открыть смену"
+        else:
+            button_text = "🗓 Открыть приложение"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть Mini App", url=_crm_miniapp_link(task_id))
+            InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
         ]])
         try:
             photo_sent = False
@@ -8106,9 +8144,12 @@ async def deliver_crm_notifications_once(limit=50):
                 photo_path = os.path.join(CRM_UPLOAD_DIR, attachment[0]) if attachment else None
                 if photo_path and os.path.isfile(photo_path):
                     try:
+                        long_caption = len(text) > 1024
                         await bot.send_photo(row["user_id"], FSInputFile(photo_path),
-                                             caption=text[:1024], reply_markup=keyboard)
-                        photo_sent = True
+                                             caption=("📎 Карта или фотография к новому заданию"
+                                                      if long_caption else text),
+                                             reply_markup=None if long_caption else keyboard)
+                        photo_sent = not long_caption
                     except Exception as photo_error:
                         logger.warning("CRM outbox: фото не отправлено, использую текст: %s", photo_error)
             if not photo_sent:

@@ -70,6 +70,12 @@ async def run():
         )).fetchone())[0]
     assert shift_count == 1 and plan[0] and plan[1]
     assert reminder[0] and reminder_rows == 1
+    sample = bot._crm_notification_text("shift_reminder", {
+        "work_date": reminder_start.date().isoformat(), "start_time": "09:00",
+        "end_time": "19:00", "district": "ФМР", "description": "Стянуть байки по карте",
+    })
+    assert "⏰ НАПОМИНАНИЕ" in sample and "📍 Район: ФМР" in sample
+    assert "🚀 В 09:00" in sample and "🏁 В 19:00" in sample
     print("PASS CRM automation: reminder, single auto-start and plan linkage")
 
 

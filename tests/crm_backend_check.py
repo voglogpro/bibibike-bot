@@ -106,7 +106,8 @@ async def run():
              (900002, "Старший скаут", "Скаут", city["id"]),
              (910001, "Скаут Один", "Скаут", city["id"]),
              (910002, "Водитель Один", "Водитель", city["id"]),
-             (910004, "Скаут Для Закрытия", "Скаут", city["id"])],
+             (910004, "Скаут Для Закрытия", "Скаут", city["id"]),
+             (920004, "Сотрудник Другого Города", "Скаут", other_city["id"])],
         )
         await db.execute(
             "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,"
@@ -135,6 +136,14 @@ async def run():
              active_start.isoformat(), city["id"], active_start.isoformat(), None),
         )
         active_shift_id = cur.lastrowid
+        other_start = datetime.now(bot._city_tz(other_city)) - timedelta(hours=3)
+        cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,is_active,created_at,"
+            "city_id,start_at,end_at,source) VALUES (?,?,?,?,?,1,?,?,?,?, 'bot')",
+            (920004, "Сотрудник Другого Города", "Скаут", other_start.strftime("%H:%M"), None,
+             other_start.isoformat(), other_city["id"], other_start.isoformat(), None),
+        )
+        other_active_shift_id = cur.lastrowid
         await db.commit()
 
     base_counts = await counts()
@@ -148,22 +157,39 @@ async def run():
     ))
     assert no_confirm.status == 400
     wrong_city = await bot.api_crm_shift_close(Request(
-        900001, body={"city_id": other_city["id"], "confirm": True},
+        900001, body={"city_id": other_city["id"], "confirm": True, "duration_hours": 10},
         match={"shift_id": str(active_shift_id)}, admin_token=network_token,
     ))
     assert wrong_city.status == 404
     with patch.object(bot, "safe_flush_report_update", new=AsyncMock(return_value=True)):
         closed = await bot.api_crm_shift_close(Request(
-            900002, body={"city_id": city["id"], "confirm": True},
+            900002, body={"city_id": city["id"], "confirm": True, "duration_hours": 10,
+                          "comment": "Комментарий руководителя"},
             match={"shift_id": str(active_shift_id)}, admin_token=scout_token,
         ))
     assert closed.status == 200 and payload(closed)["shift_id"] == active_shift_id
+    assert payload(closed)["duration_hours"] == 10
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         closed_row = await (await db.execute(
-            "SELECT is_active,end_at,comment FROM shifts WHERE id=?", (active_shift_id,)
+            "SELECT is_active,start_at,end_at,comment FROM shifts WHERE id=?", (active_shift_id,)
         )).fetchone()
-    assert closed_row[0] == 0 and closed_row[1]
-    assert closed_row[2] == "Закрыто администратором через CRM"
+    assert closed_row[0] == 0 and closed_row[2]
+    assert datetime.fromisoformat(closed_row[2]) - datetime.fromisoformat(closed_row[1]) == timedelta(hours=10)
+    assert closed_row[3] == "Комментарий руководителя"
+    # Сетевой администратор выбирает другой город и закрывает там 12-часовую смену.
+    with patch.object(bot, "safe_flush_report_update", new=AsyncMock(return_value=True)):
+        other_closed = await bot.api_crm_shift_close(Request(
+            900001, body={"city_id": other_city["id"], "confirm": True,
+                          "duration_hours": 12, "comment": "Проверено директором"},
+            match={"shift_id": str(other_active_shift_id)}, admin_token=network_token,
+        ))
+    assert other_closed.status == 200 and payload(other_closed)["duration_hours"] == 12
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        other_row = await (await db.execute(
+            "SELECT start_at,end_at,comment FROM shifts WHERE id=?", (other_active_shift_id,)
+        )).fetchone()
+    assert datetime.fromisoformat(other_row[1]) - datetime.fromisoformat(other_row[0]) == timedelta(hours=12)
+    assert other_row[2] == "Проверено директором"
 
     # Missing or expired CRM sessions must return 401, never crash with
     # context=None and turn an authentication error into HTTP 500.

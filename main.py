@@ -1823,13 +1823,14 @@ async def freeze_earned(sid):
             shift["city_id"], shift["user_id"], start_at.strftime("%Y-%m")
         )
 
-async def end_shift(uid, time, comment="", city_id=None, now=None):
+async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_override=None):
     shift = await get_active_shift(uid, city_id)
     if not shift:
         return None
     city = get_city(shift.get("city_id")) or get_default_city()
     scheduled = _shift_is_scheduled(shift, now)
-    end_at = _resolve_end_at(shift, time, city, now)
+    end_at = (end_at_override.astimezone(_city_tz(city)) if end_at_override is not None
+              else _resolve_end_at(shift, time, city, now))
     stored_end_time = shift.get("start_time") if scheduled else time
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -6339,6 +6340,15 @@ async def api_crm_shift_close(request):
         return web.json_response(
             {"error": "confirm", "message": "Подтвердите закрытие смены."}, status=400
         )
+    try:
+        duration_hours = int(body.get("duration_hours"))
+    except (TypeError, ValueError):
+        duration_hours = 0
+    if duration_hours not in {10, 12}:
+        return web.json_response(
+            {"error": "duration_hours", "message": "Выберите продолжительность смены: 10 или 12 часов."},
+            status=400,
+        )
     city, error = _crm_city(context, body=body)
     if error is not None:
         return error
@@ -6359,11 +6369,21 @@ async def api_crm_shift_close(request):
         return web.json_response({"ok": True, "already_closed": True, "shift_id": shift_id})
 
     before = dict(shift)
-    now = datetime.now(_city_tz(city))
-    comment = str(body.get("comment") or "Закрыто администратором через CRM").strip()[:2000]
+    tz = _city_tz(city)
+    start_at = _parse_datetime(shift.get("start_at"))
+    if not start_at and shift.get("start_time"):
+        start_at = _resolve_start_at(shift["start_time"], city)
+    if not start_at:
+        return web.json_response(
+            {"error": "start_at", "message": "У смены не найдено время начала."}, status=409
+        )
+    start_at = start_at.astimezone(tz)
+    target_end = start_at + timedelta(hours=duration_hours)
+    comment = str(body.get("comment") or "").strip()[:2000]
     try:
         closed_id = await end_shift(
-            shift["user_id"], now.strftime("%H:%M"), comment, city["id"], now=now
+            shift["user_id"], target_end.strftime("%H:%M"), comment, city["id"],
+            now=target_end, end_at_override=target_end,
         )
     except ValueError as exc:
         return web.json_response({"error": "end_time", "message": str(exc)}, status=400)
@@ -6392,8 +6412,9 @@ async def api_crm_shift_close(request):
     return web.json_response({
         "ok": True,
         "shift_id": shift_id,
-        "end_time": after.get("end_time") if after else now.strftime("%H:%M"),
-        "end_at": after.get("end_at") if after else now.isoformat(),
+        "duration_hours": duration_hours,
+        "end_time": after.get("end_time") if after else target_end.strftime("%H:%M"),
+        "end_at": after.get("end_at") if after else target_end.isoformat(),
         "report_updated": report_ok,
     })
 

@@ -112,6 +112,7 @@ STAVROPOL_SCOUTS_TOPIC_WORK  = 3
 
 # Водители и чарджеры находятся в одной форумной группе t.me/c/3944046511.
 # Тема 2 — действия водителей по словам; тема 4 — голые номера замен АКБ.
+# В теме 4 замену АКБ может записать сотрудник любой рабочей роли Ставрополя.
 STAVROPOL_TRANSPORT_GROUP_ID     = -1003944046511
 STAVROPOL_DRIVERS_TOPIC_WORK     = 2
 STAVROPOL_CHARGERS_TOPIC_BATTERY = 4
@@ -183,6 +184,15 @@ WORK_TOPIC_ROLES = {
     (STAVROPOL_TRANSPORT_GROUP_ID, STAVROPOL_CHARGERS_TOPIC_BATTERY): "Чарджер",
 }
 
+# Точечные исключения для общих рабочих тем. В Ставрополе АКБ меняют не
+# только чарджеры, поэтому голые номера из темы 4 пишутся в активную смену
+# скаута, водителя или чарджера. Другие темы и города остаются строгими.
+WORK_TOPIC_ALLOWED_ROLES = {
+    (STAVROPOL_TRANSPORT_GROUP_ID, STAVROPOL_CHARGERS_TOPIC_BATTERY): {
+        "Скаут", "Водитель", "Чарджер",
+    },
+}
+
 # === НОВОЕ: живое сообщение обновляется не чаще, чем раз в N секунд ===
 DEBOUNCE_SEC = 20
 
@@ -221,7 +231,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-04 · CRM: авторайоны, зарплата и аналитика декады"
+BUILD_VERSION = "2026-08-04 · CRM + АКБ Ставрополя для всех рабочих ролей"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -3691,10 +3701,15 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                 message.message_id,
             )
         return
-    expected_role = WORK_TOPIC_ROLES.get(
-        (chat_id, message.message_thread_id), city.get("role_group")
+    topic_key = (chat_id, message.message_thread_id)
+    expected_role = WORK_TOPIC_ROLES.get(topic_key, city.get("role_group"))
+    allowed_roles = WORK_TOPIC_ALLOWED_ROLES.get(topic_key)
+    shift_role = _norm_role(shift.get("role"))
+    role_allowed = (
+        shift_role in {_norm_role(role) for role in allowed_roles}
+        if allowed_roles else not expected_role or shift_role == _norm_role(expected_role)
     )
-    if expected_role and _norm_role(shift.get("role")) != _norm_role(expected_role):
+    if not role_allowed:
         logger.info(
             "ПРОПУЩЕНО: роль смены не совпадает с группой. uid=%s город=%s "
             "chat=%s тема=%s роль_смены=%s роль_группы=%s msg=%s",

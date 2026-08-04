@@ -236,13 +236,13 @@ async def check_stavropol_processing():
         bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7001, "переместил 5100 5101",
     )
     await bot.process_work_message(driver_message, transport)
-    wrong_battery = FakeMessage(
+    driver_battery = FakeMessage(
         driver_uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
         bot.STAVROPOL_CHARGERS_TOPIC_BATTERY, 7002, "5102 5103",
     )
-    await bot.process_work_message(wrong_battery, transport, npb=True)
+    await bot.process_work_message(driver_battery, transport, npb=True)
     driver_stats = await bot.get_stats(driver_shift)
-    assert driver_stats["move"] == 2 and driver_stats["battery"] == 0, driver_stats
+    assert driver_stats["move"] == 2 and driver_stats["battery"] == 2, driver_stats
 
     charger_uid = 930002
     charger_shift = await insert_shift(charger_uid, transport, "Чарджер")
@@ -253,6 +253,16 @@ async def check_stavropol_processing():
     await bot.process_work_message(charger_message, transport, npb=True)
     charger_stats = await bot.get_stats(charger_shift)
     assert charger_stats["battery"] == 2, charger_stats
+
+    scout_uid = 930003
+    scout_shift = await insert_shift(scout_uid, transport, "Скаут")
+    scout_message = FakeMessage(
+        scout_uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_CHARGERS_TOPIC_BATTERY, 7004, "5300 5301 5302",
+    )
+    await bot.process_work_message(scout_message, transport, npb=True)
+    scout_stats = await bot.get_stats(scout_shift)
+    assert scout_stats["battery"] == 3, scout_stats
 
 
 async def check_report_rendering():

@@ -60,7 +60,9 @@ class Multipart:
 
 
 class Request:
-    def __init__(self, uid, query=None, body=None, match=None, admin_token=None, files=None):
+    def __init__(self, uid, query=None, body=None, match=None, admin_token=None, files=None,
+                 method="GET"):
+        self.method = method
         self.query = query or {}
         self._body = body
         self.match_info = match or {}
@@ -533,6 +535,23 @@ async def run():
             "SELECT COUNT(*) FROM crm_shift_task_sync WHERE shift_id=?", (auto_shift_id,)
         )).fetchone())[0]
     assert auto_status == "accepted" and auto_events == 1 and sync_rows == 1
+
+    # Руководитель управляет ставкой/районами, шаблоны остаются в своём городе.
+    settings_response = await bot.api_crm_employee_settings(Request(
+        900001, body={"city_id": city["id"], "pay_type": "hourly", "pay_amount": 420,
+                      "primary_district": "ФМР", "backup_district": "Центр"},
+        match={"user_id": "910001"}, admin_token=network_token, method="PATCH",
+    ))
+    template_response = await bot.api_crm_task_templates(Request(
+        900001, body={"city_id": city["id"], "name": "Стянуть байки", "title": "Стянуть байки",
+                      "description": "По карте", "priority": "high", "district": "ФМР"},
+        admin_token=network_token, method="POST",
+    ))
+    template_list = await bot.api_crm_task_templates(Request(
+        900001, query={"city_id": str(city["id"])}, admin_token=network_token, method="GET",
+    ))
+    assert settings_response.status == 200 and payload(settings_response)["employee"]["pay_amount"] == 420
+    assert template_response.status == 201 and len(payload(template_list)["items"]) == 1
 
     # Фото: проверка типов и orphan cleanup без публичной раздачи.
     assert bot._crm_image_type(b"\xff\xd8\xffrest")[0] == "image/jpeg"

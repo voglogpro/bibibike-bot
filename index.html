@@ -640,16 +640,17 @@
         <div class="field">
           <label>Как считать оплату</label>
           <div class="seg" id="payTypeSeg">
-            <button data-pt="hourly">Почасовая</button>
-            <button data-pt="salary">Оклад</button>
-            <button data-pt="piece">Сделка</button>
+            <button data-pt="hourly" disabled>Почасовая</button>
+            <button data-pt="salary" disabled>Оклад</button>
+            <button data-pt="piece" disabled>Сделка</button>
           </div>
+          <div class="hint">Тип оплаты и ставку устанавливает руководитель в CRM.</div>
         </div>
 
         <div class="field">
           <label id="amtLabel">Ставка</label>
           <div class="amount">
-            <input id="amtInput" type="number" inputmode="decimal" min="0" step="10" value="350" />
+            <input id="amtInput" type="number" inputmode="decimal" min="0" step="10" value="350" readonly />
             <span class="suf" id="amtSuf">₽ / час</span>
           </div>
         </div>
@@ -1473,8 +1474,6 @@ $('saveSettings').onclick = async ()=>{
   const btn = $('saveSettings'); btn.disabled = true; btn.textContent='Сохраняю…';
   try{
     await api('/api/settings', { method:'POST', body: JSON.stringify({
-      pay_type: selPayType,
-      pay_amount: parseFloat($('amtInput').value)||0,
       name: $('nameInput').value.trim(),
       role: selRole,
       edit_mode: $('editModeToggle').checked,

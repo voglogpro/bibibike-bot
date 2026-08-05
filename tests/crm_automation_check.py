@@ -23,7 +23,7 @@ async def run():
     now = datetime.now(bot._city_tz(city)).replace(second=0, microsecond=0)
     start = now - timedelta(minutes=1)
     end = now + timedelta(hours=2)
-    reminder_start = now + timedelta(hours=1)
+    reminder_start = now + timedelta(minutes=20)
     reminder_end = reminder_start + timedelta(hours=10)
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         await db.execute(
@@ -53,6 +53,16 @@ async def run():
         await bot.process_planned_shifts_once()
         await bot.process_planned_shifts_once()
 
+    class UpdateRequest:
+        match_info = {"plan_id": str(auto_plan_id)}
+
+        async def json(self):
+            return {"end_time": (now + timedelta(hours=3)).strftime("%H:%M")}
+
+    with patch.object(bot, "_auth_user", AsyncMock(return_value={"id": 990001})):
+        extension = await bot.api_employee_planned_shift_update(UpdateRequest())
+    assert extension.status == 200
+
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         shift_count = (await (await db.execute(
             "SELECT COUNT(*) FROM shifts WHERE user_id=990001 AND source='crm_plan'"
@@ -68,13 +78,17 @@ async def run():
             "SELECT COUNT(*) FROM crm_notification_outbox WHERE kind='shift_reminder' AND entity_id=?",
             (reminder_plan_id,),
         )).fetchone())[0]
+        extended_deadline = (await (await db.execute(
+            "SELECT auto_close_at FROM shifts WHERE id=?", (plan[0],)
+        )).fetchone())[0]
     assert shift_count == 1 and plan[0] and plan[1]
     assert reminder[0] and reminder_rows == 1
+    assert datetime.fromisoformat(extended_deadline).astimezone(bot._city_tz(city)).strftime("%H:%M") == (now + timedelta(hours=3)).strftime("%H:%M")
     sample = bot._crm_notification_text("shift_reminder", {
         "work_date": reminder_start.date().isoformat(), "start_time": "09:00",
         "end_time": "19:00", "district": "ФМР", "description": "Стянуть байки по карте",
     })
-    assert "⏰ НАПОМИНАНИЕ" in sample and "📍 Район: ФМР" in sample
+    assert "30 МИНУТ" in sample and "📍 Район: ФМР" in sample
     assert "🚀 В 09:00" in sample and "🏁 В 19:00" in sample
     print("PASS CRM automation: reminder, single auto-start and plan linkage")
 

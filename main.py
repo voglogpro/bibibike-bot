@@ -231,7 +231,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-04 · CRM + АКБ Ставрополя для всех рабочих ролей"
+BUILD_VERSION = "2026-08-05 · декадный график CRM и гибкие плановые смены"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1898,6 +1898,19 @@ def compute_earned(pay_type, amount, worked_min, battery_count):
     if pay_type == "piece":               # сделка — за каждую замену АКБ
         return round(amount * (battery_count or 0), 2)
     return round(amount * (worked_min or 0) / 60.0, 2)   # почасовая
+
+
+def _round_payroll_minutes(worked_min):
+    """Округляет длительность одной смены до ближайшего полного часа.
+
+    Точная длительность остаётся в смене и истории. Округление применяется
+    только в расчёте зарплаты: 12:20 -> 12 часов, 12:40 -> 13 часов.
+    """
+    try:
+        minutes = max(0, int(worked_min or 0))
+    except (TypeError, ValueError):
+        minutes = 0
+    return ((minutes + 30) // 60) * 60
 
 async def freeze_earned(sid):
     """Фиксируем сумму на момент закрытия смены — потом ставку можно менять, история не перепишется."""
@@ -4488,6 +4501,48 @@ async def cors_mw(request, handler):
 # [10-WEB-EMPLOYEE] API ПРОФИЛЯ, НАСТРОЕК, СМЕН И ИСТОРИИ СОТРУДНИКА
 # ============================================================================
 
+
+async def _employee_planned_shift(uid, city, active_shift=None):
+    """Ближайшая плановая смена сотрудника или план его активной смены."""
+    if not city:
+        return None
+    now = datetime.now(_city_tz(city))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if active_shift:
+            row = await (await db.execute(
+                "SELECT * FROM crm_planned_shifts WHERE city_id=? AND user_id=? "
+                "AND actual_shift_id=? AND status='scheduled' ORDER BY id DESC LIMIT 1",
+                (city["id"], uid, active_shift["id"]),
+            )).fetchone()
+            rows = [row] if row else []
+        else:
+            rows = await (await db.execute(
+                "SELECT * FROM crm_planned_shifts WHERE city_id=? AND user_id=? "
+                "AND status='scheduled' AND auto_enabled=1 AND work_date>=? "
+                "ORDER BY work_date,start_time,id LIMIT 20",
+                (city["id"], uid, now.date().isoformat()),
+            )).fetchall()
+    for raw in rows:
+        if not raw:
+            continue
+        plan = dict(raw)
+        start_at, end_at = _planned_shift_times(plan, city)
+        if not start_at or not end_at or (not active_shift and end_at <= now):
+            continue
+        return {
+            "plan_id": plan["id"], "work_date": plan["work_date"],
+            "start_time": plan["start_time"], "end_time": plan["end_time"],
+            "starts_at": start_at.isoformat(), "ends_at": end_at.isoformat(),
+            "district": plan.get("district") or "",
+            "work_kind": plan.get("work_kind") or "regular",
+            "actual_shift_id": plan.get("actual_shift_id"),
+            "can_edit_start": not plan.get("actual_shift_id") and now < start_at,
+            "can_edit_end": now < end_at,
+        }
+    return None
+
+
 async def api_state(request):
     tg_user = await _auth_user(request)
     if not tg_user:
@@ -4556,6 +4611,8 @@ async def api_state(request):
             "city": {"id": city["id"], "name": city["name"]},
         }
 
+    planned_shift = await _employee_planned_shift(uid, city, shift)
+
     last = await get_last_shift(uid, selected_city_id)
     last_data = None
     if last:
@@ -4591,6 +4648,8 @@ async def api_state(request):
                  "timezone_offset": city["timezone_offset"]},
         "active": bool(shift),
         "shift": shift_data,
+        "planned_shift": planned_shift,
+        "server_now": datetime.now(_city_tz(city)).isoformat(),
         "last": last_data,
         "level": {"level": lvl, "xp": xp, "need": need, "title": title, "tier": tier},
         "total_earned": total_earned,
@@ -4706,6 +4765,142 @@ def _valid_time(t):
     if int(h) > 23 or int(m) > 59:
         return None
     return f"{int(h)}:{m}"   # нормализуем как в чате: 9:20, 18:05
+
+async def api_employee_planned_shift_update(request):
+    """Даёт сотруднику перенести начало будущей смены или продлить её конец."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    try:
+        plan_id = int(request.match_info["plan_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "plan_id"}, status=400)
+    requested_start = (_valid_time(str(body.get("start_time") or "").strip())
+                       if "start_time" in body else None)
+    requested_end = (_valid_time(str(body.get("end_time") or "").strip())
+                     if "end_time" in body else None)
+    if (("start_time" in body and not requested_start)
+            or ("end_time" in body and not requested_end)):
+        return web.json_response(
+            {"error": "time", "message": "Время должно быть в формате ЧЧ:ММ."}, status=400
+        )
+    if requested_start is None and requested_end is None:
+        return web.json_response({"error": "fields", "message": "Укажите новое время."}, status=400)
+
+    uid = int(tg_user["id"])
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA busy_timeout=15000")
+        await db.execute("BEGIN IMMEDIATE")
+        current_row = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE id=? AND user_id=? AND status='scheduled' "
+            "AND auto_enabled=1",
+            (plan_id, uid),
+        )).fetchone()
+        if not current_row:
+            await db.rollback()
+            return web.json_response({"error": "not_found"}, status=404)
+        current = dict(current_row)
+        city = get_city(current["city_id"])
+        if not city:
+            await db.rollback()
+            return web.json_response({"error": "city"}, status=409)
+        old_start_at, old_end_at = _planned_shift_times(current, city)
+        if not old_start_at or not old_end_at:
+            await db.rollback()
+            return web.json_response({"error": "plan_time"}, status=409)
+        now = datetime.now(_city_tz(city))
+        if requested_start is not None and (current.get("actual_shift_id") or now >= old_start_at):
+            await db.rollback()
+            return web.json_response(
+                {"error": "already_started", "message": "После начала смены время начала менять нельзя."},
+                status=409,
+            )
+
+        start_time = requested_start or current["start_time"]
+        start_probe = dict(current)
+        start_probe["start_time"] = start_time
+        new_start_at, _ = _planned_shift_times(start_probe, city)
+        if requested_start is not None and new_start_at <= now:
+            await db.rollback()
+            return web.json_response(
+                {"error": "start_time", "message": "Новое начало должно быть позже текущего времени."},
+                status=400,
+            )
+        if requested_end is None and requested_start is not None:
+            new_end_at = new_start_at + (old_end_at - old_start_at)
+            end_time = new_end_at.strftime("%H:%M")
+        else:
+            end_time = requested_end or current["end_time"]
+            time_probe = dict(current)
+            time_probe["start_time"] = start_time
+            time_probe["end_time"] = end_time
+            new_start_at, new_end_at = _planned_shift_times(time_probe, city)
+        duration = new_end_at - new_start_at
+        if duration <= timedelta(0) or duration > timedelta(hours=18):
+            await db.rollback()
+            return web.json_response(
+                {"error": "duration", "message": "Продолжительность смены должна быть не больше 18 часов."},
+                status=400,
+            )
+        if new_end_at <= now:
+            await db.rollback()
+            return web.json_response(
+                {"error": "end_time", "message": "Новое окончание должно быть позже текущего времени."},
+                status=400,
+            )
+        if current.get("actual_shift_id") and new_end_at <= old_end_at:
+            await db.rollback()
+            return web.json_response(
+                {"error": "extension", "message": "Во время смены окончание можно только продлить."},
+                status=409,
+            )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        reminder_sql = (",reminder_sent_at=NULL"
+                        if requested_start is not None and not current.get("reminder_sent_at") else "")
+        await db.execute(
+            "UPDATE crm_planned_shifts SET start_time=?,end_time=?,updated_by=?,updated_at=?" +
+            reminder_sql + " WHERE id=?",
+            (start_time, end_time, uid, now_iso, plan_id),
+        )
+        if current.get("actual_shift_id"):
+            cursor = await db.execute(
+                "UPDATE shifts SET auto_close_at=? WHERE id=? AND user_id=? AND is_active=1",
+                (new_end_at.isoformat(), current["actual_shift_id"], uid),
+            )
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return web.json_response(
+                    {"error": "not_active", "message": "Эта смена уже закрыта."}, status=409
+                )
+        updated = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,)
+        )).fetchone()
+        await db.execute(
+            "INSERT INTO admin_audit_log (admin_user_id,city_id,operation,entity_type,entity_id,"
+            "before_json,after_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (uid, current["city_id"], "planned_shift.employee_time_update", "planned_shift",
+             str(plan_id), json.dumps(current, ensure_ascii=False, default=str),
+             json.dumps(dict(updated), ensure_ascii=False, default=str), now_iso),
+        )
+        await db.commit()
+    updated_plan = dict(updated)
+    payload = {
+        "plan_id": updated_plan["id"], "work_date": updated_plan["work_date"],
+        "start_time": updated_plan["start_time"], "end_time": updated_plan["end_time"],
+        "starts_at": new_start_at.isoformat(), "ends_at": new_end_at.isoformat(),
+        "district": updated_plan.get("district") or "",
+        "work_kind": updated_plan.get("work_kind") or "regular",
+        "actual_shift_id": updated_plan.get("actual_shift_id"),
+        "can_edit_start": not updated_plan.get("actual_shift_id") and now < new_start_at,
+        "can_edit_end": now < new_end_at,
+    }
+    return web.json_response({"ok": True, "planned_shift": payload})
+
 
 async def api_shift_start(request):
     tg_user = await _auth_user(request)
@@ -6664,17 +6859,20 @@ async def api_crm_payroll(request):
         if pay_amount is None:
             pay_amount = employee["pay_amount"]
         battery = payload["actions"].get("battery", 0)
-        if shift.get("is_active"):
-            earned = compute_earned(pay_type, pay_amount, payload["worked_minutes"], battery)
-        else:
-            earned = float(shift.get("earned") or 0)
+        actual_worked_minutes = payload["worked_minutes"]
+        rounded_worked_minutes = _round_payroll_minutes(actual_worked_minutes)
+        # В зарплатной ведомости каждая смена считается полными часами.
+        # Фактические минуты остаются доступны отдельно и в истории смен.
+        earned = compute_earned(pay_type, pay_amount, rounded_worked_minutes, battery)
         employee["shifts_count"] += 1
-        employee["worked_minutes"] += payload["worked_minutes"]
+        employee["worked_minutes"] += rounded_worked_minutes
         employee["earned"] += earned
         employee["shifts"].append({
             "shift_id": shift["id"], "date": payload["date"],
             "start_time": payload["start_time"], "end_time": payload["end_time"],
-            "worked_minutes": payload["worked_minutes"], "district": payload["district"],
+            "worked_minutes": rounded_worked_minutes,
+            "actual_worked_minutes": actual_worked_minutes,
+            "district": payload["district"],
             "status": payload["status"], "earned": round(earned, 2),
         })
     result = list(employees.values())
@@ -7501,13 +7699,21 @@ async def api_crm_planned_shift_update(request):
         )
         if target_error:
             await db.rollback(); return web.json_response({"error": "target", "message": target_error}, status=400)
+        district = str(merged.get("district") or "").strip()[:200]
+        if user_id is not None and not district:
+            district = await choose_employee_district(db, user_id)
         now_iso = datetime.now(timezone.utc).isoformat()
+        reset_reminder = (
+            not current["actual_shift_id"] and
+            (work_date.isoformat() != current["work_date"] or start != current["start_time"])
+        )
         await db.execute(
             "UPDATE crm_planned_shifts SET work_date=?,start_time=?,end_time=?,user_id=?,role=?,"
-            "district=?,note=?,work_kind=?,status=?,updated_by=?,updated_at=? WHERE id=?",
-            (work_date.isoformat(), start, end, user_id, role, str(merged.get("district") or "")[:200],
+            "district=?,note=?,work_kind=?,status=?,updated_by=?,updated_at=?,"
+            "reminder_sent_at=CASE WHEN ? THEN NULL ELSE reminder_sent_at END WHERE id=?",
+            (work_date.isoformat(), start, end, user_id, role, district,
              str(merged.get("note") or "")[:2000], work_kind, merged["status"],
-             context["telegram_user"]["id"], now_iso, plan_id),
+             context["telegram_user"]["id"], now_iso, 1 if reset_reminder else 0, plan_id),
         )
         updated = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
         await _crm_audit(db, context, "planned_shift.update", "planned_shift", plan_id,
@@ -8208,7 +8414,7 @@ def _crm_notification_text(kind, payload):
                       "✅ Если вы откроете смену самостоятельно, вторая смена не появится."])
         return "\n".join(lines)
     if kind == "shift_reminder":
-        lines = ["⏰ НАПОМИНАНИЕ: ЗАВТРА СМЕНА", "",
+        lines = ["⏰ ДО НАЧАЛА СМЕНЫ 30 МИНУТ", "",
                  f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
                  f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
         if district: lines.append(f"📍 Район: {district}")
@@ -8243,7 +8449,7 @@ def _crm_notification_text(kind, payload):
     if dates: lines.extend(["", "📌 Ваши рабочие дни:", *[f"• {_crm_human_date(item)}" for item in dates]])
     if district: lines.extend(["", f"📍 Район: {district}"])
     if details: lines.extend(["", "📝 Комментарий руководителя:", details])
-    lines.extend(["", "⏰ Накануне каждой смены в 20:00 придёт отдельное напоминание.",
+    lines.extend(["", "⏰ За 30 минут до каждой смены придёт отдельное напоминание.",
                   "🤖 Каждая смена откроется и закроется автоматически."])
     return "\n".join(lines)
 
@@ -8432,7 +8638,7 @@ async def process_planned_shifts_once():
         if not start_at or not end_at:
             continue
         now = now_utc.astimezone(_city_tz(city))
-        reminder_at = (start_at - timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
+        reminder_at = start_at - timedelta(minutes=30)
         if not plan.get("reminder_sent_at") and reminder_at <= now < start_at:
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("BEGIN IMMEDIATE")
@@ -8900,6 +9106,9 @@ async def start_api_server():
         )
         app.router.add_get("/api/state", api_state)
         app.router.add_post("/api/settings", api_settings)
+        app.router.add_patch(
+            "/api/planned-shifts/{plan_id}", api_employee_planned_shift_update
+        )
         app.router.add_post("/api/shift/start", api_shift_start)
         app.router.add_post("/api/shift/stop", api_shift_stop)
         app.router.add_post("/api/shift/lunch", api_shift_lunch)

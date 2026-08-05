@@ -367,6 +367,7 @@
   .center{color:#E4EEE6}.center .sm{color:#8B9890}
   @media(min-width:600px){body{padding-top:20px}.panel{padding:18px}.tabbar{bottom:0}}
   @media(max-width:360px){body{padding-left:7px;padding-right:7px}.panel{padding:14px}.earn .val{font-size:36px}.tile{padding:12px}}
+  .planned-shift-card{background:#111B15;border:1px solid rgba(49,216,67,.28);border-radius:16px;padding:14px;margin-bottom:12px}.planned-shift-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.planned-shift-kicker{color:var(--green);font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.planned-shift-title{font-size:15px;font-weight:900;margin-top:4px}.planned-shift-meta{color:var(--muted);font-size:11px;line-height:1.5;margin-top:5px}.planned-shift-timer{margin:12px 0 0;padding:10px;border-radius:11px;background:#0B2715;color:#8EF09B;text-align:center;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}.planned-shift-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.planned-shift-buttons button{border:1px solid var(--line);border-radius:11px;background:#18231C;color:var(--ink);min-height:42px;padding:9px;font-size:11px;font-weight:850}.planned-shift-editor{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.planned-shift-editor .field{margin-bottom:9px}.planned-shift-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.planned-shift-editor-actions button{min-height:43px;border-radius:11px;border:1px solid var(--line);font-weight:850}.planned-shift-editor-actions .cancel{background:#18231C;color:var(--ink)}.planned-shift-editor-actions .save-plan{background:var(--green);color:#07120A;border-color:var(--green)}
 </style>
 </head>
 <body>
@@ -433,6 +434,25 @@
           <span class="dot"></span>
           <span class="st-lbl">Смена</span>
           <span class="st-val" id="statusVal">не активна</span>
+        </div>
+
+        <div class="planned-shift-card hidden" id="plannedShiftCard">
+          <div class="planned-shift-top">
+            <div>
+              <div class="planned-shift-kicker" id="plannedShiftKicker">Плановая смена</div>
+              <div class="planned-shift-title" id="plannedShiftTitle">—</div>
+              <div class="planned-shift-meta" id="plannedShiftMeta">—</div>
+            </div>
+          </div>
+          <div class="planned-shift-timer" id="plannedShiftTimer">—</div>
+          <div class="planned-shift-buttons" id="plannedShiftButtons">
+            <button id="editPlannedStart">Изменить начало</button>
+            <button id="editPlannedEnd">Продлить смену</button>
+          </div>
+          <div class="planned-shift-editor hidden" id="plannedShiftEditor">
+            <div class="field"><label id="plannedShiftEditLabel">Новое время</label><input class="tinput time" id="plannedShiftEditTime" inputmode="numeric" placeholder="09:20" maxlength="5"></div>
+            <div class="planned-shift-editor-actions"><button class="cancel" id="plannedShiftEditCancel">Отмена</button><button class="save-plan" id="plannedShiftEditSave">Сохранить</button></div>
+          </div>
         </div>
 
         <!-- Активная смена -->
@@ -839,6 +859,7 @@ let adminHistoryOffset = 0;
 let stateRevision = 0;
 let stateMutationDepth = 0;
 let lunchRequestPending = false;
+let plannedEditMode = '';
 
 /* ---------- утилиты ---------- */
 const $ = id => document.getElementById(id);
@@ -870,8 +891,9 @@ function nowHM(offset=tzOffset()){
   return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 function serverNowMs(){
-  if(!(STATE && STATE.shift && STATE.shift.server_now)) return Date.now();
-  return Date.parse(STATE.shift.server_now) + (Date.now() - stateLoadedAt);
+  const value=STATE && ((STATE.shift&&STATE.shift.server_now)||STATE.server_now);
+  if(!value) return Date.now();
+  return Date.parse(value) + (Date.now() - stateLoadedAt);
 }
 function elapsedMin(startAt){
   if(!startAt) return 0;
@@ -883,6 +905,39 @@ function scheduledNow(){
 function hm(mins){
   const h = Math.floor(mins/60), m = Math.floor(mins%60);
   return h + ':' + String(m).padStart(2,'0');
+}
+function countdownText(milliseconds){
+  const total=Math.max(0,Math.floor(milliseconds/1000)),h=Math.floor(total/3600),m=Math.floor(total%3600/60),s=total%60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function plannedDateLabel(value){
+  if(!value)return '—';
+  const date=new Date(`${value}T12:00:00`);
+  return new Intl.DateTimeFormat('ru-RU',{weekday:'short',day:'numeric',month:'long'}).format(date);
+}
+function paintPlannedCountdown(){
+  const plan=STATE&&STATE.planned_shift,el=$('plannedShiftTimer');if(!plan||!el)return;
+  const active=!!(STATE.active&&plan.actual_shift_id),target=Date.parse(active?plan.ends_at:plan.starts_at),left=target-serverNowMs();
+  if(active)el.textContent=left>0?`До автоматического закрытия: ${countdownText(left)}`:'Смена закрывается автоматически…';
+  else el.textContent=left>0?`До автоматического начала: ${countdownText(left)}`:'Смена открывается автоматически…';
+}
+function renderPlannedShift(){
+  const plan=STATE&&STATE.planned_shift,card=$('plannedShiftCard');if(!card)return;
+  if(!plan){card.classList.add('hidden');$('plannedShiftEditor').classList.add('hidden');plannedEditMode='';return}
+  card.classList.remove('hidden');const active=!!(STATE.active&&plan.actual_shift_id),extra=plan.work_kind==='extra';
+  $('plannedShiftKicker').textContent=active?'Автоматическая смена активна':extra?'Запланирована подработка':'Запланирована смена';
+  $('plannedShiftTitle').textContent=`${plannedDateLabel(plan.work_date)} · ${plan.start_time}–${plan.end_time}`;
+  $('plannedShiftMeta').textContent=(plan.district?`Район: ${plan.district}`:'Район пока не выбран')+' · бот откроет и закроет смену сам';
+  $('editPlannedStart').classList.toggle('hidden',!plan.can_edit_start);
+  $('editPlannedEnd').classList.toggle('hidden',!plan.can_edit_end);
+  $('plannedShiftButtons').classList.toggle('hidden',!plan.can_edit_start&&!plan.can_edit_end);
+  paintPlannedCountdown();
+}
+function openPlannedTimeEditor(mode){
+  const plan=STATE&&STATE.planned_shift;if(!plan)return;plannedEditMode=mode;
+  $('plannedShiftEditLabel').textContent=mode==='start'?'Новое время начала':'Новое время окончания';
+  $('plannedShiftEditTime').value=mode==='start'?plan.start_time:plan.end_time;
+  $('plannedShiftEditor').classList.remove('hidden');
 }
 function maskTime(inp){
   inp.addEventListener('input', ()=>{
@@ -973,8 +1028,8 @@ function paintEarnSub(){
 }
 function startTick(){
   clearInterval(tick);
-  if(STATE && STATE.active){
-    tick = setInterval(paintMoney, 1000);
+  if(STATE && (STATE.active||STATE.planned_shift)){
+    tick = setInterval(()=>{paintMoney();paintPlannedCountdown()}, 1000);
   }
 }
 
@@ -992,6 +1047,7 @@ function render(){
   $('statusVal').textContent = on
     ? (scheduledNow() ? 'начнётся в '+STATE.shift.start_time : 'активна')
     : 'не активна';
+  renderPlannedShift();
 
   if(on){
     $('activeBlock').classList.remove('hidden');
@@ -1155,7 +1211,7 @@ $('btnSettingsOpen').onclick=()=>{
 document.querySelectorAll('[data-hide]').forEach(x=>{
   x.onclick = ()=> $(x.dataset.hide).classList.add('hidden');
 });
-maskTime($('startTime')); maskTime($('stopTime'));
+maskTime($('startTime')); maskTime($('stopTime')); maskTime($('plannedShiftEditTime'));
 
 /* авто-закрытие: выбранные часы (8/10/12) в форме старта */
 let selAutoHours = 10;
@@ -1191,6 +1247,22 @@ $('btnStopForm').onclick = ()=>{
   $('stopComment').value = '';
   $('stopForm').classList.remove('hidden');
   /* Прокрутку не делаем — см. форму начала смены. */
+};
+$('editPlannedStart').onclick=()=>openPlannedTimeEditor('start');
+$('editPlannedEnd').onclick=()=>openPlannedTimeEditor('end');
+$('plannedShiftEditCancel').onclick=()=>{$('plannedShiftEditor').classList.add('hidden');plannedEditMode=''};
+$('plannedShiftEditSave').onclick=async()=>{
+  const plan=STATE&&STATE.planned_shift,time=$('plannedShiftEditTime').value.trim();
+  if(!plan||!plannedEditMode)return;
+  if(!/^\d{1,2}:\d{2}$/.test(time))return toast('Введите время в формате ЧЧ:ММ');
+  const button=$('plannedShiftEditSave');button.disabled=true;button.textContent='Сохраняю…';
+  try{
+    const field=plannedEditMode==='start'?'start_time':'end_time';
+    await api(`/api/planned-shifts/${plan.plan_id}`,{method:'PATCH',body:JSON.stringify({[field]:time})});
+    $('plannedShiftEditor').classList.add('hidden');plannedEditMode='';
+    toast(field==='start_time'?'Начало перенесено, окончание сдвинуто на то же время':'Автоматическое закрытие перенесено');
+    await load();
+  }catch(e){toast(e.message||'Не удалось изменить время')}finally{button.disabled=false;button.textContent='Сохранить'}
 };
 
 $('btnLunch').onclick = async ()=>{

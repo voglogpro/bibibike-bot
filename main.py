@@ -231,7 +231,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-05 · декадный график CRM и гибкие плановые смены"
+BUILD_VERSION = "2026-08-06 · личный график и ролевой календарь CRM"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -677,6 +677,7 @@ async def init_db():
                 telegram_username TEXT,
                 primary_district TEXT,
                 backup_district TEXT,
+                calendar_visible INTEGER NOT NULL DEFAULT 1,
                 edit_mode INTEGER DEFAULT 0
             )
         """)
@@ -1074,6 +1075,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN telegram_username TEXT",
             "ALTER TABLE users ADD COLUMN primary_district TEXT",
             "ALTER TABLE users ADD COLUMN backup_district TEXT",
+            "ALTER TABLE users ADD COLUMN calendar_visible INTEGER NOT NULL DEFAULT 1",
         ]:
             try:
                 await db.execute(ddl); await db.commit()
@@ -4543,6 +4545,72 @@ async def _employee_planned_shift(uid, city, active_shift=None):
     return None
 
 
+async def api_my_schedule(request):
+    """Personal monthly schedule; the employee id always comes from Telegram auth."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    uid = int(tg_user["id"])
+    user = await get_user(uid)
+    city = get_city((user or {}).get("city_id")) or get_default_city()
+    if not city:
+        return web.json_response({"error": "cities", "message": "Города не настроены."}, status=500)
+    now = datetime.now(_city_tz(city))
+    month_text = str(request.query.get("month") or now.strftime("%Y-%m")).strip()
+    try:
+        month_date = datetime.strptime(month_text, "%Y-%m").date().replace(day=1)
+    except ValueError:
+        return web.json_response(
+            {"error": "month", "message": "Месяц должен быть в формате ГГГГ-ММ."}, status=400
+        )
+    last_day = calendar.monthrange(month_date.year, month_date.month)[1]
+    date_from = month_date.isoformat()
+    date_to = month_date.replace(day=last_day).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT p.*,s.is_active AS actual_is_active,s.start_time AS actual_start_time,"
+            "s.end_time AS actual_end_time,s.start_at AS actual_start_at,s.end_at AS actual_end_at "
+            "FROM crm_planned_shifts p LEFT JOIN shifts s ON s.id=p.actual_shift_id "
+            "WHERE p.city_id=? AND p.user_id=? AND p.work_date>=? AND p.work_date<=? "
+            "ORDER BY p.work_date,p.start_time,p.id",
+            (city["id"], uid, date_from, date_to),
+        )).fetchall()
+    items = []
+    for raw in rows:
+        plan = dict(raw)
+        starts_at, ends_at = _planned_shift_times(plan, city)
+        if plan.get("status") == "cancelled":
+            status = "cancelled"
+        elif plan.get("actual_shift_id") and plan.get("actual_is_active"):
+            status = "active"
+        elif plan.get("actual_shift_id"):
+            status = "completed"
+        elif ends_at and ends_at < now:
+            status = "missed"
+        else:
+            status = "upcoming"
+        items.append({
+            "plan_id": int(plan["id"]), "work_date": plan["work_date"],
+            "start_time": plan["start_time"], "end_time": plan["end_time"],
+            "starts_at": starts_at.isoformat() if starts_at else None,
+            "ends_at": ends_at.isoformat() if ends_at else None,
+            "ends_next_day": bool(plan["end_time"] <= plan["start_time"]),
+            "district": plan.get("district") or "",
+            "work_kind": plan.get("work_kind") or "regular",
+            "status": status, "auto_enabled": bool(plan.get("auto_enabled")),
+            "actual_shift_id": plan.get("actual_shift_id"),
+            "actual_start_time": plan.get("actual_start_time"),
+            "actual_end_time": plan.get("actual_end_time"),
+            "updated_at": plan.get("updated_at"),
+        })
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "month": month_text, "range": {"from": date_from, "to": date_to},
+        "generated_at": now.isoformat(), "items": items,
+    })
+
+
 async def api_state(request):
     tg_user = await _auth_user(request)
     if not tg_user:
@@ -6641,6 +6709,8 @@ async def api_crm_employees(request):
             "on_lunch": False, "last_shift_at": None,
             "pay_type": "hourly", "pay_amount": 0,
             "primary_district": "", "backup_district": "",
+            "calendar_visible": True,
+            "profile_exists": False,
         })
         payload = _crm_shift_item(shift, city, stats_by_shift.get(shift["id"]))
         item["shifts"] += 1; item["worked_minutes"] += payload["worked_minutes"]
@@ -6655,7 +6725,7 @@ async def api_crm_employees(request):
         db.row_factory = aiosqlite.Row
         users = await (await db.execute(
             "SELECT user_id, full_name, role, pay_type, pay_amount, primary_district, "
-            "backup_district FROM users WHERE city_id = ?", (city["id"],)
+            "backup_district, calendar_visible FROM users WHERE city_id = ?", (city["id"],)
         )).fetchall()
     for user in users:
         if role and (user["role"] or "").casefold() != role.casefold(): continue
@@ -6667,6 +6737,8 @@ async def api_crm_employees(request):
             "pay_type": user["pay_type"] or "hourly", "pay_amount": user["pay_amount"] or 0,
             "primary_district": user["primary_district"] or "",
             "backup_district": user["backup_district"] or "",
+            "calendar_visible": bool(user["calendar_visible"]),
+            "profile_exists": True,
         })
         item["name"] = user["full_name"] or item["name"]
         item["role"] = user["role"] or item["role"]
@@ -6674,6 +6746,8 @@ async def api_crm_employees(request):
         item["pay_amount"] = user["pay_amount"] or 0
         item["primary_district"] = user["primary_district"] or ""
         item["backup_district"] = user["backup_district"] or ""
+        item["calendar_visible"] = bool(user["calendar_visible"])
+        item["profile_exists"] = True
     search = (request.query.get("search") or "").strip().casefold()
     status = (request.query.get("status") or "").strip()
     result = []
@@ -6781,6 +6855,110 @@ async def api_crm_employee_settings(request):
         "user_id": user_id, "pay_type": pay_type, "pay_amount": amount,
         "primary_district": primary, "backup_district": backup,
     }})
+
+
+def _crm_calendar_employee_is_eligible(full_name, role):
+    name = " ".join(str(full_name or "").split())
+    if not name or not str(role or "").strip() or re.match(r"^сотрудник(?:\s|#|$)", name, re.I):
+        return False
+    return len(name.split()) >= 2 or name.count(".") >= 2
+
+
+async def api_crm_calendar_roster_update(request):
+    """Atomically update the visible schedule roster for one city and role scope."""
+    context, error = await _crm_admin(request, write=True)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error is not None:
+        return error
+    requested_role = str(body.get("role") or "").strip()
+    role, error = _crm_scoped_role(context, requested_role or None)
+    if error is not None:
+        return error
+    if not role:
+        return web.json_response(
+            {"error": "role", "message": "Выберите группу сотрудников."}, status=400
+        )
+    raw_ids = body.get("visible_user_ids")
+    if not isinstance(raw_ids, list):
+        return web.json_response(
+            {"error": "visible_user_ids", "message": "Передайте состав таблицы сотрудников."},
+            status=400,
+        )
+    try:
+        visible_ids = set(int(item) for item in raw_ids)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "visible_user_ids"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        sql = "SELECT * FROM users WHERE city_id=? AND LOWER(role)=LOWER(?)"
+        params = [city["id"], role]
+        rows = await (await db.execute(sql, params)).fetchall()
+        eligible = {
+            int(row["user_id"]): row for row in rows
+            if _crm_calendar_employee_is_eligible(row["full_name"], row["role"])
+        }
+        unknown = sorted(visible_ids - set(eligible))
+        if unknown:
+            await db.rollback()
+            return web.json_response(
+                {"error": "employees", "message": "В составе есть недоступные сотрудники.",
+                 "user_ids": unknown}, status=400,
+            )
+        hidden_ids = [
+            user_id for user_id, row in eligible.items()
+            if bool(row["calendar_visible"]) and user_id not in visible_ids
+        ]
+        conflicts = []
+        if hidden_ids:
+            placeholders = ",".join("?" for _ in hidden_ids)
+            today = datetime.now(_city_tz(city)).date().isoformat()
+            plan_rows = await (await db.execute(
+                f"SELECT user_id,work_date FROM crm_planned_shifts WHERE city_id=? "
+                f"AND status='scheduled' AND work_date>=? AND user_id IN ({placeholders}) "
+                "ORDER BY work_date",
+                [city["id"], today, *hidden_ids],
+            )).fetchall()
+            by_user = {}
+            for plan in plan_rows:
+                by_user.setdefault(int(plan["user_id"]), []).append(plan["work_date"])
+            conflicts = [
+                {"user_id": user_id, "name": eligible[user_id]["full_name"],
+                 "dates": dates[:10], "total": len(dates)}
+                for user_id, dates in by_user.items()
+            ]
+        if conflicts:
+            await db.rollback()
+            names = ", ".join(item["name"] for item in conflicts[:3])
+            return web.json_response({
+                "error": "scheduled_shifts",
+                "message": f"Нельзя скрыть: есть будущие смены у {names}. Сначала отмените их.",
+                "conflicts": conflicts,
+            }, status=409)
+        changed = []
+        for user_id, current in eligible.items():
+            visible = user_id in visible_ids
+            if bool(current["calendar_visible"]) == visible:
+                continue
+            await db.execute(
+                "UPDATE users SET calendar_visible=? WHERE user_id=? AND city_id=?",
+                (1 if visible else 0, user_id, city["id"]),
+            )
+            after = dict(current); after["calendar_visible"] = 1 if visible else 0
+            await _crm_audit(
+                db, context, "employee.calendar_visibility", "user", user_id, city["id"],
+                before=dict(current), after=after,
+            )
+            changed.append({"user_id": user_id, "calendar_visible": visible})
+        await db.commit()
+    return web.json_response({
+        "ok": True, "role": role, "visible_user_ids": sorted(visible_ids), "changed": changed,
+    })
 
 
 async def api_crm_payroll(request):
@@ -7398,27 +7576,24 @@ async def api_crm_calendar(request):
     if error is not None: return error
     date_range, error = _crm_range(request, city, default_days=31)
     if error is not None: return error
+    role_scope, error = _crm_scoped_role(context, request.query.get("role"))
+    if error is not None: return error
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         plans = await (await db.execute(
-            "SELECT p.*, u.full_name AS user_name FROM crm_planned_shifts p "
+            "SELECT p.*, u.full_name AS user_name, u.role AS user_role "
+            "FROM crm_planned_shifts p "
             "LEFT JOIN users u ON u.user_id=p.user_id AND u.city_id=p.city_id "
             "WHERE p.city_id=? AND p.work_date>=? AND p.work_date<=? "
             "ORDER BY p.work_date, p.start_time, p.id",
             (city["id"], date_range["from"], date_range["to"]),
         )).fetchall()
-    role_scope, error = _crm_scoped_role(context)
-    if error is not None: return error
     if role_scope:
-        plans = [row for row in plans if
-                 ((row["role"] or "").casefold() == role_scope.casefold()) or row["user_id"] is not None]
-        if any(row["user_id"] is not None for row in plans):
-            async with aiosqlite.connect(DB_PATH) as scope_db:
-                allowed_users = {item[0] for item in await (await scope_db.execute(
-                    "SELECT user_id FROM users WHERE city_id=? AND LOWER(role)=LOWER(?)",
-                    (city["id"], role_scope),
-                )).fetchall()}
-            plans = [row for row in plans if row["user_id"] is None or row["user_id"] in allowed_users]
+        plans = [
+            row for row in plans
+            if ((row["user_role"] if row["user_id"] is not None else row["role"]) or "").casefold()
+            == role_scope.casefold()
+        ]
     task_clauses = ["city_id=?", "COALESCE(date_to,work_date)>=?",
                     "COALESCE(date_from,work_date)<=?"]
     task_params = [city["id"], date_range["from"], date_range["to"]]
@@ -7468,7 +7643,7 @@ async def api_crm_calendar(request):
             "work_date": plan["work_date"], "start_time": plan["start_time"],
             "end_time": plan["end_time"], "segment": segment,
             "user_id": plan["user_id"], "user_name": plan.get("user_name"),
-            "role": plan["role"], "district": plan["district"] or "",
+            "role": plan["role"] or plan.get("user_role"), "district": plan["district"] or "",
             "note": plan["note"] or "", "work_kind": plan.get("work_kind") or "regular",
             "status": plan["status"],
             "match_status": match_status, "actual_shifts": candidates,
@@ -7546,6 +7721,10 @@ async def api_crm_planned_shift_create(request):
         plan_id = cur.lastrowid
         row = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
         if user_id is not None:
+            await db.execute(
+                "UPDATE users SET calendar_visible=1 WHERE user_id=? AND city_id=?",
+                (user_id, city["id"]),
+            )
             await _enqueue_crm_notification(
                 db, city["id"], user_id, "planned_shift", plan_id,
                 {"plan_id": plan_id, "work_date": work_date.isoformat(),
@@ -7608,6 +7787,11 @@ async def api_crm_planned_shifts_batch(request):
                 (row["role"] or "").casefold() != role_scope.casefold() for row in users)):
             await db.rollback()
             return web.json_response({"error": "target", "message": "Сотрудник не найден или недоступен."}, status=400)
+        await db.execute(
+            f"UPDATE users SET calendar_visible=1 WHERE city_id=? "
+            f"AND user_id IN ({placeholders})",
+            [city["id"], *user_ids],
+        )
         now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
         request_snapshot = {"city_id": city["id"], "user_ids": user_ids,
                             "date_from": start_date.isoformat(), "date_to": end_date.isoformat(),
@@ -9105,6 +9289,7 @@ async def start_api_server():
             client_max_size=CRM_UPLOAD_MAX_FILES * CRM_UPLOAD_MAX_BYTES + 1024 * 1024,
         )
         app.router.add_get("/api/state", api_state)
+        app.router.add_get("/api/my-schedule", api_my_schedule)
         app.router.add_post("/api/settings", api_settings)
         app.router.add_patch(
             "/api/planned-shifts/{plan_id}", api_employee_planned_shift_update
@@ -9130,6 +9315,7 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/payroll", api_crm_payroll)
         app.router.add_get("/api/admin/crm/employees/{user_id}", api_crm_employee)
         app.router.add_patch("/api/admin/crm/employees/{user_id}/settings", api_crm_employee_settings)
+        app.router.add_patch("/api/admin/crm/calendar-roster", api_crm_calendar_roster_update)
         app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)
         app.router.add_post("/api/admin/crm/shifts/{shift_id}/close", api_crm_shift_close)
         app.router.add_get("/api/admin/crm/trends", api_crm_trends)

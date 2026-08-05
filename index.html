@@ -312,6 +312,8 @@
   .my-task-actions{display:grid;gap:8px;margin-top:12px}.my-task-actions textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;font-size:16px;resize:vertical;background:#fff;color:var(--ink)}.my-task-actions .buttons{display:flex;gap:8px;flex-wrap:wrap}.my-task-actions .buttons button{flex:1;min-width:120px}
   .task-photos{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.task-photo{aspect-ratio:1;border-radius:10px;background:#E7ECDE;overflow:hidden;display:grid;place-items:center;color:var(--muted);font-size:10px;border:0;padding:0}.task-photo img{width:100%;height:100%;object-fit:cover;display:block}.task-upload-preview{display:grid;gap:7px;margin-top:8px}.task-upload-row{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:#fff}.task-upload-row img{width:40px;height:40px;object-fit:cover;border-radius:8px}.task-upload-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
   .task-api-state{text-align:center;color:var(--muted);padding:22px 10px;font-size:13px;line-height:1.5}.task-api-error{background:#FDECEC;color:#B3261E;border-radius:12px;padding:11px 12px;font-size:12px;margin-bottom:10px}
+  /* Личный график сотрудника: мобильная декада 5×2 и детали выбранного дня. */
+  .my-schedule-month{display:grid;grid-template-columns:42px minmax(0,1fr) 42px;align-items:center;gap:8px;margin-bottom:10px}.my-schedule-month b{text-align:center;font-family:'Manrope';font-size:17px;text-transform:capitalize}.my-schedule-month button{height:40px;border:1px solid var(--line);border-radius:12px;background:var(--tile);color:var(--ink);font-weight:900}.my-schedule-today{width:100%;margin-bottom:10px}.my-schedule-decades{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:10px}.my-schedule-decades button{min-height:38px;border:1px solid var(--line);border-radius:999px;background:var(--tile);color:var(--muted);font-size:11px;font-weight:850}.my-schedule-decades button.on{border-color:var(--green);background:#102B18;color:var(--green)}.my-schedule-summary{font-size:12px;color:var(--muted);margin:0 2px 10px}.my-schedule-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.my-schedule-day{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:13px;background:var(--tile);color:var(--ink);display:grid;place-items:center;align-content:center;gap:2px;padding:6px 3px}.my-schedule-day b{font-size:17px}.my-schedule-day small{font-size:9px;color:var(--muted);text-transform:capitalize}.my-schedule-day span{max-width:100%;font-size:8px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.my-schedule-day.regular{background:#102B18;border-color:#245A32}.my-schedule-day.extra{background:#332811;border-color:#6B5115;color:#FFE19A}.my-schedule-day.cancelled{opacity:.58;text-decoration:line-through}.my-schedule-day.active{box-shadow:0 0 0 2px rgba(53,211,58,.35)}.my-schedule-day.missed{border-color:#7B3036}.my-schedule-day.today{border-color:var(--green)}.my-schedule-day.selected{box-shadow:inset 0 -3px var(--green)}.my-schedule-detail{margin-top:12px;border:1px solid var(--line);border-radius:15px;background:var(--tile);padding:13px}.my-schedule-detail h3{font-family:'Manrope';font-size:15px;margin:0 0 10px}.my-schedule-shift{border-top:1px solid var(--line);padding:10px 0}.my-schedule-shift:first-of-type{border-top:0;padding-top:0}.my-schedule-shift-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.my-schedule-shift-head b{font-size:14px}.my-schedule-status{border-radius:999px;padding:4px 7px;background:#1C2620;color:var(--muted);font-size:9px;font-weight:900}.my-schedule-status.active,.my-schedule-status.completed{background:#102B18;color:var(--green)}.my-schedule-status.cancelled,.my-schedule-status.missed{background:#32191C;color:#FF8B93}.my-schedule-meta{font-size:11px;color:var(--muted);line-height:1.45;margin-top:5px}.my-schedule-meta.warn{color:#FF8B93}.my-schedule-updated{text-align:center;color:var(--muted);font-size:10px;margin-top:10px}
   @media(max-width:420px){
     #myTasksView .admin-head{display:grid;grid-template-columns:1fr 1fr;align-items:center}
     #myTasksView .admin-head .formhead{grid-column:1/-1;grid-row:1;text-align:left}
@@ -698,6 +700,12 @@
             <span class="task-count hidden" id="myTasksBadge">0</span>
             <span class="chev">›</span>
           </button>
+          <button class="more-item" id="btnMySchedule">
+            <span class="ic">🗓️</span>
+            <span class="tx"><b>Мой график</b><i>Смены, подработки, время и районы по декадам</i></span>
+            <span class="task-count hidden" id="myScheduleBadge">0</span>
+            <span class="chev">›</span>
+          </button>
           <button class="more-item" id="btnSettingsOpen">
             <span class="ic">⚙</span>
             <span class="tx"><b>Настройки</b><i>Имя, роль, город, ставка и исправление счётчиков</i></span>
@@ -814,6 +822,27 @@
         <div id="myTasksList"><div class="task-api-state">Загружаю задания…</div></div>
         <div class="hidden" id="myTaskDetail"></div>
       </div>
+
+      <!-- Личный календарь плановых смен сотрудника. -->
+      <div class="panel hidden" id="myScheduleView">
+        <div class="admin-head">
+          <button class="mini" id="myScheduleBack">← Ещё</button>
+          <div class="formhead">Мой график</div>
+          <button class="mini" id="myScheduleReload">Обновить</button>
+        </div>
+        <div class="task-api-error hidden" id="myScheduleError"></div>
+        <div class="my-schedule-month">
+          <button id="mySchedulePrev" aria-label="Предыдущий месяц">‹</button>
+          <b id="myScheduleMonthTitle">—</b>
+          <button id="myScheduleNext" aria-label="Следующий месяц">›</button>
+        </div>
+        <button class="mini my-schedule-today" id="myScheduleToday">Сегодня</button>
+        <div class="my-schedule-decades" id="myScheduleDecades"></div>
+        <div class="my-schedule-summary" id="myScheduleSummary">Загружаю график…</div>
+        <div class="my-schedule-grid" id="myScheduleGrid"></div>
+        <div id="myScheduleDetail"></div>
+        <div class="my-schedule-updated" id="myScheduleUpdated"></div>
+      </div>
     </div>
 
   </div>
@@ -860,6 +889,11 @@ let stateRevision = 0;
 let stateMutationDepth = 0;
 let lunchRequestPending = false;
 let plannedEditMode = '';
+let myScheduleMonth = null;
+let myScheduleDecade = 1;
+let myScheduleSelectedDate = '';
+let myScheduleData = null;
+let myScheduleLoading = false;
 
 /* ---------- утилиты ---------- */
 const $ = id => document.getElementById(id);
@@ -1551,8 +1585,33 @@ $('saveSettings').onclick = async ()=>{
   }
 };
 
+/* ---------- личный график сотрудника ---------- */
+function scheduleIso(date){const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`}
+function scheduleMonthKey(){return `${myScheduleMonth.getFullYear()}-${String(myScheduleMonth.getMonth()+1).padStart(2,'0')}`}
+function resetMyScheduleToToday(){const today=nowInTz();myScheduleMonth=new Date(today.getFullYear(),today.getMonth(),1);myScheduleDecade=today.getDate()<=10?1:today.getDate()<=20?2:3;myScheduleSelectedDate=scheduleIso(today)}
+function scheduleDecadeDates(){const year=myScheduleMonth.getFullYear(),month=myScheduleMonth.getMonth(),from=myScheduleDecade===1?1:myScheduleDecade===2?11:21,last=new Date(year,month+1,0).getDate(),to=myScheduleDecade===1?10:myScheduleDecade===2?20:last,out=[];for(let day=from;day<=to;day++)out.push(scheduleIso(new Date(year,month,day)));return out}
+function scheduleStatus(status){return {upcoming:'Предстоит',active:'На смене',completed:'Завершена',cancelled:'Отменена',missed:'Не начата'}[status]||status}
+function scheduleDateTitle(value){return new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(new Date(`${value}T12:00:00`))}
+function renderMyScheduleShift(item){const type=item.work_kind==='extra'?'Подработка':'Основная смена',next=item.ends_next_day?' · окончание на следующий день':'';return `<div class="my-schedule-shift"><div class="my-schedule-shift-head"><b>${esc(item.start_time)}–${esc(item.end_time)}${item.ends_next_day?' +1':''}</b><span class="my-schedule-status ${esc(item.status)}">${esc(scheduleStatus(item.status))}</span></div><div class="my-schedule-meta">${type}${next}</div><div class="my-schedule-meta ${item.district?'':'warn'}">${item.district?`Район: ${esc(item.district)}`:'! Район не назначен — уточните у руководителя'}</div><div class="my-schedule-meta">${item.auto_enabled?'Откроется и закроется автоматически':'Автоматическое управление выключено'}</div>${item.actual_start_time?`<div class="my-schedule-meta">Факт: ${esc(item.actual_start_time)}–${esc(item.actual_end_time||'…')}</div>`:''}</div>`}
+function renderMySchedule(){
+  if(!myScheduleMonth)resetMyScheduleToToday();const data=myScheduleData||{items:[]},items=data.items||[],dates=scheduleDecadeDates(),today=scheduleIso(nowInTz());
+  if(!dates.includes(myScheduleSelectedDate))myScheduleSelectedDate=dates[0];
+  $('myScheduleMonthTitle').textContent=`${MONTHS[myScheduleMonth.getMonth()]} ${myScheduleMonth.getFullYear()}`;
+  $('myScheduleDecades').innerHTML=[1,2,3].map(value=>`<button class="${myScheduleDecade===value?'on':''}" data-my-decade="${value}">${value===1?'1–10':value===2?'11–20':'21–конец'}</button>`).join('');
+  const inDecade=items.filter(item=>dates.includes(item.work_date)),working=inDecade.filter(item=>item.status!=='cancelled'),extras=working.filter(item=>item.work_kind==='extra').length,workDays=new Set(working.map(item=>item.work_date)).size;
+  $('myScheduleSummary').textContent=`${working.length} ${working.length===1?'смена':working.length>1&&working.length<5?'смены':'смен'} · ${extras} подработок · ${Math.max(0,dates.length-workDays)} выходных`;
+  $('myScheduleGrid').innerHTML=dates.map(date=>{const dayItems=items.filter(item=>item.work_date===date),active=dayItems.find(item=>item.status==='active'),live=dayItems.filter(item=>item.status!=='cancelled'),primary=active||live[0]||dayItems[0],extra=live.some(item=>item.work_kind==='extra'),cancelled=dayItems.length&&!live.length,missed=live.length&&live.every(item=>item.status==='missed'),label=!dayItems.length?'Выходной':dayItems.length>1?`${dayItems.length} смены`:cancelled?'Отменена':extra?'Подработка':'Смена',d=new Date(`${date}T12:00:00`),weekday=new Intl.DateTimeFormat('ru-RU',{weekday:'short'}).format(d);return `<button class="my-schedule-day ${live.length?(extra?'extra':'regular'):''} ${cancelled?'cancelled':''} ${active?'active':''} ${missed?'missed':''} ${date===today?'today':''} ${date===myScheduleSelectedDate?'selected':''}" data-my-schedule-day="${date}"><b>${d.getDate()}</b><small>${esc(weekday)}</small><span>${esc(label)}</span></button>`}).join('');
+  const selected=items.filter(item=>item.work_date===myScheduleSelectedDate);$('myScheduleDetail').innerHTML=`<div class="my-schedule-detail"><h3>${esc(scheduleDateTitle(myScheduleSelectedDate))}</h3>${selected.length?selected.map(renderMyScheduleShift).join(''):'<div class="task-api-state" style="padding:8px 0">Выходной — смен на этот день нет.</div>'}</div>`;
+  $('myScheduleUpdated').textContent=data.generated_at?`График обновлён ${new Date(data.generated_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`:'';
+  const badge=$('myScheduleBadge'),total=items.filter(item=>item.status!=='cancelled').length;badge.textContent=String(total);badge.classList.toggle('hidden',total===0);
+  document.querySelectorAll('[data-my-decade]').forEach(button=>button.onclick=()=>{myScheduleDecade=Number(button.dataset.myDecade);myScheduleSelectedDate=scheduleDecadeDates()[0];renderMySchedule()});
+  document.querySelectorAll('[data-my-schedule-day]').forEach(button=>button.onclick=()=>{myScheduleSelectedDate=button.dataset.myScheduleDay;renderMySchedule()});
+}
+async function loadMySchedule(){if(myScheduleLoading)return;if(!myScheduleMonth)resetMyScheduleToToday();myScheduleLoading=true;$('myScheduleError').classList.add('hidden');$('myScheduleSummary').textContent='Загружаю график…';try{myScheduleData=await api(`/api/my-schedule?month=${encodeURIComponent(scheduleMonthKey())}`);renderMySchedule()}catch(e){$('myScheduleError').textContent=e.message||'Не удалось загрузить график.';$('myScheduleError').classList.remove('hidden');if(!myScheduleData){$('myScheduleGrid').innerHTML='';$('myScheduleDetail').innerHTML='<div class="task-api-state">Нажмите «Обновить», чтобы повторить.</div>'}}finally{myScheduleLoading=false}}
+function shiftMyScheduleMonth(delta){myScheduleMonth=new Date(myScheduleMonth.getFullYear(),myScheduleMonth.getMonth()+delta,1);myScheduleSelectedDate=scheduleIso(new Date(myScheduleMonth.getFullYear(),myScheduleMonth.getMonth(),myScheduleDecade===1?1:myScheduleDecade===2?11:21));myScheduleData=null;loadMySchedule()}
+
 /* ---------- админка (живёт во вкладке «Ещё») ---------- */
-const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory','myTasksView'];
+const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory','myTasksView','myScheduleView'];
 
 function showAdminScreen(id){
   /* id = null → показать обычный экран «Ещё» */
@@ -1863,6 +1922,12 @@ $('myTasksBack').onclick=()=>{
     if(more)more.click();else showAdminScreen(null);
   }
 };
+$('btnMySchedule').onclick=()=>{if(!myScheduleMonth)resetMyScheduleToToday();showAdminScreen('myScheduleView');loadMySchedule()};
+$('myScheduleReload').onclick=()=>{myScheduleData=null;loadMySchedule()};
+$('myScheduleBack').onclick=()=>showAdminScreen(null);
+$('mySchedulePrev').onclick=()=>shiftMyScheduleMonth(-1);
+$('myScheduleNext').onclick=()=>shiftMyScheduleMonth(1);
+$('myScheduleToday').onclick=()=>{resetMyScheduleToToday();myScheduleData=null;loadMySchedule()};
 
 const ADMIN_ROLE_GROUPS = [
   {key:'scout', label:'Скауты'},

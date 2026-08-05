@@ -109,6 +109,7 @@ async def run():
              (910001, "Скаут Один", "Скаут", city["id"]),
              (910002, "Водитель Один", "Водитель", city["id"]),
              (910004, "Скаут Для Закрытия", "Скаут", city["id"]),
+             (910006, "Календарный Тест", "Скаут", city["id"]),
              (920004, "Сотрудник Другого Города", "Скаут", other_city["id"])],
         )
         await db.execute(
@@ -298,6 +299,34 @@ async def run():
         admin_token=scout_token,
     ))
     assert payload(calendar)["planned"][0]["match_status"] == "вышел"
+
+    # Сетевой руководитель переключает группы, а старший скаут не видит чужую роль.
+    driver_plan = await bot.api_crm_planned_shift_create(Request(
+        900001, body={"city_id": city["id"], "work_date": today, "start_time": "09:00",
+                      "end_time": "18:00", "user_id": 910002}, admin_token=network_token,
+    ))
+    assert driver_plan.status == 201
+    scout_calendar = await bot.api_crm_calendar(Request(
+        900001, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "role": "Скаут"}, admin_token=network_token,
+    ))
+    driver_calendar = await bot.api_crm_calendar(Request(
+        900001, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "role": "Водитель"}, admin_token=network_token,
+    ))
+    denied_driver_calendar = await bot.api_crm_calendar(Request(
+        900002, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "role": "Водитель"}, admin_token=scout_token,
+    ))
+    assert all(item["role"] == "Скаут" for item in payload(scout_calendar)["planned"])
+    assert {item["user_id"] for item in payload(driver_calendar)["planned"]} == {910002}
+    assert denied_driver_calendar.status == 403
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM crm_planned_shifts WHERE id=?", (payload(driver_plan)["plan"]["id"],)
+        )
+        await db.commit()
+
     tomorrow = (datetime.fromisoformat(today) + timedelta(days=1)).date().isoformat()
     extra_plan = await bot.api_crm_planned_shift_create(Request(
         900002, body={"city_id": city["id"], "work_date": tomorrow,
@@ -564,6 +593,128 @@ async def run():
     ))
     assert settings_response.status == 200 and payload(settings_response)["employee"]["pay_amount"] == 420
     assert template_response.status == 201 and len(payload(template_list)["items"]) == 1
+
+    # Состав календаря сохраняется атомарно, не скрывает будущие смены и соблюдает роль.
+    employee_list_before = await bot.api_crm_employees(Request(
+        900001, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "limit": "200"}, admin_token=network_token,
+    ))
+    eligible_ids = [
+        item["user_id"] for item in payload(employee_list_before)["items"]
+        if item["profile_exists"] and item["role"] == "Скаут" and bot._crm_calendar_employee_is_eligible(
+            item["name"], item["role"]
+        )
+    ]
+    future_date = (datetime.now(bot._city_tz(city)).date() + timedelta(days=2)).isoformat()
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,status,"
+            "created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,'scheduled',?,?,?,?)",
+            (city["id"], future_date, "08:00", "18:00", 910006,
+             900001, now_iso, 900001, now_iso),
+        )
+        roster_plan_id = cur.lastrowid
+        await db.commit()
+    visibility_conflict = await bot.api_crm_calendar_roster_update(Request(
+        900001, body={"city_id": city["id"],
+                      "role": "Скаут",
+                      "visible_user_ids": [uid for uid in eligible_ids if uid != 910006]},
+        admin_token=network_token, method="PATCH",
+    ))
+    assert visibility_conflict.status == 409
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute("DELETE FROM crm_planned_shifts WHERE id=?", (roster_plan_id,))
+        await db.commit()
+    visibility_response = await bot.api_crm_calendar_roster_update(Request(
+        900001, body={"city_id": city["id"],
+                      "role": "Скаут",
+                      "visible_user_ids": [uid for uid in eligible_ids if uid != 910006]},
+        admin_token=network_token, method="PATCH",
+    ))
+    visibility_denied = await bot.api_crm_calendar_roster_update(Request(
+        900002, body={"city_id": city["id"], "role": "Водитель",
+                      "visible_user_ids": [910002]},
+        admin_token=scout_token, method="PATCH",
+    ))
+    employee_list = await bot.api_crm_employees(Request(
+        900001, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "limit": "200"}, admin_token=network_token,
+    ))
+    hidden_employee = next(
+        item for item in payload(employee_list)["items"] if item["user_id"] == 910006
+    )
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        driver_visibility = (await (await db.execute(
+            "SELECT calendar_visible FROM users WHERE user_id=910002"
+        )).fetchone())[0]
+    assert visibility_response.status == 200
+    assert visibility_denied.status == 403
+    assert hidden_employee["calendar_visible"] is False and hidden_employee["profile_exists"] is True
+    assert driver_visibility == 1
+    restored = await bot.api_crm_calendar_roster_update(Request(
+        900001, body={"city_id": city["id"], "role": "Скаут",
+                      "visible_user_ids": eligible_ids},
+        admin_token=network_token, method="PATCH",
+    ))
+    assert restored.status == 200 and 910006 in payload(restored)["visible_user_ids"]
+    await bot.api_crm_calendar_roster_update(Request(
+        900001, body={"city_id": city["id"],
+                      "role": "Скаут",
+                      "visible_user_ids": [uid for uid in eligible_ids if uid != 910006]},
+        admin_token=network_token, method="PATCH",
+    ))
+    new_plan = await bot.api_crm_planned_shift_create(Request(
+        900001, body={"city_id": city["id"], "user_id": 910006,
+                      "work_date": future_date, "start_time": "08:00", "end_time": "18:00"},
+        admin_token=network_token, method="POST",
+    ))
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        visible_after_plan = (await (await db.execute(
+            "SELECT calendar_visible FROM users WHERE user_id=910006"
+        )).fetchone())[0]
+        await db.execute(
+            "DELETE FROM crm_planned_shifts WHERE id=?", (payload(new_plan)["plan"]["id"],)
+        )
+        await db.commit()
+    assert new_plan.status == 201 and visible_after_plan == 1
+
+    # Личный график всегда берёт Telegram ID из авторизации и не раскрывает коллег.
+    personal_date = future_date
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        own_cur = await db.execute(
+            "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,"
+            "work_kind,status,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,?,'scheduled',?,?,?,?)",
+            (city["id"], personal_date, "20:00", "05:00", 910006, "extra",
+             900001, now_iso, 900001, now_iso),
+        )
+        own_plan_id = own_cur.lastrowid
+        other_cur = await db.execute(
+            "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,"
+            "status,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,'scheduled',?,?,?,?)",
+            (city["id"], personal_date, "08:00", "18:00", 910002,
+             900001, now_iso, 900001, now_iso),
+        )
+        other_plan_id = other_cur.lastrowid
+        await db.commit()
+    personal = await bot.api_my_schedule(Request(
+        910006, query={"month": personal_date[:7], "user_id": "910002"},
+    ))
+    personal_ids = {item["plan_id"] for item in payload(personal)["items"]}
+    assert personal.status == 200 and own_plan_id in personal_ids and other_plan_id not in personal_ids
+    own_payload = next(item for item in payload(personal)["items"] if item["plan_id"] == own_plan_id)
+    assert own_payload["work_kind"] == "extra" and own_payload["ends_next_day"] is True
+    invalid_personal_month = await bot.api_my_schedule(Request(
+        910006, query={"month": "2026-99"},
+    ))
+    assert invalid_personal_month.status == 400
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM crm_planned_shifts WHERE id IN (?,?)", (own_plan_id, other_plan_id)
+        )
+        await db.commit()
 
     # Зарплата считается за выбранную декаду и не выходит за город доступа.
     local_today = datetime.now(bot._city_tz(city)).date()

@@ -1,0 +1,2336 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<title>bb. — моя смена</title>
+<script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=Manrope:wght@500;600;700;800&family=Montserrat:ital,wght@0,700;0,800;0,900;1,900&display=swap" rel="stylesheet">
+<style>
+  /* ============ Фирменные токены bb. ============ */
+  :root{
+    --green:#35D33A;
+    --green-deep:#16A02A;
+    --ink:#0E1A10;
+    --panel:#F1F4EA;
+    --tile:#FFFFFF;
+    --line:#E2E7DA;
+    --muted:#6E7B70;
+    --orange:#F5A623;
+    --red:#E5484D;
+    --money:#33E24A;
+    --shadow:0 18px 40px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    background:#0A100C;
+    color:var(--ink);
+    /* Стабильная высота Telegram не перестраивает весь экран во время анимации
+       клавиатуры. Сам WebView при этом нативно прокручивает поле в видимую зону. */
+    min-height:var(--tg-viewport-stable-height, 100vh);
+    padding:14px 12px calc(86px + env(safe-area-inset-bottom));
+    background-image:
+      repeating-linear-gradient(125deg, rgba(53,211,58,.06) 0 2px, transparent 2px 13px),
+      repeating-linear-gradient(55deg, rgba(53,211,58,.05) 0 2px, transparent 2px 15px);
+  }
+  .num{font-family:'Montserrat',sans-serif;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+
+  .panel{
+    max-width:460px;margin:0 auto 12px;background:var(--panel);
+    border-radius:28px;padding:18px;box-shadow:var(--shadow);
+  }
+
+  /* Шапка */
+  .head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+  .ava{
+    width:64px;height:64px;border-radius:18px;flex:none;position:relative;overflow:hidden;
+    background:var(--green);display:grid;place-items:center;
+    box-shadow:0 6px 16px rgba(22,160,42,.4);
+  }
+  .ava::before{content:"";position:absolute;inset:0;
+    background:repeating-linear-gradient(120deg, rgba(0,0,0,.10) 0 3px, transparent 3px 9px)}
+  .ava b{position:relative;font-family:'Montserrat';font-style:italic;font-weight:900;font-size:30px;color:#0B140E;letter-spacing:-.05em}
+  .ava b i{color:#fff;font-style:italic}
+  .head .who{min-width:0}
+  .head .name{font-family:'Montserrat';font-weight:800;font-size:21px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .head .role{color:var(--green-deep);font-weight:700;font-size:13.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .head .role b{color:var(--ink)}
+
+  /* Статус смены */
+  .status{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:11px 14px;margin-bottom:12px;font-weight:700;font-size:14px}
+  .dot{width:10px;height:10px;border-radius:50%;background:#B9C4BB;flex:none}
+  .status.on .dot{background:var(--green);box-shadow:0 0 0 4px rgba(53,211,58,.2);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(53,211,58,.2)}50%{box-shadow:0 0 0 7px rgba(53,211,58,.08)}}
+  .status .st-lbl{color:var(--muted);font-weight:600;margin-right:auto}
+  .status .st-val{font-family:'Montserrat';font-weight:800}
+  .status.on .st-val{color:var(--green-deep)}
+
+  /* Заработок */
+  .earn{background:var(--ink);border-radius:20px;padding:20px;margin-bottom:12px;position:relative;overflow:hidden}
+  .earn::after{content:"";position:absolute;right:-30px;top:-30px;width:150px;height:150px;
+    background:repeating-linear-gradient(130deg, rgba(51,226,74,.10) 0 3px, transparent 3px 12px);border-radius:50%}
+  .earn .lbl{color:#9fb0a2;font-weight:600;font-size:15px;max-width:52%;line-height:1.25}
+  .earn .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .earn .val{font-family:'Montserrat';font-weight:900;font-size:46px;line-height:.95;color:var(--money);text-align:right}
+  .earn .cur{font-family:'Montserrat';font-weight:900;font-size:30px;color:var(--money);text-align:right;margin-top:2px}
+  .earn .sub{color:#7f9083;font-size:12.5px;margin-top:10px}
+
+  /* Плитки счётчиков */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .tile{background:var(--tile);border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+  .tile .n{font-family:'Montserrat';font-weight:800;font-size:30px;line-height:1}
+  .tile .t{color:var(--muted);font-weight:700;font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-top:6px}
+  .tile.g .n{color:var(--green-deep)}
+  .tile.o .n{color:var(--orange)}
+
+  /* Кнопки редактирования счётчиков (видны только в режиме редактирования) */
+  .editctl{display:none;gap:8px;margin-top:12px}
+  .grid.edit-on .editctl{display:flex}
+  .editctl button{flex:1;border:1px solid var(--line);background:#fff;border-radius:11px;
+    padding:9px 0;font-family:'Montserrat';font-weight:900;font-size:20px;line-height:1;cursor:pointer;color:var(--ink)}
+  .editctl button:active{transform:scale(.94)}
+  .editctl button:disabled{opacity:.35;cursor:default}
+  .editctl button.minus{color:var(--red)}
+  .editctl button.plus{color:var(--green-deep)}
+
+  .foot{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--muted);padding:2px 4px}
+  .foot b{color:var(--ink);font-family:'Montserrat';font-weight:800;margin-left:5px}
+
+  /* Тиры бейджа уровня */
+  .badge-lvl.bronze{background:linear-gradient(140deg,#D89A6A,#9C5B2B);box-shadow:0 10px 24px rgba(156,91,43,.4)}
+  .badge-lvl.silver{background:linear-gradient(140deg,#DDE4E8,#94A3AE);box-shadow:0 10px 24px rgba(148,163,174,.4)}
+  .badge-lvl.gold{background:linear-gradient(140deg,#F7D774,#D99A1B);box-shadow:0 10px 24px rgba(217,154,27,.45)}
+  .badge-lvl.platinum{background:linear-gradient(140deg,#B8F1E4,#4FA895);box-shadow:0 10px 24px rgba(79,168,149,.45)}
+  .badge-lvl.diamond{background:linear-gradient(140deg,#BFE3FF,#5A8FE8);box-shadow:0 10px 24px rgba(90,143,232,.5)}
+
+  /* Удаление смены в истории */
+  .hrow .del{border:0;background:#FDECEC;color:#B3261E;border-radius:10px;width:34px;height:34px;
+    font-size:15px;cursor:pointer;margin-left:10px;flex:none}
+  .hrow .del:active{transform:scale(.94)}
+  .hrow .edit{border:0;background:#EAF4EC;color:var(--green-deep);border-radius:10px;width:34px;height:34px;
+    font-size:15px;cursor:pointer;margin-left:8px;flex:none}
+  .hrow .edit:active{transform:scale(.94)}
+  .hrow .cmt{color:var(--muted);font-size:12px;margin-top:3px;font-style:italic}
+  .edit-cmt{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0;display:grid;gap:8px}
+  .edit-cmt textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font-family:'Inter';font-size:16px;resize:vertical;min-height:56px;background:#fff;color:var(--ink)}
+  .edit-cmt .btns{display:flex;gap:8px;justify-content:flex-end}
+  .edit-cmt button{border:0;border-radius:10px;padding:9px 14px;font-weight:800;font-size:13px;cursor:pointer}
+  .edit-cmt .save-c{background:var(--green);color:#08130B}
+  .edit-cmt .cancel-c{background:#fff;border:1px solid var(--line);color:var(--ink)}
+  .hrow .e{margin-left:auto}
+  .confirm-del{background:#FDECEC;border-radius:12px;padding:12px;margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .confirm-del span{font-size:13px;font-weight:700;color:#B3261E;flex:1;min-width:150px}
+  .confirm-del button{border:0;border-radius:10px;padding:9px 14px;font-weight:800;font-size:13px;cursor:pointer}
+  .confirm-del .yes{background:#B3261E;color:#fff}
+  .confirm-del .no{background:#fff;color:var(--ink)}
+
+  /* Кнопки */
+  .bigbtn{width:100%;border:0;border-radius:18px;padding:17px;font-family:'Montserrat';font-weight:800;font-size:16px;cursor:pointer;margin-top:4px}
+  .bigbtn:active{transform:scale(.99)}
+  .bigbtn.start{background:var(--green);color:#08130B}
+  .bigbtn.lunch{background:#FFF2CF;color:#664600;border:1px solid #F0C765;margin-bottom:8px}
+  .bigbtn.lunch.on{background:var(--orange);color:#2D2100;border-color:var(--orange)}
+  .bigbtn.stop{background:var(--ink);color:#fff}
+  .bigbtn.stop span{color:var(--red)}
+  .bigbtn:disabled{opacity:.55}
+
+  /* Пустое состояние */
+  .empty{text-align:center;padding:10px 6px 6px}
+  .empty .big{font-family:'Montserrat';font-weight:900;font-size:22px}
+  .empty .sm{color:var(--muted);font-size:14px;margin-top:8px;line-height:1.45}
+  .lastcard{background:#fff;border:1px dashed var(--line);border-radius:16px;padding:14px;margin:14px 0 12px;display:flex;justify-content:space-between;align-items:center}
+  .lastcard .l{color:var(--muted);font-size:13px;font-weight:600}
+  .lastcard .r{font-family:'Montserrat';font-weight:800;font-size:20px;color:var(--green-deep)}
+
+  /* ============ Формы ============ */
+  .field{margin-bottom:16px}
+  .field > label{display:block;font-weight:700;font-size:13px;color:var(--ink);margin-bottom:8px}
+  .tinput{width:100%;border:1px solid var(--line);border-radius:14px;padding:13px 14px;font-family:'Inter';font-weight:600;font-size:16px;outline:0;background:#fff;color:var(--ink)}
+  input.time{font-family:'Montserrat';font-weight:800;font-size:24px;letter-spacing:.02em}
+  select.tinput{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9'%3E%3Cpath d='M1 1l6 6 6-6' stroke='%236E7B70' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:#E7ECDE;border-radius:14px;padding:5px}
+  .seg button{border:0;background:transparent;padding:11px 6px;border-radius:10px;font-family:'Inter';font-weight:700;font-size:13.5px;color:var(--muted);cursor:pointer}
+  .seg button.on{background:#fff;color:var(--ink);box-shadow:0 2px 6px rgba(0,0,0,.08)}
+  .amount{display:flex;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:0 14px}
+  .amount input{border:0;outline:0;font-family:'Montserrat';font-weight:800;font-size:26px;padding:13px 0;width:100%;background:transparent;color:var(--ink)}
+  .amount .suf{color:var(--muted);font-weight:700;font-size:14px;white-space:nowrap;padding-left:8px}
+  .save{width:100%;border:0;border-radius:16px;padding:16px;background:var(--green);color:#08130B;font-family:'Montserrat';font-weight:800;font-size:16px;cursor:pointer;margin-top:4px}
+  .save:active{transform:scale(.99)}
+  .hint{color:var(--muted);font-size:13px;line-height:1.45;margin:0 0 16px}
+  .formhead{font-family:'Montserrat';font-weight:800;font-size:20px;margin:2px 0 12px;display:flex;justify-content:space-between;align-items:center}
+  .formhead .x{width:32px;height:32px;border-radius:50%;background:#fff;border:1px solid var(--line);font-size:18px;line-height:1;display:grid;place-items:center;cursor:pointer;color:var(--muted)}
+  .err{background:#FDECEC;color:#B3261E;border-radius:12px;padding:11px 14px;font-size:13.5px;font-weight:600;margin-bottom:12px;display:none}
+  .err.show{display:block}
+
+  /* Тумблер-переключатель (Режим редактирования) */
+  .toggle-row{display:flex;align-items:center;gap:12px}
+  .toggle-desc{flex:1;color:var(--muted);font-size:13px;line-height:1.4}
+  .switch{position:relative;display:inline-block;width:50px;height:28px;flex:none}
+  .switch input{opacity:0;width:0;height:0}
+  .slider{position:absolute;cursor:pointer;inset:0;background:#CBD4C6;border-radius:99px;transition:.2s}
+  .slider::before{content:"";position:absolute;height:22px;width:22px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--green)}
+  .switch input:checked + .slider::before{transform:translateX(22px)}
+
+  /* ============ Рейтинг ============ */
+  .badge-lvl{
+    width:92px;height:92px;border-radius:26px;margin:6px auto 12px;position:relative;overflow:hidden;
+    background:linear-gradient(140deg,var(--green),var(--green-deep));display:grid;place-items:center;
+    box-shadow:0 10px 24px rgba(22,160,42,.4);
+  }
+  .badge-lvl::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(120deg, rgba(0,0,0,.08) 0 3px, transparent 3px 9px)}
+  .badge-lvl b{position:relative;font-family:'Montserrat';font-weight:900;font-size:42px;color:#08130B}
+  .rk-title{text-align:center;font-family:'Montserrat';font-weight:900;font-size:24px}
+  .rk-sub{text-align:center;color:var(--muted);font-weight:600;font-size:13.5px;margin:4px 0 14px}
+  .bar{height:12px;background:#E6EBDD;border-radius:99px;overflow:hidden}
+  .bar span{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--green-deep));border-radius:99px;transition:width .5s ease}
+  .xp-line{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:700;margin:8px 2px 16px}
+  .xp-line b{color:var(--ink)}
+  .ranks{display:grid;gap:8px;margin-top:14px}
+  .rank{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .rank .ic{width:38px;height:38px;border-radius:11px;background:#E7ECDE;display:grid;place-items:center;font-size:19px;flex:none}
+  .rank.cur{border-color:var(--green);background:#F3FBF2}
+  .rank.cur .ic{background:var(--green)}
+  .rank .rn{font-weight:800;font-size:15px}
+  .rank .rq{color:var(--muted);font-size:12px;font-weight:600;margin-top:2px}
+  .rank .ok{margin-left:auto;color:var(--green-deep);font-weight:900;font-size:18px}
+
+  /* История внутри рейтинга */
+  .htotal{background:var(--ink);border-radius:16px;padding:14px 16px;color:#fff;display:flex;justify-content:space-between;align-items:center;margin:14px 0}
+  .htotal .l{color:#9fb0a2;font-size:13px;font-weight:600}
+  .htotal .r{font-family:'Montserrat';font-weight:900;font-size:24px;color:var(--money)}
+  .hrow{display:flex;justify-content:space-between;align-items:center;padding:13px 4px;border-bottom:1px solid var(--line)}
+  .hrow:last-child{border-bottom:0}
+  .hrow .d{font-weight:700;font-size:15px}
+  .hrow .meta{color:var(--muted);font-size:12.5px;margin-top:3px;display:flex;gap:8px;align-items:center}
+  .bdg{font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;background:#E7ECDE;color:var(--green-deep)}
+  .hrow .e{font-family:'Montserrat';font-weight:800;font-size:19px;color:var(--green-deep)}
+  .hempty{text-align:center;color:var(--muted);padding:22px 10px;font-size:14px}
+
+  /* ============ Ещё ============ */
+  .more-list{display:grid;gap:10px}
+  .more-item{display:flex;gap:13px;align-items:center;width:100%;text-align:left;background:#fff;
+    border:1px solid var(--line);border-radius:16px;padding:15px;cursor:pointer;font-family:'Inter'}
+  .more-item:active{transform:scale(.985)}
+  .more-item .ic{font-size:24px}
+  .more-item .tx{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .more-item .tx b{font-weight:800;font-size:15px;color:var(--ink)}
+  .more-item .tx i{font-style:normal;color:var(--muted);font-size:12.5px;line-height:1.35}
+  .more-item .chev{color:var(--muted);font-size:20px;font-weight:800}
+  .soon{display:grid;gap:10px}
+  .soon .card{display:flex;gap:13px;align-items:center;background:#fff;border:1px dashed var(--line);border-radius:16px;padding:15px;opacity:.75}
+  .soon .card .ic{font-size:24px}
+  .soon .card .tn{font-weight:800;font-size:15px}
+  .soon .card .td{color:var(--muted);font-size:12.5px;margin-top:2px}
+
+  /* ============ Tab Bar ============ */
+  .tabbar{
+    position:fixed;left:0;right:0;bottom:0;z-index:40;
+    background:rgba(10,16,12,.92);backdrop-filter:blur(14px);
+    border-top:1px solid rgba(53,211,58,.15);
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+    padding:8px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  /* Клавиатуру не обрабатываем скриптом вообще: любое изменение макета в
+     момент её появления рвёт связь поля с вводом. Вместо этого подсказываем
+     браузеру отступ, чтобы он сам не прятал поле под нижнюю панель. */
+  .tinput{scroll-margin-bottom:120px;scroll-margin-top:24px}
+  textarea{scroll-margin-bottom:120px;scroll-margin-top:24px}
+  .tab{border:0;background:transparent;color:#7f9083;font-family:'Inter';font-weight:700;font-size:11px;
+    display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 4px;border-radius:14px;cursor:pointer}
+  .tab .ti{font-size:21px;line-height:1}
+  .tab.on{color:var(--green)}
+  .tab.on .ti{transform:translateY(-1px)}
+
+  /* Загрузка / ошибка */
+  .center{max-width:460px;margin:60px auto 0;text-align:center;color:#dfeee2}
+  .center .big{font-family:'Montserrat';font-weight:900;font-size:22px;color:#fff}
+  .center .sm{color:#9fb0a2;font-size:14px;margin-top:10px;line-height:1.5}
+  .spin{width:34px;height:34px;border:4px solid rgba(255,255,255,.2);border-top-color:var(--green);border-radius:50%;margin:0 auto 16px;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .hidden{display:none!important}
+
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));
+    background:var(--ink);color:#fff;font-weight:700;font-size:14px;border-radius:99px;padding:12px 20px;z-index:60;
+    box-shadow:0 10px 26px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
+  .toast.show{opacity:1}
+  .status.wait{background:rgba(255,171,47,.12);border-color:rgba(255,171,47,.35)}
+  .status.wait .dot{background:var(--orange);box-shadow:0 0 0 5px rgba(255,171,47,.12)}
+  .admin-login{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
+  .admin-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+  .admin-head .formhead{margin:0}
+  .admin-list{display:grid;gap:8px}
+  .admin-row{padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--bg)}
+  .admin-row.active{border-left:4px solid var(--green);background:#F3FBF2}
+  .admin-row.closed{border-left:4px solid var(--red)}
+  .admin-row.wait{border-left:4px solid #E9B949}
+  .admin-stats{margin-top:7px;display:flex;flex-wrap:wrap;gap:6px}
+  .admin-stats span{font-size:11px;font-weight:800;padding:3px 8px;border-radius:99px;background:#E7ECDE;color:var(--green-deep)}
+  .admin-lunch{margin-top:7px;padding:7px 9px;border-radius:10px;background:#FFF2CF;color:#664600;font-size:12px;font-weight:800}
+  .admin-actions{margin-top:9px}
+  .admin-force-close{color:var(--red);border-color:var(--red)}
+  .admin-row .top{display:flex;justify-content:space-between;gap:8px;font-weight:800}
+  .admin-row .meta{margin-top:5px;color:var(--muted);font-size:12px;line-height:1.45}
+  .admin-badge{display:inline-block;padding:2px 7px;border-radius:99px;background:var(--line);font-size:10px;font-weight:800}
+  .admin-section{font-weight:900;margin:16px 0 8px}
+  .admin-note{font-size:12px;color:var(--muted);margin-top:8px}
+  .admin-city{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--bg)}
+  .admin-city span{color:var(--muted);font-size:12px}.admin-city b{font-size:14px}
+  /* Декада — расчётный период админки */
+  .period-box{margin-top:9px;border:1px solid var(--green-line,#C6EDC8);border-radius:13px;
+    background:#EFF9EF;padding:11px 12px}
+  .period-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .period-lbl{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+  .period-val{font-family:'Montserrat';font-weight:800;font-size:15px;margin-top:2px}
+  .period-val.overdue{color:var(--orange)}
+  .period-btn{flex:none;border-color:var(--green-deep);color:var(--green-deep);font-weight:800}
+  .period-hint{color:var(--muted);font-size:11.5px;margin-top:7px;line-height:1.4}
+  /* Кликабельная строка сотрудника в декаде — наследует вид admin-row */
+  button.period-emp{display:block;width:100%;text-align:left;border:0;background:transparent;
+    font:inherit;color:inherit;padding:0;cursor:pointer}
+  button.period-emp .top{pointer-events:none}
+  .admin-role-groups{display:grid;gap:12px}
+  .admin-role-head{display:flex;align-items:center;justify-content:space-between;margin:0 2px 6px;color:var(--green-deep);font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
+  .admin-role-head span{min-width:24px;text-align:center;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted);font-size:10px}
+  .admin-history-box{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
+  .admin-history-box .admin-head{margin-bottom:10px}
+  .admin-history-actions{margin-top:5px;color:var(--green-deep);font-size:11px;font-weight:700;line-height:1.45}
+  .manual-controls{display:grid;grid-template-columns:1fr 1fr auto;gap:7px;margin-top:9px;align-items:end}
+  .manual-controls .tinput{min-width:0}
+  @media(max-width:420px){.manual-controls{grid-template-columns:1fr 1fr}.manual-controls .mini{grid-column:1/-1}}
+  .mini{border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:8px 11px;font-weight:800}
+  /* Задания сотрудника: изолированный экран внутри «Ещё» */
+  .task-count{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 7px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;font-weight:900}
+  .my-task-list{display:grid;gap:9px}.my-task-card{width:100%;text-align:left;border:1px solid var(--line);border-radius:14px;background:var(--bg);padding:12px;color:var(--ink);font:inherit;cursor:pointer}
+  .my-task-card:active{transform:scale(.99)}.my-task-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;min-width:0}.my-task-title{font-weight:900;font-size:14px;line-height:1.3;min-width:0;overflow-wrap:anywhere}.my-task-top .formhead{min-width:0;overflow-wrap:anywhere}.my-task-meta{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.4}
+  .my-task-status{display:inline-flex;align-items:center;border-radius:99px;padding:4px 8px;background:#E7ECDE;color:var(--muted);font-size:10px;font-weight:900;white-space:nowrap}.my-task-status.work{background:#FFF2CF;color:#815500}.my-task-status.review{background:#E8F1FF;color:#2F65A7}.my-task-status.done{background:#DDF5DE;color:var(--green-deep)}.my-task-status.blocked{background:#FDECEC;color:#B3261E}
+  .my-task-desc{white-space:pre-wrap;font-size:13px;line-height:1.55;margin:10px 0;color:var(--ink)}.my-task-required{padding:8px 10px;border-radius:10px;background:#FFF2CF;color:#6D4A00;font-size:11.5px;font-weight:800;margin:9px 0}
+  .my-task-actions{display:grid;gap:8px;margin-top:12px}.my-task-actions textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;font-size:16px;resize:vertical;background:#fff;color:var(--ink)}.my-task-actions .buttons{display:flex;gap:8px;flex-wrap:wrap}.my-task-actions .buttons button{flex:1;min-width:120px}
+  .task-photos{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.task-photo{aspect-ratio:1;border-radius:10px;background:#E7ECDE;overflow:hidden;display:grid;place-items:center;color:var(--muted);font-size:10px;border:0;padding:0}.task-photo img{width:100%;height:100%;object-fit:cover;display:block}.task-upload-preview{display:grid;gap:7px;margin-top:8px}.task-upload-row{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:#fff}.task-upload-row img{width:40px;height:40px;object-fit:cover;border-radius:8px}.task-upload-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
+  .task-api-state{text-align:center;color:var(--muted);padding:22px 10px;font-size:13px;line-height:1.5}.task-api-error{background:#FDECEC;color:#B3261E;border-radius:12px;padding:11px 12px;font-size:12px;margin-bottom:10px}
+  /* Личный график сотрудника: мобильная декада 5×2 и детали выбранного дня. */
+  .my-schedule-month{display:grid;grid-template-columns:42px minmax(0,1fr) 42px;align-items:center;gap:8px;margin-bottom:10px}.my-schedule-month b{text-align:center;font-family:'Manrope';font-size:17px;text-transform:capitalize}.my-schedule-month button{height:40px;border:1px solid var(--line);border-radius:12px;background:var(--tile);color:var(--ink);font-weight:900}.my-schedule-today{width:100%;margin-bottom:10px}.my-schedule-decades{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:10px}.my-schedule-decades button{min-height:38px;border:1px solid var(--line);border-radius:999px;background:var(--tile);color:var(--muted);font-size:11px;font-weight:850}.my-schedule-decades button.on{border-color:var(--green);background:#102B18;color:var(--green)}.my-schedule-summary{font-size:12px;color:var(--muted);margin:0 2px 10px}.my-schedule-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.my-schedule-day{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:13px;background:var(--tile);color:var(--ink);display:grid;place-items:center;align-content:center;gap:2px;padding:6px 3px}.my-schedule-day b{font-size:17px}.my-schedule-day small{font-size:9px;color:var(--muted);text-transform:capitalize}.my-schedule-day span{max-width:100%;font-size:8px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.my-schedule-day.regular{background:#102B18;border-color:#245A32}.my-schedule-day.extra{background:#332811;border-color:#6B5115;color:#FFE19A}.my-schedule-day.cancelled{opacity:.58;text-decoration:line-through}.my-schedule-day.active{box-shadow:0 0 0 2px rgba(53,211,58,.35)}.my-schedule-day.missed{border-color:#7B3036}.my-schedule-day.today{border-color:var(--green)}.my-schedule-day.selected{box-shadow:inset 0 -3px var(--green)}.my-schedule-detail{margin-top:12px;border:1px solid var(--line);border-radius:15px;background:var(--tile);padding:13px}.my-schedule-detail h3{font-family:'Manrope';font-size:15px;margin:0 0 10px}.my-schedule-shift{border-top:1px solid var(--line);padding:10px 0}.my-schedule-shift:first-of-type{border-top:0;padding-top:0}.my-schedule-shift-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.my-schedule-shift-head b{font-size:14px}.my-schedule-status{border-radius:999px;padding:4px 7px;background:#1C2620;color:var(--muted);font-size:9px;font-weight:900}.my-schedule-status.active,.my-schedule-status.completed{background:#102B18;color:var(--green)}.my-schedule-status.cancelled,.my-schedule-status.missed{background:#32191C;color:#FF8B93}.my-schedule-meta{font-size:11px;color:var(--muted);line-height:1.45;margin-top:5px}.my-schedule-meta.warn{color:#FF8B93}.my-schedule-updated{text-align:center;color:var(--muted);font-size:10px;margin-top:10px}
+  @media(max-width:420px){
+    #myTasksView .admin-head{display:grid;grid-template-columns:1fr 1fr;align-items:center}
+    #myTasksView .admin-head .formhead{grid-column:1/-1;grid-row:1;text-align:left}
+    #myTasksBack{grid-column:1;grid-row:2;justify-self:start}
+    #myTasksReload{grid-column:2;grid-row:2;justify-self:end}
+    .my-task-actions .buttons{display:grid;grid-template-columns:1fr}
+    .my-task-actions .buttons button{width:100%;min-width:0}
+  }
+
+  /* ============ BibiBike Staff redesign v2 ============
+     Визуальный слой меняет только представление. ID, обработчики и API
+     предыдущей стабильной версии сохранены без переименования. */
+  :root{
+    --green:#31D843;--green-deep:#31D843;--ink:#F4F8F4;--panel:#0E1511;
+    --tile:#151C18;--line:rgba(255,255,255,.09);--muted:#8B9890;
+    --orange:#FFB32C;--red:#FF5964;--money:#39E653;--bg:#0A100C;
+    --shadow:0 22px 56px rgba(0,0,0,.34);
+  }
+  html{background:#070C09;color-scheme:dark}
+  body{
+    font-family:'Manrope','Inter',system-ui,-apple-system,sans-serif;
+    color:var(--ink);background:#070C09;padding:10px 10px calc(82px + env(safe-area-inset-bottom));
+    background-image:radial-gradient(circle at 12% -8%,rgba(49,216,67,.10),transparent 34%),linear-gradient(#070C09,#080E0A);
+  }
+  #app,.page{width:100%}
+  .panel{max-width:430px;margin:0 auto 10px;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:16px;box-shadow:none}
+  .head{gap:11px;margin-bottom:14px}.ava{width:48px;height:48px;border-radius:14px;box-shadow:0 7px 18px rgba(49,216,67,.20)}
+  .ava b{font-size:23px}.head .name{font-family:'Manrope';font-size:18px;font-weight:800}.head .role{font-size:12px;color:var(--green)}
+  .status{background:#131A16;border-color:var(--line);border-radius:13px;padding:12px;margin-bottom:12px;color:var(--ink)}
+  .status .st-lbl{color:var(--muted)}.status.on{background:#0E2B18;border-color:rgba(49,216,67,.36)}.status.on .st-val{color:var(--green)}
+  .earn{background:linear-gradient(145deg,#0C2A17,#0C2114);border:1px solid rgba(49,216,67,.30);border-radius:18px;padding:18px;margin-bottom:12px}
+  .earn .lbl{color:#9EAEA3}.earn .val{font-size:42px}.earn .cur{font-size:25px}.earn .sub{color:#7E9184}
+  .grid{gap:9px;margin-bottom:12px}.tile{background:var(--tile);border-color:var(--line);border-radius:15px;padding:14px}
+  .tile .n{font-family:'Manrope';font-size:29px;color:#F5FAF5}.tile .t{color:var(--muted);font-size:10px}.tile.g .n{color:var(--green)}.tile.o .n{color:var(--orange)}
+  #countersGrid .tile:nth-child(2) .n{color:#4A91FF}#countersGrid .tile:nth-child(4) .n{color:#FF5964}#stickerTile .n{color:#A96BFF}
+  .editctl button{background:#0F1612;border-color:var(--line);color:var(--ink)}
+  .foot{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:3px 0 10px;font-size:10px}.foot span{background:#151C18;border:1px solid var(--line);border-radius:10px;padding:8px;color:var(--muted)}.foot b{display:block;margin:4px 0 0;color:var(--ink);font-family:'Manrope';font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .shift-task{width:100%;display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:11px;align-items:center;text-align:left;background:#151C18;border:1px solid var(--line);border-radius:15px;padding:13px;margin:0 0 12px;color:var(--ink);font-family:'Manrope';cursor:pointer}
+  .shift-task .task-ic{width:34px;height:34px;border-radius:10px;background:#102845;color:#4A91FF;display:grid;place-items:center;font-weight:900}.shift-task .task-copy{min-width:0}.shift-task .task-kicker{display:block;color:#4A91FF;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.shift-task .task-name{display:block;font-size:13px;font-weight:800;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shift-task .task-note{display:block;color:var(--muted);font-size:10px;margin-top:3px}.shift-task .task-go{color:var(--muted);font-size:20px}
+  .bigbtn,.save{font-family:'Manrope';border-radius:14px;min-height:52px;padding:14px;font-size:15px}.bigbtn.start,.save{background:var(--green);color:#07120A}.bigbtn.lunch{background:#2A2311;color:#FFD16B;border-color:#5A4614}.bigbtn.lunch.on{background:#49370D;color:#FFE19A;border-color:#9B7217}.bigbtn.stop{background:#171E1A;border:1px solid rgba(255,89,100,.28);color:#F5F8F5}
+  .empty .big,.formhead,.rk-title{font-family:'Manrope';color:var(--ink)}.empty .sm,.hint{color:var(--muted)}.lastcard,.rank,.more-item,.soon .card,.admin-row,.task-upload-row{background:#151C18;border-color:var(--line)}
+  .lastcard .l,.more-item .tx i,.soon .card .td{color:var(--muted)}.lastcard .r,.more-item .tx b,.soon .card .tn{color:var(--ink)}
+  .tinput,.amount,.edit-cmt textarea{background:#151C18;border-color:var(--line);color:var(--ink)}.tinput::placeholder,.edit-cmt textarea::placeholder{color:#66736B}.field>label{color:var(--ink)}
+  .seg{background:#151C18}.seg button{color:var(--muted)}.seg button.on{background:#253029;color:#fff;box-shadow:none}.slider{background:#334039}
+  .badge-lvl{box-shadow:none}.bar{background:#202923}.xp-line{color:var(--muted)}.xp-line b{color:var(--ink)}.rank.cur{background:#0E2B18;border-color:rgba(49,216,67,.40)}.rank .rn{color:var(--ink)}
+  .htotal{background:#0A2113;border:1px solid rgba(49,216,67,.22)}.hrow{border-color:var(--line)}.hrow .d{color:var(--ink)}
+  .more-item{color:var(--ink)}.more-item .ic{width:38px;height:38px;border-radius:11px;background:#1C2620;display:grid;place-items:center;font-size:18px}.soon .card{opacity:.52}
+  .admin-login,.admin-history-box,.edit-cmt{background:#0E1511;border-color:var(--line)}.admin-city,.period-box,.admin-row.active{background:#101D14;border-color:var(--line)}
+  .my-task-card,.my-task-detail,.my-task-actions{background:#151C18;border-color:var(--line);color:var(--ink)}.task-api-state{color:var(--muted)}
+  .tabbar{max-width:430px;left:50%;right:auto;transform:translateX(-50%);width:100%;grid-template-columns:repeat(3,minmax(0,1fr));background:rgba(8,14,10,.96);border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;padding:7px 5px calc(7px + env(safe-area-inset-bottom));box-shadow:0 -14px 36px rgba(0,0,0,.28)}
+  .tab{font-family:'Manrope';font-size:9px;gap:3px;padding:7px 2px;color:#7F8D84}.tab .ti{font-size:18px}.tab.on{color:var(--green);background:#102117}.tab{position:relative}.task-count.nav-count{position:absolute;top:2px;left:calc(50% + 7px);min-width:16px;height:16px;border-radius:99px;background:var(--red);color:#fff;display:grid;place-items:center;font-size:8px;font-weight:900;padding:0 4px}
+  .toast{background:#F1F6F2;color:#0A120D;border-radius:12px;font-size:12px;box-shadow:0 14px 34px rgba(0,0,0,.38)}
+  .center{color:#E4EEE6}.center .sm{color:#8B9890}
+  @media(min-width:600px){body{padding-top:20px}.panel{padding:18px}.tabbar{bottom:0}}
+  @media(max-width:360px){body{padding-left:7px;padding-right:7px}.panel{padding:14px}.earn .val{font-size:36px}.tile{padding:12px}}
+  .planned-shift-card{background:#111B15;border:1px solid rgba(49,216,67,.28);border-radius:16px;padding:14px;margin-bottom:12px}.planned-shift-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.planned-shift-kicker{color:var(--green);font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.planned-shift-title{font-size:15px;font-weight:900;margin-top:4px}.planned-shift-meta{color:var(--muted);font-size:11px;line-height:1.5;margin-top:5px}.planned-shift-timer{margin:12px 0 0;padding:10px;border-radius:11px;background:#0B2715;color:#8EF09B;text-align:center;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}.planned-shift-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.planned-shift-buttons button{border:1px solid var(--line);border-radius:11px;background:#18231C;color:var(--ink);min-height:42px;padding:9px;font-size:11px;font-weight:850}.planned-shift-editor{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.planned-shift-editor .field{margin-bottom:9px}.planned-shift-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.planned-shift-editor-actions button{min-height:43px;border-radius:11px;border:1px solid var(--line);font-weight:850}.planned-shift-editor-actions .cancel{background:#18231C;color:var(--ink)}.planned-shift-editor-actions .save-plan{background:var(--green);color:#07120A;border-color:var(--green)}
+</style>
+</head>
+<body>
+<!-- Невидимое числовое поле-«трамплин»: числовая клавиатура на Android
+     подключается надёжно, после неё переключение на текстовое поле сохраняет
+     живую связь с клавиатурой (наблюдение из практики: после поля времени
+     русский начинает вводиться). -->
+<input id="kbPrimer" type="text" inputmode="numeric" autocomplete="off" tabindex="-1" aria-hidden="true"
+  style="position:fixed;bottom:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;background:transparent;pointer-events:none;z-index:-1">
+
+  <!-- Загрузка -->
+  <div id="loading" class="center">
+    <div class="spin"></div>
+    <div class="sm">Загружаю смену…</div>
+  </div>
+
+  <!-- Ошибка авторизации -->
+  <div id="autherr" class="center hidden">
+    <div class="big">Откройте через бота</div>
+    <div class="sm">Это приложение работает только внутри Telegram —<br>по кнопке под отчётом или в закрепе темы.</div>
+  </div>
+
+  <!-- Обязательная регистрация (первый вход) -->
+  <div id="regScreen" class="hidden">
+    <div class="panel">
+      <div class="ava" style="margin:0 auto 16px"><b>b<i>b</i>.</b></div>
+      <div class="formhead" style="justify-content:center">Давай познакомимся</div>
+      <p class="hint" style="text-align:center">Чтобы открывать смену и считать заработок, укажи имя и роль. Всё можно поменять потом в Настройках.</p>
+      <div class="err" id="regErr"></div>
+      <div class="field">
+        <label>Имя (Фамилия И.О.)</label>
+        <input class="tinput" id="regName" placeholder="Понамарев К.А." />
+      </div>
+      <div class="field">
+        <label>Роль</label>
+        <div class="seg" id="regRoleSeg">
+          <button data-role="скаут">Скаут</button>
+          <button data-role="водитель">Водитель</button>
+          <button data-role="чарджер">Чарджер</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Город</label>
+        <select class="tinput" id="regCity"></select>
+      </div>
+      <button class="save" id="btnRegister">Продолжить</button>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <!-- ================= ВКЛАДКА: СМЕНА ================= -->
+    <div id="tab-shift" class="page">
+      <div class="panel">
+        <div class="head">
+          <div class="ava"><b>b<i>b</i>.</b></div>
+          <div class="who">
+            <div class="name" id="uName">—</div>
+            <div class="role" id="uRole">—</div>
+          </div>
+        </div>
+
+        <div class="status" id="statusBox">
+          <span class="dot"></span>
+          <span class="st-lbl">Смена</span>
+          <span class="st-val" id="statusVal">не активна</span>
+        </div>
+
+        <div class="planned-shift-card hidden" id="plannedShiftCard">
+          <div class="planned-shift-top">
+            <div>
+              <div class="planned-shift-kicker" id="plannedShiftKicker">Плановая смена</div>
+              <div class="planned-shift-title" id="plannedShiftTitle">—</div>
+              <div class="planned-shift-meta" id="plannedShiftMeta">—</div>
+            </div>
+          </div>
+          <div class="planned-shift-timer" id="plannedShiftTimer">—</div>
+          <div class="planned-shift-buttons" id="plannedShiftButtons">
+            <button id="editPlannedStart">Изменить начало</button>
+            <button id="editPlannedEnd">Продлить смену</button>
+          </div>
+          <div class="planned-shift-editor hidden" id="plannedShiftEditor">
+            <div class="field"><label id="plannedShiftEditLabel">Новое время</label><input class="tinput time" id="plannedShiftEditTime" inputmode="numeric" placeholder="09:20" maxlength="5"></div>
+            <div class="planned-shift-editor-actions"><button class="cancel" id="plannedShiftEditCancel">Отмена</button><button class="save-plan" id="plannedShiftEditSave">Сохранить</button></div>
+          </div>
+        </div>
+
+        <!-- Активная смена -->
+        <div id="activeBlock" class="hidden">
+          <div class="earn">
+            <div class="row">
+              <div class="lbl" id="earnLbl">Заработок за смену</div>
+              <div>
+                <div class="val" id="money">0</div>
+                <div class="cur">₽</div>
+              </div>
+            </div>
+            <div class="sub" id="earnSub"></div>
+          </div>
+
+          <!-- Счётчики; «Оклейка» показывается только для смены в Химках. -->
+          <div class="grid" id="countersGrid">
+            <div class="tile">
+              <div class="n" id="cMove">0</div><div class="t">Перемещения</div>
+              <div class="editctl"><button class="minus" data-act="move">−</button><button class="plus" data-act="move">+</button></div>
+            </div>
+            <div class="tile">
+              <div class="n" id="cFix">0</div><div class="t">Поправки</div>
+              <div class="editctl"><button class="minus" data-act="fix">−</button><button class="plus" data-act="fix">+</button></div>
+            </div>
+            <div class="tile g">
+              <div class="n" id="cBat">0</div><div class="t">Замены АКБ</div>
+              <div class="editctl"><button class="minus" data-act="battery">−</button><button class="plus" data-act="battery">+</button></div>
+            </div>
+            <div class="tile o">
+              <div class="n" id="cRep">0</div><div class="t">Ремонт</div>
+              <div class="editctl"><button class="minus" data-act="repair">−</button><button class="plus" data-act="repair">+</button></div>
+            </div>
+            <div class="tile hidden" id="stickerTile">
+              <div class="n" id="cSticker">0</div><div class="t">Оклейка</div>
+              <div class="editctl"><button class="minus" data-act="sticker">−</button><button class="plus" data-act="sticker">+</button></div>
+            </div>
+            <div class="tile">
+              <div class="n" id="cToSc">0</div><div class="t">Привёз на СЦ</div>
+              <div class="editctl"><button class="minus" data-act="to_sc">−</button><button class="plus" data-act="to_sc">+</button></div>
+            </div>
+            <div class="tile">
+              <div class="n" id="cFromSc">0</div><div class="t">Вывез с СЦ</div>
+              <div class="editctl"><button class="minus" data-act="from_sc">−</button><button class="plus" data-act="from_sc">+</button></div>
+            </div>
+          </div>
+
+          <div class="foot" style="margin-bottom:10px">
+            <span>Время <b id="fTime">0:00</b></span>
+            <span>Район <b id="fDist">—</b></span>
+            <span>Город <b id="fCity">—</b></span>
+          </div>
+
+          <button class="bigbtn lunch" id="btnLunch">🍽 Обед</button>
+          <button class="bigbtn stop" id="btnStopForm"><span>■</span> Закончить смену</button>
+        </div>
+
+        <!-- Нет активной смены -->
+        <div id="idleBlock" class="hidden">
+          <div class="empty">
+            <div class="big">Смена не открыта</div>
+            <div class="sm">Нажми кнопку — бот сам отправит отчёт<br>в тему «Отчёты», как по команде.</div>
+          </div>
+          <div class="lastcard" id="lastCard">
+            <div class="l">Прошлая смена<br><span id="lastDate">—</span></div>
+            <div class="r" id="lastEarned">0 ₽</div>
+          </div>
+          <button class="bigbtn start" id="btnStartForm">▶ Начать смену</button>
+        </div>
+      </div>
+
+      <!-- Форма СТАРТА -->
+      <div class="panel hidden" id="startForm">
+        <div class="formhead">Начало смены <span class="x" data-hide="startForm">✕</span></div>
+        <div class="err" id="startErr"></div>
+        <div class="field">
+          <label>Время начала</label>
+          <input class="tinput time" id="startTime" inputmode="numeric" placeholder="09:00" maxlength="5">
+        </div>
+        <div class="field">
+          <label>Район / зона</label>
+          <input class="tinput" id="startDistrict" placeholder="фмр">
+        </div>
+        <div class="field">
+          <div class="toggle-row">
+            <div>
+              <label style="margin:0">Авто-закрытие смены</label>
+              <div class="toggle-desc">Бот сам закроет смену, если забудешь. Можно закрыть раньше вручную.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="autoCloseToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="field" id="autoCloseHoursField">
+          <label>Закрыть через</label>
+          <div class="seg" id="autoCloseSeg">
+            <button data-h="8">8 часов</button>
+            <button data-h="10">10 часов</button>
+            <button data-h="12">12 часов</button>
+          </div>
+        </div>
+        <button class="save" id="btnStart">Открыть смену</button>
+      </div>
+
+      <!-- Форма СТОПА -->
+      <div class="panel hidden" id="stopForm">
+        <div class="formhead">Конец смены <span class="x" data-hide="stopForm">✕</span></div>
+        <div class="err" id="stopErr"></div>
+        <div class="field">
+          <label>Время окончания</label>
+          <input class="tinput time" id="stopTime" inputmode="numeric" placeholder="18:00" maxlength="5">
+        </div>
+        <div class="field">
+          <label>Комментарий (необязательно)</label>
+          <input class="tinput" id="stopComment" placeholder="Всё хорошо">
+        </div>
+        <button class="save" id="btnStop">Закрыть смену</button>
+      </div>
+    </div>
+
+    <!-- ================= ВКЛАДКА: ПРОФИЛЬ ================= -->
+    <div id="tab-rating" class="page hidden">
+      <div class="panel">
+        <div class="badge-lvl" id="badgeLvl"><b id="rLvl">1</b></div>
+        <div class="rk-title"><span id="rIcon">🥾</span> <span id="rTitle">Пеший</span></div>
+        <div class="rk-sub">Уровень <span id="rLvl2">1</span> · опыт за перемещения, поправки и замены</div>
+        <div class="bar"><span id="rBar" style="width:0%"></span></div>
+        <div class="xp-line"><span><b id="rXp">0</b> XP</span><span>до уровня: <b id="rNeed">100</b></span></div>
+
+        <!-- Доход за текущий месяц -->
+        <div class="htotal" style="margin:0 0 10px">
+          <span class="l">Доход за <span id="monthName">месяц</span></span>
+          <span class="r" id="monthEarned">0 ₽</span>
+        </div>
+
+        <div class="grid" style="margin-bottom:0">
+          <div class="tile g"><div class="n" id="rEarned">0</div><div class="t">Всего ₽</div></div>
+          <div class="tile"><div class="n" id="rShifts">0</div><div class="t">Смен</div></div>
+          <div class="tile"><div class="n" id="rActions">0</div><div class="t">Действий</div></div>
+          <div class="tile o"><div class="n" id="rTitleShort" style="font-size:20px">—</div><div class="t">Звание</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="formhead">История смен</div>
+        <p class="hint" style="margin-bottom:10px">Лишнюю смену можно удалить — она исчезнет из статистики, а её отчёт — из темы «Отчёты».</p>
+        <div class="htotal" style="margin-top:0"><span class="l" id="hTotalLabel">Всего заработано</span><span class="r" id="hTotal">0 ₽</span></div>
+        <div id="hList"><div class="hempty">Загружаю…</div></div>
+      </div>
+    </div>
+
+    <!-- ================= ВКЛАДКА: НАСТРОЙКИ ================= -->
+    <div id="tab-settings" class="page hidden">
+      <div class="panel">
+        <div class="formhead">Настройки</div>
+        <p class="hint">Часовой пояс берётся из настроек выбранного города. Оплата — на расчёт заработка будущих смен (закрытые не пересчитываются).</p>
+
+        <div class="field">
+          <label>Часовой пояс города</label>
+          <select class="tinput" id="tzSelect" disabled>
+            <option value="2">Калининград (UTC+2)</option>
+            <option value="3" selected>Москва · Краснодар · Ставрополь (UTC+3)</option>
+            <option value="4">Самара (UTC+4)</option>
+            <option value="5">Екатеринбург (UTC+5)</option>
+            <option value="6">Омск (UTC+6)</option>
+            <option value="7">Новосибирск · Красноярск (UTC+7)</option>
+            <option value="8">Иркутск (UTC+8)</option>
+            <option value="9">Якутск (UTC+9)</option>
+            <option value="10">Владивосток (UTC+10)</option>
+            <option value="11">Магадан (UTC+11)</option>
+            <option value="12">Камчатка (UTC+12)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Город по умолчанию</label>
+          <select class="tinput" id="citySelect"></select>
+        </div>
+
+        <div class="field">
+          <label>Режим редактирования</label>
+          <div class="toggle-row">
+            <span class="toggle-desc">Показать кнопки −/+ у счётчиков на вкладке «Смена», чтобы вручную поправить действия. Выключи, когда не нужно.</span>
+            <label class="switch"><input type="checkbox" id="editModeToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Распознавание скриншотов <span style="opacity:.6">· эксперимент</span></label>
+          <div class="toggle-row">
+            <span class="toggle-desc">Бот сам считает номер байка и действие со скриншота техприложения: «На линии» — перемещение, «Ремонт» — перемещение и ремонт. Работает, только когда в сообщении нет текста с действиями. Пока тестируем — можно выключить в любой момент.</span>
+            <label class="switch"><input type="checkbox" id="photoParseToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Совместимый ввод клавиатуры</label>
+          <div class="toggle-row">
+            <span class="toggle-desc">Лечит зависание клавиатуры на некоторых Android: первый тап по текстовому полю сначала «будит» её как числовую. Если ввод работает и без этого — можно выключить.</span>
+            <label class="switch"><input type="checkbox" id="kbCompatToggle"><span class="slider"></span></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Как считать оплату</label>
+          <div class="seg" id="payTypeSeg">
+            <button data-pt="hourly" disabled>Почасовая</button>
+            <button data-pt="salary" disabled>Оклад</button>
+            <button data-pt="piece" disabled>Сделка</button>
+          </div>
+          <div class="hint">Тип оплаты и ставку устанавливает руководитель в CRM.</div>
+        </div>
+
+        <div class="field">
+          <label id="amtLabel">Ставка</label>
+          <div class="amount">
+            <input id="amtInput" type="number" inputmode="decimal" min="0" step="10" value="350" readonly />
+            <span class="suf" id="amtSuf">₽ / час</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Имя (Фамилия И.О.)</label>
+          <input class="tinput" id="nameInput" placeholder="Понамарев К.А." />
+        </div>
+
+        <div class="field">
+          <label>Роль</label>
+          <div class="seg" id="roleSeg">
+            <button data-role="скаут">Скаут</button>
+            <button data-role="водитель">Водитель</button>
+            <button data-role="чарджер">Чарджер</button>
+          </div>
+        </div>
+
+        <button class="save" id="saveSettings">Сохранить</button>
+        <div id="buildVersion" style="text-align:center;color:var(--muted);font-size:11px;margin-top:12px"></div>
+      </div>
+
+    </div>
+
+    <!-- ================= ВКЛАДКА: ЕЩЁ ================= -->
+    <div id="tab-more" class="page hidden">
+
+      <!-- главный экран «Ещё»: список кнопок -->
+      <div class="panel" id="morePanel">
+        <div class="formhead">Ещё</div>
+        <div class="more-list">
+          <button class="more-item hidden" id="btnMyTasks" aria-hidden="true" tabindex="-1">
+            <span class="ic">✅</span>
+            <span class="tx"><b>Мои задания</b><i>Задания руководителя и результаты</i></span>
+            <span class="task-count hidden" id="myTasksBadge">0</span>
+            <span class="chev">›</span>
+          </button>
+          <button class="more-item" id="btnMySchedule">
+            <span class="ic">🗓️</span>
+            <span class="tx"><b>Мой график</b><i>Смены, подработки, время и районы по декадам</i></span>
+            <span class="task-count hidden" id="myScheduleBadge">0</span>
+            <span class="chev">›</span>
+          </button>
+          <button class="more-item" id="btnSettingsOpen">
+            <span class="ic">⚙</span>
+            <span class="tx"><b>Настройки</b><i>Имя, роль, город, ставка и исправление счётчиков</i></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="more-item" id="btnAdminOpen">
+            <span class="ic">▦</span>
+            <span class="tx"><b>CRM руководителя</b><i>Анализ, календарь, задания и команда</i></span>
+            <span class="chev">›</span>
+          </button>
+        </div>
+        <div class="admin-login hidden" id="adminLogin">
+          <div class="err" id="adminErr"></div>
+          <input class="tinput" id="adminPassword" type="password" autocomplete="current-password" placeholder="Пароль админки">
+          <button class="save" id="adminLoginBtn" style="margin-top:9px">Открыть CRM</button>
+        </div>
+        <p class="hint" style="margin-top:16px">Скоро добавим ещё:</p>
+        <div class="soon">
+          <div class="card"><div class="ic">🏆</div><div><div class="tn">Топ недели</div><div class="td">Рейтинг сотрудников по перемещениям</div></div></div>
+          <div class="card"><div class="ic">🗺️</div><div><div class="tn">Карта зон</div><div class="td">Районы и загрузка по городу</div></div></div>
+        </div>
+      </div>
+
+      <!-- меню админки: выбор из трёх окон -->
+      <div class="panel hidden" id="adminMenu">
+        <div class="admin-head">
+          <div class="formhead">Админка</div>
+          <button class="mini" id="adminLogout">Выйти</button>
+        </div>
+        <div class="admin-city"><span>Доступ только к своему городу</span><b id="adminCityName">—</b></div>
+        <div class="period-box">
+          <div class="period-row">
+            <div>
+              <div class="period-lbl">☀️ Декада · дневные</div>
+              <div class="period-val" id="periodInfoDay">—</div>
+            </div>
+            <button class="mini period-btn" id="btnNewPeriodDay">Новая декада</button>
+          </div>
+          <div class="period-row" style="margin-top:9px">
+            <div>
+              <div class="period-lbl">🌙 Декада · ночные</div>
+              <div class="period-val" id="periodInfoNight">—</div>
+            </div>
+            <button class="mini period-btn" id="btnNewPeriodNight">Новая декада</button>
+          </div>
+          <div class="period-hint" id="periodHint">Дневные — старт смены с 05:00 до 17:00, ночные — с 17:00 до 05:00. Обнуление действует только на свою группу. История смен сохраняется.</div>
+        </div>
+        <div class="admin-note" id="adminUpdated"></div>
+        <div class="more-list" style="margin-top:12px">
+          <button class="more-item" id="btnOpenCrm">
+            <span class="ic">📊</span>
+            <span class="tx"><b>Открыть CRM</b><i>Календарь, задания, команда и контроль</i></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="more-item" data-admin-view="adminViewOpen">
+            <span class="ic">🟢</span>
+            <span class="tx"><b>Открытые смены</b><i>Кто сейчас на смене — через бота и без него</i></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="more-item" data-admin-view="adminViewHistory">
+            <span class="ic">🗂️</span>
+            <span class="tx"><b>История смен за декаду</b><i>Дневные и ночные сотрудники, их часы и смены</i></span>
+            <span class="chev">›</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- окно 1: сотрудники сегодня -->
+      <div class="panel hidden" id="adminViewOpen">
+        <div class="admin-head">
+          <button class="mini admin-back">← Назад</button>
+          <div class="formhead">Сотрудники</div>
+          <button class="mini admin-reload">Обновить</button>
+        </div>
+        <div class="admin-note" id="adminOpenPeriod"></div>
+        <div class="admin-section">Сотрудники сегодня · на смене</div>
+        <div class="admin-role-groups" id="adminOpen"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">Сотрудники сегодня · завершили</div>
+        <div class="admin-role-groups" id="adminClosed"><div class="hempty">Загружаю…</div></div>
+      </div>
+
+      <!-- окно 2: история смен за декаду (без сумм денег) -->
+      <div class="panel hidden" id="adminViewHistory">
+        <div class="admin-head">
+          <button class="mini admin-back">← Назад</button>
+          <div class="formhead">История смен за декаду</div>
+          <button class="mini admin-reload">Обновить</button>
+        </div>
+        <p class="hint">Часы и смены за текущую декаду каждой группы. Зарплата = часы × ставка. Нажми на сотрудника, чтобы открыть его смены. Суммы заработка здесь не показываются.</p>
+        <div class="admin-note" id="adminPeriodSummary"></div>
+        <div class="admin-section">☀️ Дневные · за декаду</div>
+        <div class="admin-role-groups" id="adminPeriodDay"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-section">🌙 Ночные · за декаду</div>
+        <div class="admin-role-groups" id="adminPeriodNight"><div class="hempty">Загружаю…</div></div>
+        <div class="admin-history-box hidden" id="adminHistoryBox">
+          <div class="admin-head">
+            <div class="formhead" id="adminHistoryTitle">История смен</div>
+            <button class="mini" id="adminHistoryClose">Закрыть</button>
+          </div>
+          <div class="admin-list" id="adminHistory"><div class="hempty">Загружаю…</div></div>
+        </div>
+        <div class="admin-section">Все сотрудники города</div>
+        <div class="admin-role-groups" id="adminEmployees"><div class="hempty">Загружаю…</div></div>
+      </div>
+
+      <!-- Личный кабинет заданий сотрудника. От смен и старой админки изолирован. -->
+      <div class="panel hidden" id="myTasksView">
+        <div class="admin-head">
+          <button class="mini" id="myTasksBack">← Назад</button>
+          <div class="formhead">Мои задания</div>
+          <button class="mini" id="myTasksReload">Обновить</button>
+        </div>
+        <div class="task-api-error hidden" id="myTasksError"></div>
+        <div id="myTasksList"><div class="task-api-state">Загружаю задания…</div></div>
+        <div class="hidden" id="myTaskDetail"></div>
+      </div>
+
+      <!-- Личный календарь плановых смен сотрудника. -->
+      <div class="panel hidden" id="myScheduleView">
+        <div class="admin-head">
+          <button class="mini" id="myScheduleBack">← Ещё</button>
+          <div class="formhead">Мой график</div>
+          <button class="mini" id="myScheduleReload">Обновить</button>
+        </div>
+        <div class="task-api-error hidden" id="myScheduleError"></div>
+        <div class="my-schedule-month">
+          <button id="mySchedulePrev" aria-label="Предыдущий месяц">‹</button>
+          <b id="myScheduleMonthTitle">—</b>
+          <button id="myScheduleNext" aria-label="Следующий месяц">›</button>
+        </div>
+        <button class="mini my-schedule-today" id="myScheduleToday">Сегодня</button>
+        <div class="my-schedule-decades" id="myScheduleDecades"></div>
+        <div class="my-schedule-summary" id="myScheduleSummary">Загружаю график…</div>
+        <div class="my-schedule-grid" id="myScheduleGrid"></div>
+        <div id="myScheduleDetail"></div>
+        <div class="my-schedule-updated" id="myScheduleUpdated"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Tab Bar -->
+  <nav class="tabbar hidden" id="tabbar">
+    <button class="tab on" data-tab="shift"><span class="ti">ϟ</span>Смена</button>
+    <button class="tab" data-tab="rating"><span class="ti">◉</span>Профиль</button>
+    <button class="tab" data-tab="more"><span class="ti">≡</span>Ещё</button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+/* Запросы идут на тот же адрес, с которого открыта страница (бот сам её отдаёт). */
+const API_BASE = "";
+
+const tg = window.Telegram ? window.Telegram.WebApp : null;
+const initData = tg ? tg.initData : "";
+
+const PAY = {
+  hourly: { label:"Ставка",                suf:"₽ / час",   earnLbl:"Заработок за смену" },
+  salary: { label:"Оклад за смену",        suf:"₽ / смену", earnLbl:"Оклад за смену" },
+  piece:  { label:"Оплата за одну замену", suf:"₽ / АКБ",   earnLbl:"Заработок (сделка)" },
+};
+const RANK_ICONS = {
+  "Пеший":"🥾","Велик":"🚲","Скутер":"🛵","Молния":"⚡","Гонщик":"🏍️",
+  "Профи":"🏆","Мастер":"🥇","Ас":"💎","Легенда":"👑","Бог Асфальта":"🔥"
+};
+const MONTHS = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+
+let STATE = null;
+let selPayType = "hourly";
+let selRole = "";
+let tick = null;
+let histLoaded = false;
+let stateLoadedAt = Date.now();
+let adminToken = localStorage.getItem('bb_admin_token') || "";
+let adminCityCache = localStorage.getItem('bb_admin_city') || "";
+let adminHistoryRequest = 0;
+let adminHistoryUserId = null;
+let adminHistoryOffset = 0;
+let stateRevision = 0;
+let stateMutationDepth = 0;
+let lunchRequestPending = false;
+let plannedEditMode = '';
+let myScheduleMonth = null;
+let myScheduleDecade = 1;
+let myScheduleSelectedDate = '';
+let myScheduleData = null;
+let myScheduleLoading = false;
+
+/* ---------- утилиты ---------- */
+const $ = id => document.getElementById(id);
+const rub = n => Math.round(n).toLocaleString('ru-RU');
+const esc = value => String(value == null ? '' : value)
+  .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+  .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+function tzOffset(){
+  if(STATE && STATE.city && Number.isFinite(Number(STATE.city.timezone_offset))){
+    return Number(STATE.city.timezone_offset);
+  }
+  return parseInt(localStorage.getItem('bb_tz') || '3', 10);
+}
+function cityOffset(cityId){
+  const city = STATE && (STATE.cities||[]).find(item=>Number(item.id)===Number(cityId));
+  return city ? Number(city.timezone_offset) : tzOffset();
+}
+function nowInTz(offset=tzOffset()){
+  const d = new Date();
+  const utc = d.getTime() + d.getTimezoneOffset()*60000;
+  return new Date(utc + offset*3600000);
+}
+function nowHM(offset=tzOffset()){
+  const d = nowInTz(offset);
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+function serverNowMs(){
+  const value=STATE && ((STATE.shift&&STATE.shift.server_now)||STATE.server_now);
+  if(!value) return Date.now();
+  return Date.parse(value) + (Date.now() - stateLoadedAt);
+}
+function elapsedMin(startAt){
+  if(!startAt) return 0;
+  return Math.max(0, (serverNowMs() - Date.parse(startAt)) / 60000);
+}
+function scheduledNow(){
+  return !!(STATE && STATE.shift && STATE.shift.start_at && serverNowMs() < Date.parse(STATE.shift.start_at));
+}
+function hm(mins){
+  const h = Math.floor(mins/60), m = Math.floor(mins%60);
+  return h + ':' + String(m).padStart(2,'0');
+}
+function countdownText(milliseconds){
+  const total=Math.max(0,Math.floor(milliseconds/1000)),h=Math.floor(total/3600),m=Math.floor(total%3600/60),s=total%60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function plannedDateLabel(value){
+  if(!value)return '—';
+  const date=new Date(`${value}T12:00:00`);
+  return new Intl.DateTimeFormat('ru-RU',{weekday:'short',day:'numeric',month:'long'}).format(date);
+}
+function paintPlannedCountdown(){
+  const plan=STATE&&STATE.planned_shift,el=$('plannedShiftTimer');if(!plan||!el)return;
+  const active=!!(STATE.active&&plan.actual_shift_id),target=Date.parse(active?plan.ends_at:plan.starts_at),left=target-serverNowMs();
+  if(active)el.textContent=left>0?`До автоматического закрытия: ${countdownText(left)}`:'Смена закрывается автоматически…';
+  else el.textContent=left>0?`До автоматического начала: ${countdownText(left)}`:'Смена открывается автоматически…';
+}
+function renderPlannedShift(){
+  const plan=STATE&&STATE.planned_shift,card=$('plannedShiftCard');if(!card)return;
+  if(!plan){card.classList.add('hidden');$('plannedShiftEditor').classList.add('hidden');plannedEditMode='';return}
+  card.classList.remove('hidden');const active=!!(STATE.active&&plan.actual_shift_id),extra=plan.work_kind==='extra';
+  $('plannedShiftKicker').textContent=active?'Автоматическая смена активна':extra?'Запланирована подработка':'Запланирована смена';
+  $('plannedShiftTitle').textContent=`${plannedDateLabel(plan.work_date)} · ${plan.start_time}–${plan.end_time}`;
+  $('plannedShiftMeta').textContent=(plan.district?`Район: ${plan.district}`:'Район пока не выбран')+' · бот откроет и закроет смену сам';
+  $('editPlannedStart').classList.toggle('hidden',!plan.can_edit_start);
+  $('editPlannedEnd').classList.toggle('hidden',!plan.can_edit_end);
+  $('plannedShiftButtons').classList.toggle('hidden',!plan.can_edit_start&&!plan.can_edit_end);
+  paintPlannedCountdown();
+}
+function openPlannedTimeEditor(mode){
+  const plan=STATE&&STATE.planned_shift;if(!plan)return;plannedEditMode=mode;
+  $('plannedShiftEditLabel').textContent=mode==='start'?'Новое время начала':'Новое время окончания';
+  $('plannedShiftEditTime').value=mode==='start'?plan.start_time:plan.end_time;
+  $('plannedShiftEditor').classList.remove('hidden');
+}
+function maskTime(inp){
+  inp.addEventListener('input', ()=>{
+    let v = inp.value.replace(/[^\d]/g,'').slice(0,4);
+    if(v.length >= 3) v = v.slice(0, v.length-2) + ':' + v.slice(-2);
+    inp.value = v;
+  });
+}
+
+async function api(path, opts={}){
+  const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
+  if(mutating){ stateMutationDepth++; stateRevision++; }
+  try{
+    const res = await fetch(API_BASE + path, {
+      ...opts,
+      headers: { 'Authorization':'tma '+initData, 'Content-Type':'application/json', ...(opts.headers||{}) }
+    });
+    let data = null;
+    try{ data = await res.json(); }catch(e){}
+    if(res.status === 401) throw { auth:true };
+    if(!res.ok) throw { message: (data && data.message) || ('Ошибка '+res.status) };
+    return data;
+  }finally{
+    if(mutating){ stateMutationDepth=Math.max(0,stateMutationDepth-1); stateRevision++; }
+  }
+}
+async function adminApi(path, opts={}){
+  const mutating = String(opts.method || 'GET').toUpperCase() !== 'GET';
+  if(mutating){ stateMutationDepth++; stateRevision++; }
+  try{
+    const res = await fetch(path, {
+      ...opts,
+      headers: {
+        'Authorization':'tma '+initData, 'Content-Type':'application/json',
+        'X-Admin-Token':adminToken, ...(opts.headers||{})
+      }
+    });
+    let data = null;
+    try{ data = await res.json(); }catch(e){}
+    if(!res.ok) throw { message:(data && data.message)||('Ошибка '+res.status), status:res.status };
+    return data;
+  }finally{
+    if(mutating){ stateMutationDepth=Math.max(0,stateMutationDepth-1); stateRevision++; }
+  }
+}
+
+/* ---------- расчёт заработка ---------- */
+function earnedNow(){
+  if(!STATE || !STATE.active || !STATE.shift) return 0;
+  if(scheduledNow()) return 0;
+  const amt = STATE.user.pay_amount || 0;
+  const pt  = STATE.user.pay_type;
+  const st  = STATE.shift.stats || {};
+  if(pt === 'salary') return amt;
+  if(pt === 'piece')  return amt * (st.battery || 0);
+  return amt * elapsedMin(STATE.shift.start_at) / 60;
+}
+function paintLunchButton(){
+  const btn = $('btnLunch');
+  if(!btn) return;
+  const shift = STATE && STATE.active && STATE.shift;
+  const onLunch = !!(shift && shift.on_lunch);
+  const waiting = !!(shift && scheduledNow());
+  btn.classList.toggle('on', onLunch);
+  btn.textContent = onLunch ? '✓ Обед — завершить' : '🍽 Обед';
+  btn.disabled = !shift || waiting || lunchRequestPending;
+  if(waiting) btn.textContent = '🍽 Обед — после начала смены';
+}
+function paintMoney(){
+  /* Даже изменение текста вне поля иногда рвёт IME-сессию Telegram Android. */
+  if(isTypingNow() || isFormOpen()) return;
+  if(!(STATE && STATE.active && STATE.shift)) return;
+  $('money').textContent = rub(earnedNow());
+  const waiting = scheduledNow();
+  $('fTime').textContent = waiting ? 'ожидает' : hm(elapsedMin(STATE.shift.start_at));
+  $('statusBox').classList.toggle('wait', waiting);
+  $('statusVal').textContent = waiting ? 'начнётся в '+STATE.shift.start_time : 'активна';
+  paintLunchButton();
+  paintEarnSub();
+}
+function paintEarnSub(){
+  if(!(STATE && STATE.active && STATE.shift)) return;
+  const u=STATE.user;
+  if(scheduledNow()) $('earnSub').textContent = 'Ожидает начала · действия уже считаются';
+  else if(u.pay_type === 'hourly') $('earnSub').textContent = rub(u.pay_amount)+' ₽/час · капает по времени';
+  else if(u.pay_type === 'piece') $('earnSub').textContent = rub(u.pay_amount)+' ₽ за замену АКБ';
+  else $('earnSub').textContent = 'Фикс за выход';
+}
+function startTick(){
+  clearInterval(tick);
+  if(STATE && (STATE.active||STATE.planned_shift)){
+    tick = setInterval(()=>{paintMoney();paintPlannedCountdown()}, 1000);
+  }
+}
+
+/* ---------- рендер ---------- */
+function render(){
+  const u = STATE.user, lv = STATE.level;
+
+  $('uName').textContent = u.name || 'Без имени';
+  const title = lv.title ? ' · «'+lv.title+'»' : '';
+  $('uRole').textContent = (u.role || 'Роль не указана') + title;
+
+  const on = STATE.active && STATE.shift;
+  $('statusBox').classList.toggle('on', !!on);
+  $('statusBox').classList.toggle('wait', !!(on && scheduledNow()));
+  $('statusVal').textContent = on
+    ? (scheduledNow() ? 'начнётся в '+STATE.shift.start_time : 'активна')
+    : 'не активна';
+  renderPlannedShift();
+
+  if(on){
+    $('activeBlock').classList.remove('hidden');
+    $('idleBlock').classList.add('hidden');
+    const s = STATE.shift.stats || {};
+    $('cMove').textContent = s.move || 0;
+    $('cFix').textContent  = s.fix || 0;
+    $('cBat').textContent  = s.battery || 0;
+    $('cRep').textContent  = s.repair || 0;
+    $('cSticker').textContent = s.sticker || 0;
+    const shiftCityName=(STATE.shift.city&&STATE.shift.city.name)||STATE.city.name||'';
+    $('stickerTile').classList.toggle('hidden', shiftCityName!=='Химки');
+    $('cToSc').textContent = s.to_sc || 0;
+    $('cFromSc').textContent = s.from_sc || 0;
+    // Режим редактирования: показать/скрыть кнопки −/+ и обновить их доступность
+    $('countersGrid').classList.toggle('edit-on', !!u.edit_mode);
+    updateEditButtons();
+    $('fDist').textContent = STATE.shift.district || '—';
+    $('fCity').textContent = (STATE.shift.city && STATE.shift.city.name) || STATE.city.name || '—';
+    $('earnLbl').textContent = PAY[u.pay_type].earnLbl;
+    paintLunchButton();
+    paintEarnSub();
+    paintMoney();
+  } else {
+    $('statusBox').classList.remove('wait');
+    $('activeBlock').classList.add('hidden');
+    $('idleBlock').classList.remove('hidden');
+    if(STATE.last){
+      $('lastDate').textContent = STATE.last.date + ' · ' + STATE.last.worked;
+      $('lastEarned').textContent = rub(STATE.last.earned)+' ₽';
+      $('lastCard').classList.remove('hidden');
+    } else $('lastCard').classList.add('hidden');
+  }
+
+  /* Профиль */
+  $('rLvl').textContent = lv.level;
+  $('rLvl2').textContent = lv.level;
+  $('rTitle').textContent = lv.title;
+  $('rIcon').textContent = RANK_ICONS[lv.title] || '🥾';
+  $('rTitleShort').textContent = lv.title;
+  const badge = $('badgeLvl');
+  badge.className = 'badge-lvl ' + (lv.tier || 'bronze');
+  $('rXp').textContent = lv.xp;
+  $('rNeed').textContent = lv.need;
+  $('rBar').style.width = lv.need ? Math.min(100, (lv.xp/lv.need)*100) + '%' : '100%';
+  const lt = STATE.lifetime || {};
+  $('rEarned').textContent = rub(lt.earned || 0);
+  $('rShifts').textContent = lt.shifts || 0;
+  $('rActions').textContent = lt.actions || 0;
+  $('monthName').textContent = STATE.period_started_label
+    ? ('декаду с ' + STATE.period_started_label)
+    : 'декаду';
+  $('monthEarned').textContent = rub(STATE.month_earned || 0) + ' ₽';
+}
+
+function fillCitySelect(id, selected){
+  const select = $(id);
+  if(!select || !STATE) return;
+  const cities = STATE.cities || [];
+  const sig = cities.map(c=>c.id+':'+c.name).join('|')
+    + '#' + String(selected) + '#' + (cities.length <= 1);
+  /* Список не изменился — DOM не трогаем. Перестройка <select> рядом с
+     полем ввода рвёт подключение клавиатуры на Android: тап проходит,
+     а клавиатура не открывается или не принимает буквы. */
+  if(select.dataset.sig === sig) return;
+  select.dataset.sig = sig;
+  select.replaceChildren();
+  cities.forEach(city=>{
+    const option = document.createElement('option');
+    option.value = String(city.id);
+    option.textContent = city.name;
+    option.selected = Number(selected) === Number(city.id);
+    select.appendChild(option);
+  });
+  select.disabled = cities.length <= 1;
+}
+function populateCitySelectors(){
+  const selected = (STATE.user && STATE.user.city_id) || (STATE.city && STATE.city.id);
+  const keep = (id, fallback, preserve) => preserve && $(id).value ? $(id).value : fallback;
+  fillCitySelect('regCity', keep('regCity', selected, !$('regScreen').classList.contains('hidden')));
+  fillCitySelect('citySelect', keep('citySelect', selected, !$('tab-settings').classList.contains('hidden')));
+}
+
+/* ---------- загрузка ---------- */
+async function load({background=false}={}){
+  try{
+    const previousCity = STATE && STATE.city && STATE.city.id;
+    const revisionAtStart = stateRevision;
+    const nextState = await api('/api/state');
+    /* Проверяем повторно ПОСЛЕ сети. Пользователь мог коснуться поля, пока
+       запрос был в пути; применять ответ в этот момент нельзя — WebView
+       потеряет соединение с экранной клавиатурой. */
+    if(background && (revisionAtStart !== stateRevision || stateMutationDepth > 0 ||
+        isTypingNow() || isFormOpen())) return false;
+    const cityChanged = previousCity != null && Number(previousCity) !== Number(nextState.city.id);
+    if(cityChanged) histLoaded = false;
+    STATE = nextState;
+    stateLoadedAt = Date.now();
+    populateCitySelectors();
+    if(cityChanged && !$('tab-rating').classList.contains('hidden')) await loadHistory();
+    $('loading').classList.add('hidden');
+    $('autherr').classList.add('hidden');
+    // Обязательная регистрация: пока нет имени+роли — показываем только экран знакомства
+    if(!STATE.registered){
+      clearInterval(tick);
+      $('app').classList.add('hidden');
+      $('tabbar').classList.add('hidden');
+      $('regScreen').classList.remove('hidden');
+      return true;
+    }
+    $('regScreen').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    $('tabbar').classList.remove('hidden');
+    render();
+    startTick();
+    return true;
+  }catch(e){
+    clearInterval(tick);
+    $('loading').classList.add('hidden');
+    $('regScreen').classList.add('hidden');
+    if(e.auth){
+      $('app').classList.add('hidden');
+      $('tabbar').classList.add('hidden');
+      $('autherr').classList.remove('hidden');
+    } else {
+      toast(e.message || 'Нет связи с ботом');
+    }
+    return false;
+  }
+}
+
+/* ---------- вкладки ---------- */
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick = ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x===t));
+    document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
+    const pageName=t.dataset.tab==='tasks'?'more':t.dataset.tab;
+    $('tab-'+pageName).classList.remove('hidden');
+    if(t.dataset.tab==='tasks'){
+      showAdminScreen('myTasksView');
+      showMyTaskList();
+      loadMyTasks();
+    }else if(t.dataset.tab==='more'){
+      showAdminScreen(null);
+    }
+    if(t.dataset.tab === 'rating' && !histLoaded) loadHistory();
+    if(t.dataset.tab === 'settings') fillSettings();
+    window.scrollTo(0,0);
+  };
+});
+
+$('btnSettingsOpen').onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='more'));
+  document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
+  $('tab-settings').classList.remove('hidden');
+  fillSettings();
+  window.scrollTo(0,0);
+};
+
+/* ---------- смена: формы ---------- */
+document.querySelectorAll('[data-hide]').forEach(x=>{
+  x.onclick = ()=> $(x.dataset.hide).classList.add('hidden');
+});
+maskTime($('startTime')); maskTime($('stopTime')); maskTime($('plannedShiftEditTime'));
+
+/* авто-закрытие: выбранные часы (8/10/12) в форме старта */
+let selAutoHours = 10;
+function syncAutoClose(){
+  const on = $('autoCloseToggle').checked;
+  document.querySelectorAll('#autoCloseSeg button').forEach(b=>b.classList.toggle('on', Number(b.dataset.h)===selAutoHours));
+  $('autoCloseHoursField').style.display = on ? '' : 'none';
+}
+$('autoCloseToggle').onchange = syncAutoClose;
+document.querySelectorAll('#autoCloseSeg button').forEach(b=>{
+  b.onclick = ()=>{ selAutoHours = Number(b.dataset.h); syncAutoClose(); };
+});
+
+$('btnStartForm').onclick = ()=>{
+  $('stopForm').classList.add('hidden');
+  $('startErr').classList.remove('show');
+  /* Время намеренно пустое: сотрудник вводит его сам. Первый тап попадает в
+     числовое поле — числовая клавиатура на Android подключается всегда, и
+     после неё текстовые поля (район и т.д.) принимают русский. */
+  $('startTime').value = '';
+  /* префилл тумблера авто-закрытия из сохранённого дефолта */
+  $('autoCloseToggle').checked = !!(STATE.user && STATE.user.auto_close);
+  selAutoHours = (STATE.user && STATE.user.auto_close_hours) || 10;
+  syncAutoClose();
+  $('startForm').classList.remove('hidden');
+  /* Прокрутку не делаем: любое движение экрана перед тапом по полю
+     ломает открытие клавиатуры на Android. Поле браузер покажет сам. */
+};
+$('btnStopForm').onclick = ()=>{
+  $('startForm').classList.add('hidden');
+  $('stopErr').classList.remove('show');
+  $('stopTime').value = nowHM();
+  $('stopComment').value = '';
+  $('stopForm').classList.remove('hidden');
+  /* Прокрутку не делаем — см. форму начала смены. */
+};
+$('editPlannedStart').onclick=()=>openPlannedTimeEditor('start');
+$('editPlannedEnd').onclick=()=>openPlannedTimeEditor('end');
+$('plannedShiftEditCancel').onclick=()=>{$('plannedShiftEditor').classList.add('hidden');plannedEditMode=''};
+$('plannedShiftEditSave').onclick=async()=>{
+  const plan=STATE&&STATE.planned_shift,time=$('plannedShiftEditTime').value.trim();
+  if(!plan||!plannedEditMode)return;
+  if(!/^\d{1,2}:\d{2}$/.test(time))return toast('Введите время в формате ЧЧ:ММ');
+  const button=$('plannedShiftEditSave');button.disabled=true;button.textContent='Сохраняю…';
+  try{
+    const field=plannedEditMode==='start'?'start_time':'end_time';
+    await api(`/api/planned-shifts/${plan.plan_id}`,{method:'PATCH',body:JSON.stringify({[field]:time})});
+    $('plannedShiftEditor').classList.add('hidden');plannedEditMode='';
+    toast(field==='start_time'?'Начало перенесено, окончание сдвинуто на то же время':'Автоматическое закрытие перенесено');
+    await load();
+  }catch(e){toast(e.message||'Не удалось изменить время')}finally{button.disabled=false;button.textContent='Сохранить'}
+};
+
+$('btnLunch').onclick = async ()=>{
+  if(lunchRequestPending) return;
+  if(!(STATE && STATE.active && STATE.shift)) return toast('Нет открытой смены');
+  if(scheduledNow()) return toast('Обед можно отметить после начала смены');
+  const next = !STATE.shift.on_lunch;
+  lunchRequestPending = true;
+  paintLunchButton();
+  try{
+    const result = await api('/api/shift/lunch', {
+      method:'POST', body:JSON.stringify({active:next})
+    });
+    STATE.shift.on_lunch = !!result.on_lunch;
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    paintLunchButton();
+    if(result.report_updated === false){
+      toast('Статус сохранён, но Telegram-отчёт сейчас не обновился');
+    }else{
+      toast(next ? 'В отчёте отмечено: сейчас обед' : 'Отметка об обеде снята');
+    }
+  }catch(e){
+    toast(e.message || 'Не удалось обновить статус обеда');
+  }finally{
+    lunchRequestPending = false;
+    paintLunchButton();
+  }
+};
+
+function showErr(id, msg){ const el=$(id); el.textContent=msg; el.classList.add('show'); }
+
+$('btnStart').onclick = async ()=>{
+  const t = $('startTime').value.trim();
+  if(!/^\d{1,2}:\d{2}$/.test(t)) return showErr('startErr','Время в формате ЧЧ:ММ, например 09:00');
+  if(STATE && STATE.active) return showErr('startErr','Смена уже открыта.');
+  const btn = $('btnStart'); btn.disabled = true; btn.textContent='Отправляю…';
+  try{
+    const result = await api('/api/shift/start', { method:'POST', body: JSON.stringify({
+      time: t, district: $('startDistrict').value.trim(), city_id: STATE.user.city_id,
+      auto_close: $('autoCloseToggle').checked, auto_close_hours: selAutoHours
+    })});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    $('startForm').classList.add('hidden');
+    toast(result.scheduled
+      ? `Смена начнётся в ${t} — действия уже считаются`
+      : 'Смена открыта — отчёт в теме «Отчёты»');
+    await load();
+  }catch(e){
+    showErr('startErr', e.message || 'Не получилось. Попробуй ещё раз.');
+  }finally{
+    btn.disabled=false; btn.textContent='Открыть смену';
+  }
+};
+
+$('btnStop').onclick = async ()=>{
+  const t = $('stopTime').value.trim();
+  if(!/^\d{1,2}:\d{2}$/.test(t)) return showErr('stopErr','Время в формате ЧЧ:ММ, например 18:00');
+  if(!(STATE && STATE.active)) return showErr('stopErr','Нет открытой смены.');
+  const btn = $('btnStop'); btn.disabled = true; btn.textContent='Отправляю…';
+  try{
+    await api('/api/shift/stop', { method:'POST', body: JSON.stringify({
+      time: t, comment: $('stopComment').value.trim()
+    })});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    $('stopForm').classList.add('hidden');
+    histLoaded = false;
+    toast('Смена закрыта и записана в историю');
+    await load();
+  }catch(e){
+    showErr('stopErr', e.message || 'Не получилось. Попробуй ещё раз.');
+  }finally{
+    btn.disabled=false; btn.textContent='Закрыть смену';
+  }
+};
+
+/* ---------- редактирование счётчиков (режим редактирования) ---------- */
+// Подписи и id ячеек по типу действия
+const COUNTER_LABELS = {
+  move:'Перемещения', fix:'Поправки', repair:'Ремонт',
+  battery:'Замены АКБ', sticker:'Оклейка', to_sc:'Привёз на СЦ', from_sc:'Вывез с СЦ'
+};
+const COUNTER_ELS = {
+  move:'cMove', fix:'cFix', repair:'cRep',
+  battery:'cBat', sticker:'cSticker', to_sc:'cToSc', from_sc:'cFromSc'
+};
+
+// Нативное подтверждение Telegram (с откатом на обычный confirm вне Telegram)
+function confirmAction(msg, cb){
+  if(tg && tg.showConfirm){
+    tg.showConfirm(msg, ok => { if(ok) cb(); });
+  } else if(window.confirm(msg)){
+    cb();
+  }
+}
+
+// Блокируем «−», когда счётчик уже 0 — нельзя уйти в минус
+function updateEditButtons(){
+  const s = (STATE && STATE.shift && STATE.shift.stats) || {};
+  document.querySelectorAll('#countersGrid .editctl button.minus').forEach(b=>{
+    b.disabled = (s[b.dataset.act] || 0) <= 0;
+  });
+}
+
+async function editAction(atype, delta, btn){
+  btn.disabled = true;
+  try{
+    await api('/api/action/add', { method:'POST', body: JSON.stringify({ action_type: atype, delta })});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+    // Оптимистично обновляем число (не ниже 0), сервер догонит при следующем load()
+    const el = $(COUNTER_ELS[atype]);
+    let v = (parseInt(el.textContent)||0) + delta;
+    if(v < 0) v = 0;
+    el.textContent = v;
+    if(STATE && STATE.shift && STATE.shift.stats){
+      STATE.shift.stats[atype] = Math.max(0, (STATE.shift.stats[atype]||0) + delta);
+    }
+    updateEditButtons();
+  }catch(e){
+    toast(e.message || 'Не получилось, попробуй ещё раз');
+  }finally{
+    btn.disabled = false;
+    updateEditButtons();
+  }
+}
+
+document.querySelectorAll('#countersGrid .editctl button').forEach(b=>{
+  b.onclick = ()=>{
+    const atype = b.dataset.act;
+    const delta = b.classList.contains('minus') ? -1 : 1;
+    const label = COUNTER_LABELS[atype] || atype;
+    const word = delta > 0 ? 'Добавить' : 'Убрать';
+    confirmAction(`${word} 1 к «${label}»?`, ()=> editAction(atype, delta, b));
+  };
+});
+
+/* ---------- ввод текста: не мешаем набирать (важно для кириллицы) ---------- */
+/* Поля фокусирует только сам WebView по настоящему касанию. Мы не вызываем
+   preventDefault/focus/scroll и лишь блокируем фоновые перерисовки. Намерение
+   касания запоминается чуть раньше focusin: так ответ уже начатого fetch не
+   успеет перестроить DOM между первым тапом и подключением Android IME. */
+let inputIntentUntil = 0;
+let composingText = false;
+function isTextEditor(el){
+  if(!el || !el.tagName) return false;
+  return (el.tagName === 'INPUT' && el.type !== 'checkbox') || el.tagName === 'TEXTAREA';
+}
+function rememberInputIntent(ev){
+  if(isTextEditor(ev.target)) inputIntentUntil = Date.now() + 1500;
+}
+document.addEventListener('pointerdown', rememberInputIntent, true);
+document.addEventListener('touchstart', rememberInputIntent, {capture:true, passive:true});
+document.addEventListener('focusout', ev=>{
+  if(isTextEditor(ev.target)) inputIntentUntil = Date.now() + 700;
+}, true);
+document.addEventListener('compositionstart', ()=>{ composingText = true; }, true);
+document.addEventListener('compositionend', ()=>{
+  composingText = false;
+  inputIntentUntil = Date.now() + 700;
+}, true);
+function isTypingNow(){
+  return composingText || Date.now() < inputIntentUntil || isTextEditor(document.activeElement);
+}
+
+/* ---------- совместимый ввод: «трамплин» через числовую клавиатуру ----------
+   На части Android-устройств Telegram теряет связь текстовой клавиатуры с
+   полем: первый тап — курсор без клавиатуры, второй — клавиатура без ввода.
+   Числовая клавиатура при этом подключается всегда (поля времени работают).
+   Поэтому первый тап по текстовому полю мы направляем в невидимое числовое
+   поле — прямо в момент жеста, клавиатура открывается честно, — а через миг
+   переводим фокус в нужное поле: клавиатура уже открыта, Android просто
+   меняет раскладку, связь остаётся живой.
+   Как только в сессии прошла первая буква — трамплин отключается совсем.
+   Выключатель: Настройки → «Совместимый ввод клавиатуры». */
+let kbCompat = (localStorage.getItem('bb_kb_compat') || '1') === '1';
+let imeProven = false;      // в этой сессии ввод уже точно работает
+let primerTries = 0;        // предохранитель: не больше 2 попыток
+let primerBusy = false;
+
+document.addEventListener('input', ev=>{
+  if(isTextEditor(ev.target) && ev.target.id !== 'kbPrimer') imeProven = true;
+}, true);
+document.addEventListener('compositionstart', ev=>{
+  if(isTextEditor(ev.target) && ev.target.id !== 'kbPrimer') imeProven = true;
+}, true);
+
+function needsPrimer(el){
+  return kbCompat && !imeProven && !primerBusy && primerTries < 2 &&
+         isTextEditor(el) && el.id !== 'kbPrimer' &&
+         (el.getAttribute('inputmode') || '') !== 'numeric' &&
+         document.activeElement !== el;
+}
+
+document.addEventListener('pointerdown', ev=>{
+  const el = ev.target;
+  if(!needsPrimer(el)) return;
+  ev.preventDefault();               // нативный фокус не успевает сломаться
+  primerBusy = true; primerTries += 1;
+  try{ $('kbPrimer').focus(); }catch(e){}
+  setTimeout(()=>{
+    try{
+      el.focus({preventScroll:true});
+      if(el.setSelectionRange){
+        const n = (el.value || '').length;
+        el.setSelectionRange(n, n);
+      }
+    }catch(e){ try{ el.focus(); }catch(_){} }
+    primerBusy = false;
+  }, 280);
+}, true);
+
+/* Тумблер в настройках: применяется сразу, без «Сохранить». */
+(function(){
+  const t = $('kbCompatToggle');
+  if(!t) return;
+  t.checked = kbCompat;
+  t.addEventListener('change', ()=>{
+    kbCompat = t.checked;
+    primerTries = 0;
+    localStorage.setItem('bb_kb_compat', kbCompat ? '1' : '0');
+    toast(kbCompat ? 'Совместимый ввод включён.' : 'Совместимый ввод выключен.');
+  });
+})();
+
+/* ---------- настройки ---------- */
+/* Фоновое обновление раз в 20 секунд не должно затирать поле, в котором
+   человек сейчас печатает. Особенно заметно на кириллице: на неё уходит
+   больше времени, и набранное сбрасывалось на полуслове. */
+function setFieldValue(el, value){
+  if(!el) return;
+  if(document.activeElement === el) return;   // сейчас печатают
+  if(el.dataset.dirty === '1') return;        // изменено, но ещё не сохранено
+  el.value = value;
+}
+function markDirty(ev){ ev.target.dataset.dirty = '1'; }
+function clearDirty(){
+  ['nameInput','amtInput'].forEach(id=>{ const el=$(id); if(el) delete el.dataset.dirty; });
+}
+['nameInput','amtInput'].forEach(id=>{
+  const el=$(id); if(el) el.addEventListener('input', markDirty);
+});
+
+function fillSettings(){
+  if(!STATE) return;
+  const u = STATE.user;
+  const typing = document.activeElement;
+  selPayType = u.pay_type; selRole = (u.role||'').toLowerCase();
+  syncPayType(); syncRole();
+  setFieldValue($('amtInput'), u.pay_amount || 0);
+  setFieldValue($('nameInput'), u.name || '');
+  if(typing !== $('tzSelect')) $('tzSelect').value = String(cityOffset(u.city_id));
+  if(typing !== $('editModeToggle')) $('editModeToggle').checked = !!u.edit_mode;
+  if(typing !== $('photoParseToggle')) $('photoParseToggle').checked = !!u.photo_parse;
+  if(typing !== $('citySelect')) fillCitySelect('citySelect', u.city_id);
+  const vEl = $('buildVersion');
+  if(vEl && STATE.build_version) vEl.textContent = 'Версия: ' + STATE.build_version;
+}
+function syncPayType(){
+  document.querySelectorAll('#payTypeSeg button').forEach(b=>b.classList.toggle('on', b.dataset.pt===selPayType));
+  $('amtLabel').textContent = PAY[selPayType].label;
+  $('amtSuf').textContent = PAY[selPayType].suf;
+}
+function syncRole(){
+  document.querySelectorAll('#roleSeg button').forEach(b=>b.classList.toggle('on', b.dataset.role===selRole));
+}
+document.querySelectorAll('#payTypeSeg button').forEach(b=>{ b.onclick = ()=>{ selPayType=b.dataset.pt; syncPayType(); }; });
+document.querySelectorAll('#roleSeg button').forEach(b=>{ b.onclick = ()=>{ selRole=b.dataset.role; syncRole(); }; });
+$('citySelect').onchange = ()=>{ $('tzSelect').value = String(cityOffset($('citySelect').value)); };
+
+$('saveSettings').onclick = async ()=>{
+  const btn = $('saveSettings'); btn.disabled = true; btn.textContent='Сохраняю…';
+  try{
+    await api('/api/settings', { method:'POST', body: JSON.stringify({
+      name: $('nameInput').value.trim(),
+      role: selRole,
+      edit_mode: $('editModeToggle').checked,
+      photo_parse: $('photoParseToggle').checked,
+      city_id: parseInt($('citySelect').value),
+    })});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    histLoaded = false;
+    clearDirty();
+    toast('Сохранено');
+    await load();
+  }catch(e){
+    toast(e.message || 'Не удалось сохранить');
+  }finally{
+    btn.disabled=false; btn.textContent='Сохранить';
+  }
+};
+
+/* ---------- личный график сотрудника ---------- */
+function scheduleIso(date){const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`}
+function scheduleMonthKey(){return `${myScheduleMonth.getFullYear()}-${String(myScheduleMonth.getMonth()+1).padStart(2,'0')}`}
+function resetMyScheduleToToday(){const today=nowInTz();myScheduleMonth=new Date(today.getFullYear(),today.getMonth(),1);myScheduleDecade=today.getDate()<=10?1:today.getDate()<=20?2:3;myScheduleSelectedDate=scheduleIso(today)}
+function scheduleDecadeDates(){const year=myScheduleMonth.getFullYear(),month=myScheduleMonth.getMonth(),from=myScheduleDecade===1?1:myScheduleDecade===2?11:21,last=new Date(year,month+1,0).getDate(),to=myScheduleDecade===1?10:myScheduleDecade===2?20:last,out=[];for(let day=from;day<=to;day++)out.push(scheduleIso(new Date(year,month,day)));return out}
+function scheduleStatus(status){return {upcoming:'Предстоит',active:'На смене',completed:'Завершена',cancelled:'Отменена',missed:'Не начата'}[status]||status}
+function scheduleDateTitle(value){return new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long'}).format(new Date(`${value}T12:00:00`))}
+function renderMyScheduleShift(item){const type=item.work_kind==='extra'?'Подработка':'Основная смена',next=item.ends_next_day?' · окончание на следующий день':'';return `<div class="my-schedule-shift"><div class="my-schedule-shift-head"><b>${esc(item.start_time)}–${esc(item.end_time)}${item.ends_next_day?' +1':''}</b><span class="my-schedule-status ${esc(item.status)}">${esc(scheduleStatus(item.status))}</span></div><div class="my-schedule-meta">${type}${next}</div><div class="my-schedule-meta ${item.district?'':'warn'}">${item.district?`Район: ${esc(item.district)}`:'! Район не назначен — уточните у руководителя'}</div><div class="my-schedule-meta">${item.auto_enabled?'Откроется и закроется автоматически':'Автоматическое управление выключено'}</div>${item.actual_start_time?`<div class="my-schedule-meta">Факт: ${esc(item.actual_start_time)}–${esc(item.actual_end_time||'…')}</div>`:''}</div>`}
+function renderMySchedule(){
+  if(!myScheduleMonth)resetMyScheduleToToday();const data=myScheduleData||{items:[]},items=data.items||[],dates=scheduleDecadeDates(),today=scheduleIso(nowInTz());
+  if(!dates.includes(myScheduleSelectedDate))myScheduleSelectedDate=dates[0];
+  $('myScheduleMonthTitle').textContent=`${MONTHS[myScheduleMonth.getMonth()]} ${myScheduleMonth.getFullYear()}`;
+  $('myScheduleDecades').innerHTML=[1,2,3].map(value=>`<button class="${myScheduleDecade===value?'on':''}" data-my-decade="${value}">${value===1?'1–10':value===2?'11–20':'21–конец'}</button>`).join('');
+  const inDecade=items.filter(item=>dates.includes(item.work_date)),working=inDecade.filter(item=>item.status!=='cancelled'),extras=working.filter(item=>item.work_kind==='extra').length,workDays=new Set(working.map(item=>item.work_date)).size;
+  $('myScheduleSummary').textContent=`${working.length} ${working.length===1?'смена':working.length>1&&working.length<5?'смены':'смен'} · ${extras} подработок · ${Math.max(0,dates.length-workDays)} выходных`;
+  $('myScheduleGrid').innerHTML=dates.map(date=>{const dayItems=items.filter(item=>item.work_date===date),active=dayItems.find(item=>item.status==='active'),live=dayItems.filter(item=>item.status!=='cancelled'),primary=active||live[0]||dayItems[0],extra=live.some(item=>item.work_kind==='extra'),cancelled=dayItems.length&&!live.length,missed=live.length&&live.every(item=>item.status==='missed'),label=!dayItems.length?'Выходной':dayItems.length>1?`${dayItems.length} смены`:cancelled?'Отменена':extra?'Подработка':'Смена',d=new Date(`${date}T12:00:00`),weekday=new Intl.DateTimeFormat('ru-RU',{weekday:'short'}).format(d);return `<button class="my-schedule-day ${live.length?(extra?'extra':'regular'):''} ${cancelled?'cancelled':''} ${active?'active':''} ${missed?'missed':''} ${date===today?'today':''} ${date===myScheduleSelectedDate?'selected':''}" data-my-schedule-day="${date}"><b>${d.getDate()}</b><small>${esc(weekday)}</small><span>${esc(label)}</span></button>`}).join('');
+  const selected=items.filter(item=>item.work_date===myScheduleSelectedDate);$('myScheduleDetail').innerHTML=`<div class="my-schedule-detail"><h3>${esc(scheduleDateTitle(myScheduleSelectedDate))}</h3>${selected.length?selected.map(renderMyScheduleShift).join(''):'<div class="task-api-state" style="padding:8px 0">Выходной — смен на этот день нет.</div>'}</div>`;
+  $('myScheduleUpdated').textContent=data.generated_at?`График обновлён ${new Date(data.generated_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`:'';
+  const badge=$('myScheduleBadge'),total=items.filter(item=>item.status!=='cancelled').length;badge.textContent=String(total);badge.classList.toggle('hidden',total===0);
+  document.querySelectorAll('[data-my-decade]').forEach(button=>button.onclick=()=>{myScheduleDecade=Number(button.dataset.myDecade);myScheduleSelectedDate=scheduleDecadeDates()[0];renderMySchedule()});
+  document.querySelectorAll('[data-my-schedule-day]').forEach(button=>button.onclick=()=>{myScheduleSelectedDate=button.dataset.myScheduleDay;renderMySchedule()});
+}
+async function loadMySchedule(){if(myScheduleLoading)return;if(!myScheduleMonth)resetMyScheduleToToday();myScheduleLoading=true;$('myScheduleError').classList.add('hidden');$('myScheduleSummary').textContent='Загружаю график…';try{myScheduleData=await api(`/api/my-schedule?month=${encodeURIComponent(scheduleMonthKey())}`);renderMySchedule()}catch(e){$('myScheduleError').textContent=e.message||'Не удалось загрузить график.';$('myScheduleError').classList.remove('hidden');if(!myScheduleData){$('myScheduleGrid').innerHTML='';$('myScheduleDetail').innerHTML='<div class="task-api-state">Нажмите «Обновить», чтобы повторить.</div>'}}finally{myScheduleLoading=false}}
+function shiftMyScheduleMonth(delta){myScheduleMonth=new Date(myScheduleMonth.getFullYear(),myScheduleMonth.getMonth()+delta,1);myScheduleSelectedDate=scheduleIso(new Date(myScheduleMonth.getFullYear(),myScheduleMonth.getMonth(),myScheduleDecade===1?1:myScheduleDecade===2?11:21));myScheduleData=null;loadMySchedule()}
+
+/* ---------- админка (живёт во вкладке «Ещё») ---------- */
+const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory','myTasksView','myScheduleView'];
+
+function showAdminScreen(id){
+  /* id = null → показать обычный экран «Ещё» */
+  $('morePanel').classList.toggle('hidden', !!id);
+  ADMIN_SCREENS.forEach(v=>$(v).classList.toggle('hidden', v!==id));
+  window.scrollTo(0,0);
+}
+
+function closeAdmin(){
+  adminToken = '';
+  localStorage.removeItem('bb_admin_token');
+  localStorage.removeItem('bb_admin_city');
+  adminCityCache = '';
+  adminHistoryRequest++;
+  adminHistoryUserId = null;
+  adminHistoryOffset = 0;
+  $('adminLogin').classList.add('hidden');
+  $('adminHistoryBox').classList.add('hidden');
+  $('adminCityName').textContent = '—';
+  $('adminPassword').value = '';
+  showAdminScreen(null);
+}
+
+$('btnAdminOpen').onclick = ()=>{
+  if(adminToken){
+    localStorage.setItem('bb_crm_admin_token', adminToken);
+    window.location.href='/crm.html';
+    return;
+  }
+  $('adminErr').classList.remove('show');
+  const login = $('adminLogin');
+  login.classList.toggle('hidden');     /* повторный тап прячет форму */
+  if(!login.classList.contains('hidden')){
+    $('adminPassword').value = '';
+  }
+};
+
+$('adminLoginBtn').onclick = async ()=>{
+  const password = $('adminPassword').value;
+  if(!password) return showErr('adminErr','Введи пароль.');
+  const btn = $('adminLoginBtn'); btn.disabled=true; btn.textContent='Проверяю…';
+  try{
+    const result = await api('/api/admin/login', {
+      method:'POST', body:JSON.stringify({password})
+    });
+    adminToken = result.token;
+    localStorage.setItem('bb_admin_token', adminToken);
+    adminCityCache = (result.city && result.city.name) || '';
+    localStorage.setItem('bb_admin_city', adminCityCache);
+    $('adminPassword').value = '';
+    $('adminLogin').classList.add('hidden');
+    $('adminCityName').textContent = (result.city && result.city.name) || '—';
+    localStorage.setItem('bb_crm_admin_token', adminToken);
+    window.location.href='/crm.html';
+  }catch(e){
+    $('adminPassword').value = '';
+    showErr('adminErr', e.message || 'Не удалось войти.');
+  }finally{
+    btn.disabled=false; btn.textContent='Открыть CRM';
+  }
+};
+
+$('adminLogout').onclick = ()=>{ closeAdmin(); toast('Вышел из админки.'); };
+$('btnOpenCrm').onclick = ()=>{
+  /* CRM использует тот же серверный токен, но отдельный ключ хранилища. */
+  if(adminToken) localStorage.setItem('bb_crm_admin_token', adminToken);
+  window.location.href = '/crm.html';
+};
+/* Новая декада — всегда с подтверждением */
+/* Новая декада — всегда с подтверждением, отдельно для каждой группы */
+$('btnNewPeriodDay').onclick = ()=> confirmAction(
+  'Начать новую декаду ДНЕВНЫХ? Счётчики часов и заработка обнулятся у дневных сотрудников города. Ночных это не коснётся. История смен сохранится.',
+  ()=>startNewPeriod('day')
+);
+$('btnNewPeriodNight').onclick = ()=> confirmAction(
+  'Начать новую декаду НОЧНЫХ? Счётчики часов и заработка обнулятся у ночных сотрудников города. Дневных это не коснётся. История смен сохранится.',
+  ()=>startNewPeriod('night')
+);
+
+/* три окна админки */
+document.querySelectorAll('[data-admin-view]').forEach(b=>{
+  b.onclick = ()=>showAdminScreen(b.dataset.adminView);
+});
+document.querySelectorAll('.admin-back').forEach(b=>{
+  b.onclick = ()=>showAdminScreen('adminMenu');
+});
+document.querySelectorAll('.admin-reload').forEach(b=>{
+  b.onclick = ()=>loadAdmin();
+});
+
+/* ---------- задания сотрудника (CRM, не вмешивается в смены) ---------- */
+const EMPLOYEE_TASK_API = {
+  mine: '/api/crm/tasks/mine',
+  progress: id => `/api/crm/tasks/${id}/progress`,
+  upload: id => `/api/crm/tasks/${id}/attachments`,
+};
+const EMPLOYEE_TASK_STATUS = {
+  assigned:{label:'Новое', cls:''}, seen:{label:'Просмотрено', cls:''},
+  in_progress:{label:'В работе', cls:'work'}, submitted:{label:'На проверке', cls:'review'},
+  accepted:{label:'Принято', cls:'done'}, blocked:{label:'Есть проблема', cls:'blocked'},
+};
+let employeeTasks=[];
+let employeeTaskId=null;
+let employeeTaskFiles=[];
+let employeeTaskBlobUrls=[];
+let employeeTaskLoading=false;
+
+function taskIsoDate(date){
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function employeeTaskRange(){
+  const from=nowInTz(), to=nowInTz();
+  from.setDate(from.getDate()-14); to.setDate(to.getDate()+62);
+  return `?from=${taskIsoDate(from)}&to=${taskIsoDate(to)}`;
+}
+function taskStatus(status){ return EMPLOYEE_TASK_STATUS[status] || {label:status||'Задание',cls:''}; }
+function taskDate(value){
+  if(!value) return 'Без даты';
+  const d=new Date(value+'T12:00:00');
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
+}
+function setTasksError(message=''){
+  const el=$('myTasksError'); el.textContent=message; el.classList.toggle('hidden',!message);
+}
+function updateTasksBadge(){
+  const count=employeeTasks.filter(t=>!['submitted','accepted'].includes(t.my_status)).length;
+  ['myTasksBadge','tasksNavBadge'].forEach(id=>{
+    const badge=$(id);if(!badge)return;
+    badge.textContent=count>99?'99+':String(count);
+    badge.classList.toggle('hidden',count===0);
+  });
+  updateShiftTaskCard();
+}
+function updateShiftTaskCard(){
+  const card=$('shiftTaskCard');if(!card)return;
+  const task=employeeTasks
+    .filter(t=>!['submitted','accepted'].includes(t.my_status))
+    .sort((a,b)=>String(a.work_date||'').localeCompare(String(b.work_date||'')))[0];
+  card.classList.toggle('hidden',!task);
+  if(!task){card.onclick=null;return}
+  const status=taskStatus(task.my_status);
+  $('shiftTaskKicker').textContent=task.my_status==='in_progress'?'Задача · в работе':'Задача дня';
+  $('shiftTaskName').textContent=task.title||'Задание руководителя';
+  $('shiftTaskNote').textContent=`${taskDate(task.work_date)} · ${status.label}${task.requires_photo?' · нужен фотоотчёт':''}`;
+  card.onclick=()=>{
+    const nav=document.querySelector('.tab[data-tab="tasks"]');
+    if(nav)nav.click();
+    setTimeout(()=>openMyTask(Number(task.task_id)),0);
+  };
+}
+function renderMyTasks(){
+  const list=$('myTasksList');
+  if(!employeeTasks.length){
+    list.innerHTML='<div class="task-api-state">Пока нет назначенных заданий.</div>'; return;
+  }
+  const weight={assigned:0,seen:1,in_progress:2,blocked:3,submitted:4,accepted:5};
+  const sorted=[...employeeTasks].sort((a,b)=>(weight[a.my_status]??9)-(weight[b.my_status]??9)||String(a.work_date).localeCompare(String(b.work_date)));
+  list.innerHTML=`<div class="my-task-list">${sorted.map(task=>{
+    const status=taskStatus(task.my_status);
+    return `<button class="my-task-card" data-my-task="${Number(task.task_id)}">
+      <div class="my-task-top"><span class="my-task-title">${esc(task.title)}</span><span class="my-task-status ${status.cls}">${esc(status.label)}</span></div>
+      <div class="my-task-meta">${esc(taskDate(task.work_date))}${task.requires_photo?' · 📷 нужен фотоотчёт':''}${task.priority==='urgent'?' · Срочно':''}</div>
+    </button>`;
+  }).join('')}</div>`;
+  list.querySelectorAll('[data-my-task]').forEach(btn=>btn.onclick=()=>openMyTask(Number(btn.dataset.myTask)));
+}
+async function loadMyTasks(silent=false){
+  if(employeeTaskLoading) return;
+  employeeTaskLoading=true;
+  if(!silent){ $('myTasksList').innerHTML='<div class="task-api-state">Загружаю задания…</div>'; setTasksError(); }
+  try{
+    const data=await api(EMPLOYEE_TASK_API.mine+employeeTaskRange());
+    employeeTasks=Array.isArray(data.items)?data.items:[];
+    updateTasksBadge(); renderMyTasks();
+    if(employeeTaskId && !$('myTaskDetail').classList.contains('hidden')) renderMyTaskDetail(employeeTaskId);
+  }catch(e){
+    if(!silent){ setTasksError(e.message||'Не удалось загрузить задания.'); $('myTasksList').innerHTML='<div class="task-api-state">Потяни экран или нажми «Обновить».</div>'; }
+  }finally{ employeeTaskLoading=false; }
+}
+
+async function employeeTaskUpload(taskId, files){
+  const form=new FormData(); files.forEach(file=>form.append('file',file,file.name));
+  const res=await fetch(API_BASE+EMPLOYEE_TASK_API.upload(taskId),{
+    method:'POST', headers:{'Authorization':'tma '+initData,'X-Init-Data':initData}, body:form
+  });
+  let data=null; try{data=await res.json();}catch(e){}
+  if(res.status===401) throw {auth:true,message:'Открой приложение заново через Telegram.'};
+  if(!res.ok) throw {status:res.status,message:(data&&data.message)||'Не удалось загрузить фото.',data};
+  return data;
+}
+function releaseEmployeeTaskPhotos(){
+  employeeTaskBlobUrls.forEach(url=>URL.revokeObjectURL(url)); employeeTaskBlobUrls=[];
+}
+async function paintTaskPhotos(container, attachments){
+  if(!container || !attachments || !attachments.length) return;
+  for(const attachment of attachments){
+    const cell=container.querySelector(`[data-task-photo="${Number(attachment.id)}"]`);
+    if(!cell) continue;
+    try{
+      const res=await fetch(API_BASE+attachment.download_url,{headers:{'Authorization':'tma '+initData,'X-Init-Data':initData}});
+      if(!res.ok) throw new Error('photo');
+      const url=URL.createObjectURL(await res.blob()); employeeTaskBlobUrls.push(url);
+      const img=document.createElement('img'); img.src=url; img.alt=attachment.original_name||'Фото задания';
+      cell.textContent=''; cell.appendChild(img); cell.onclick=()=>window.open(url,'_blank');
+    }catch(e){ cell.textContent='Фото недоступно'; }
+  }
+}
+function taskPhotoSection(title, attachments){
+  if(!attachments || !attachments.length) return '';
+  return `<div class="admin-section">${esc(title)}</div><div class="task-photos">${attachments.map(a=>
+    `<button class="task-photo" data-task-photo="${Number(a.id)}" aria-label="${esc(a.original_name||'Открыть фото')}">Загрузка…</button>`).join('')}</div>`;
+}
+function renderSelectedTaskFiles(){
+  const box=$('taskUploadPreview'); if(!box) return;
+  box.innerHTML=employeeTaskFiles.map((file,index)=>{
+    const url=URL.createObjectURL(file); employeeTaskBlobUrls.push(url);
+    return `<div class="task-upload-row"><img src="${url}" alt=""><span>${esc(file.name)}</span><button class="mini" type="button" data-remove-task-photo="${index}">Удалить</button></div>`;
+  }).join('');
+  box.querySelectorAll('[data-remove-task-photo]').forEach(btn=>btn.onclick=()=>{
+    employeeTaskFiles.splice(Number(btn.dataset.removeTaskPhoto),1); renderMyTaskDetail(employeeTaskId,true);
+  });
+}
+function renderMyTaskDetail(taskId,keepFiles=false){
+  const task=employeeTasks.find(item=>Number(item.task_id)===Number(taskId)); if(!task) return;
+  employeeTaskId=Number(taskId); if(!keepFiles) employeeTaskFiles=[]; releaseEmployeeTaskPhotos();
+  const status=taskStatus(task.my_status), locked=['submitted','accepted'].includes(task.my_status), working=task.my_status==='in_progress';
+  const existing=Array.isArray(task.result_attachments)?task.result_attachments:[];
+  $('myTasksList').classList.add('hidden'); $('myTaskDetail').classList.remove('hidden');
+  $('myTaskDetail').innerHTML=`
+    <button class="mini" id="myTaskDetailBack">← Ко всем заданиям</button>
+    <div class="my-task-top" style="margin-top:12px"><div class="formhead">${esc(task.title)}</div><span class="my-task-status ${status.cls}">${esc(status.label)}</span></div>
+    <div class="my-task-meta">${esc(taskDate(task.work_date))}${task.priority==='urgent'?' · Срочно':''}</div>
+    <div class="my-task-desc">${esc(task.description||'Описание не добавлено.')}</div>
+    ${task.requires_photo?'<div class="my-task-required">📷 Для отправки результата нужно хотя бы одно фото.</div>':''}
+    ${taskPhotoSection('Фото от руководителя',task.attachments)}
+    ${taskPhotoSection('Ваши фото результата',existing)}
+    ${locked?`<div class="task-api-state">${task.my_status==='accepted'?'Результат принят руководителем.':'Результат отправлен на проверку.'}${task.my_status_comment?'<br>'+esc(task.my_status_comment):''}</div>`:!working?`
+      ${task.my_status==='blocked'&&task.my_status_comment?`<div class="task-api-error">Проблема: ${esc(task.my_status_comment)}</div>`:''}
+      <div class="my-task-actions"><button class="save" id="taskStartWork">${task.my_status==='blocked'?'Вернуться к выполнению':'Начать выполнение'}</button></div>`:`
+      <div class="my-task-actions">
+        <textarea id="taskResultComment" maxlength="2000" placeholder="Комментарий о результате или проблеме">${esc(task.my_status_comment||'')}</textarea>
+        <label class="mini" style="text-align:center;cursor:pointer">Добавить фото (до 5)<input id="taskResultPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>
+        <div class="task-upload-preview" id="taskUploadPreview"></div>
+        <div class="buttons"><button class="save" id="taskSubmitResult">Отправить результат</button><button class="mini" id="taskReportBlocked">Сообщить о проблеме</button></div>
+      </div>`}
+  `;
+  $('myTaskDetailBack').onclick=showMyTaskList;
+  paintTaskPhotos($('myTaskDetail'),[...(task.attachments||[]),...existing]);
+  if(locked) return;
+  const start=$('taskStartWork'); if(start){ start.onclick=()=>changeMyTaskProgress(task,'in_progress',''); return; }
+  renderSelectedTaskFiles();
+  const input=$('taskResultPhotos');
+  input.onchange=()=>{
+    const selected=[...input.files], room=Math.max(0,5-existing.length);
+    const valid=selected.filter(f=>['image/jpeg','image/png','image/webp'].includes(f.type)&&f.size<=10*1024*1024);
+    if(valid.length!==selected.length) toast('Разрешены JPEG, PNG или WebP до 10 МБ.');
+    employeeTaskFiles=[...employeeTaskFiles,...valid].slice(0,room);
+    if(selected.length>room) toast(`Можно добавить ещё ${room} фото.`);
+    renderMyTaskDetail(taskId,true);
+  };
+  $('taskSubmitResult').onclick=()=>submitMyTask(task);
+  $('taskReportBlocked').onclick=()=>{
+    const comment=$('taskResultComment').value.trim();
+    if(!comment) return toast('Напиши, что мешает выполнить задание.');
+    changeMyTaskProgress(task,'blocked',comment);
+  };
+}
+function showMyTaskList(){
+  employeeTaskId=null; employeeTaskFiles=[]; releaseEmployeeTaskPhotos();
+  $('myTaskDetail').classList.add('hidden'); $('myTasksList').classList.remove('hidden');
+}
+async function changeMyTaskProgress(task,status,comment){
+  setTasksError();
+  try{
+    await api(EMPLOYEE_TASK_API.progress(task.task_id),{method:'POST',body:JSON.stringify({status,comment})});
+    await loadMyTasks(true); employeeTaskId=Number(task.task_id); renderMyTaskDetail(task.task_id);
+    toast(status==='blocked'?'Проблема отправлена руководителю.':'Статус обновлён.');
+  }catch(e){ setTasksError(e.message||'Не удалось обновить задание.'); }
+}
+async function submitMyTask(task){
+  const comment=$('taskResultComment').value.trim();
+  const existing=(task.result_attachments||[]).length;
+  if(task.requires_photo && existing+employeeTaskFiles.length===0) return toast('Добавь фото результата.');
+  const btn=$('taskSubmitResult'); btn.disabled=true; btn.textContent='Отправляю…'; setTasksError();
+  try{
+    if(employeeTaskFiles.length) await employeeTaskUpload(task.task_id,employeeTaskFiles);
+    await api(EMPLOYEE_TASK_API.progress(task.task_id),{method:'POST',body:JSON.stringify({status:'submitted',comment})});
+    employeeTaskFiles=[]; await loadMyTasks(true); employeeTaskId=Number(task.task_id); renderMyTaskDetail(task.task_id);
+    toast('Результат отправлен руководителю.');
+  }catch(e){ setTasksError(e.message||'Не удалось отправить результат.'); btn.disabled=false; btn.textContent='Отправить результат'; }
+}
+async function openMyTask(taskId){
+  const task=employeeTasks.find(item=>Number(item.task_id)===Number(taskId)); if(!task) return;
+  renderMyTaskDetail(taskId);
+  if(task.my_status==='assigned'){
+    try{
+      await api(EMPLOYEE_TASK_API.progress(taskId),{method:'POST',body:JSON.stringify({status:'seen',comment:''})});
+      task.my_status='seen'; updateTasksBadge(); renderMyTaskDetail(taskId);
+    }catch(e){}
+  }
+}
+$('btnMyTasks').onclick=()=>{ showAdminScreen('myTasksView'); showMyTaskList(); loadMyTasks(); };
+$('myTasksReload').onclick=()=>loadMyTasks();
+$('myTasksBack').onclick=()=>{
+  if(!$('myTaskDetail').classList.contains('hidden')) showMyTaskList();
+  else{
+    const more=document.querySelector('.tab[data-tab="more"]');
+    if(more)more.click();else showAdminScreen(null);
+  }
+};
+$('btnMySchedule').onclick=()=>{if(!myScheduleMonth)resetMyScheduleToToday();showAdminScreen('myScheduleView');loadMySchedule()};
+$('myScheduleReload').onclick=()=>{myScheduleData=null;loadMySchedule()};
+$('myScheduleBack').onclick=()=>showAdminScreen(null);
+$('mySchedulePrev').onclick=()=>shiftMyScheduleMonth(-1);
+$('myScheduleNext').onclick=()=>shiftMyScheduleMonth(1);
+$('myScheduleToday').onclick=()=>{resetMyScheduleToToday();myScheduleData=null;loadMySchedule()};
+
+const ADMIN_ROLE_GROUPS = [
+  {key:'scout', label:'Скауты'},
+  {key:'driver', label:'Водители'},
+  {key:'charger', label:'Чарджеры'},
+  {key:'other', label:'Без роли'},
+];
+function adminRoleKey(role){
+  const value=String(role||'').trim().toLowerCase();
+  if(value.includes('скаут')) return 'scout';
+  if(value.includes('водител')) return 'driver';
+  if(value.includes('чардж')) return 'charger';
+  return 'other';
+}
+function renderAdminRoleGroups(items, renderItem, emptyText){
+  if(!items || !items.length) return `<div class="hempty">${esc(emptyText)}</div>`;
+  const grouped={scout:[],driver:[],charger:[],other:[]};
+  items.forEach(item=>grouped[adminRoleKey(item.role)].push(item));
+  return ADMIN_ROLE_GROUPS.filter(group=>grouped[group.key].length).map(group=>
+    `<div class="admin-role-group"><div class="admin-role-head">${group.label}<span>${grouped[group.key].length}</span></div>
+     <div class="admin-list">${grouped[group.key].map(renderItem).join('')}</div></div>`
+  ).join('');
+}
+function adminSourceLabel(source){
+  return source==='manual_chat' || source==='manual_signal' ? 'Вручную' : 'Бот';
+}
+function renderAdminShift(item){
+  const st = item.status;
+  const cls = st==='closed' ? 'closed' : (st==='scheduled' ? 'wait' : 'active');
+  const dot = st==='closed' ? '🔴' : '🟢';
+  const label = st==='closed' ? 'закрыта' : (st==='scheduled' ? 'ожидает начала' : 'активна');
+  const source = adminSourceLabel(item.source);
+  const s = item.stats || {};
+  const end = item.end ? '–'+esc(item.end) : '';
+  const date = item.date && item.date!=='—' ? esc(item.date)+' · ' : '';
+  const district = item.district ? ' · '+esc(item.district) : '';
+  const stats = `<div class="admin-stats">
+    <span>Перемещения ${Number(s.move)||0}</span>
+    <span>АКБ ${Number(s.battery)||0}</span>
+    <span>Ремонт ${Number(s.repair)||0}</span>
+    <span>Поправки ${Number(s.fix)||0}</span>
+    ${Number(s.sticker)>0?`<span>Оклейка ${Number(s.sticker)}</span>`:''}</div>`;
+  const lunch = item.on_lunch ? '<div class="admin-lunch">🍽 Сейчас на обеде</div>' : '';
+  const closeBtn = st!=='closed'
+    ? `<div class="admin-actions"><button class="mini admin-force-close" data-sid="${Number(item.shift_id)}">Закрыть смену</button></div>`
+    : '';
+  return `<div class="admin-row ${cls}"><div class="top"><span>${dot} ${esc(item.name)}</span><span>${hm(item.worked_minutes||0)}</span></div>
+    <div class="meta"><span class="admin-badge">${source}</span> ${esc(label)}${district}<br>${date}${esc(item.start||'—')}${end}</div>
+    ${lunch}${stats}${closeBtn}</div>`;
+}
+function renderAdminEmployee(item){
+  const dot = item.has_open_shift ? '🟢' : '⚪';
+  const status = item.has_open_shift ? 'смена открыта' : 'не на смене';
+  return `<div class="admin-row ${item.has_open_shift?'active':''}"><div class="top"><span>${dot} ${esc(item.name)}</span>
+    <button class="mini admin-history-open" data-user-id="${Number(item.user_id)}">Отчёты</button></div>
+    <div class="meta">${status} · завершённых смен ${Number(item.closed_shifts)||0}</div></div>`;
+}
+function renderAdminHistoryItems(items){
+  const actionNames={move:'перемещено',fix:'поправлено',repair:'ремонт',battery:'АКБ',sticker:'оклейка',to_sc:'на СЦ',from_sc:'из СЦ'};
+  return items.map(item=>{
+    const source=adminSourceLabel(item.source);
+    const actions=Object.entries(item.actions||{}).filter(([,count])=>Number(count)>0)
+      .map(([type,count])=>`${actionNames[type]||type}: ${Number(count)}`).join(' · ');
+    const district=item.district?' · '+esc(item.district):'';
+    const comment=item.comment?`<br>Комментарий: ${esc(item.comment)}`:'';
+    /* без сумм денег — справа отработанные часы */
+    return `<div class="admin-row"><div class="top"><span>${esc(item.date)}</span><span>${hm(item.worked_minutes||0)}</span></div>
+      <div class="meta"><span class="admin-badge">${source}</span> ${esc(item.start||'—')}–${esc(item.end||'—')}${district}${comment}</div>
+      <div class="admin-history-actions">${actions||'Действий нет'}</div></div>`;
+  }).join('');
+}
+async function loadAdminHistory(userId, append=false){
+  userId=Number(userId);
+  if(append && adminHistoryUserId!==userId) append=false;
+  if(!append){
+    adminHistoryUserId=userId;
+    adminHistoryOffset=0;
+  }
+  const offset=append?adminHistoryOffset:0;
+  const requestId=++adminHistoryRequest;
+  const box=$('adminHistoryBox');
+  box.classList.remove('hidden');
+  if(!append){
+    $('adminHistoryTitle').textContent='История смен';
+    $('adminHistory').innerHTML='<div class="hempty">Загружаю…</div>';
+  }else{
+    const more=$('adminHistory').querySelector('.admin-history-more');
+    if(more){more.disabled=true;more.textContent='Загружаю…';}
+  }
+  try{
+    const data=await adminApi('/api/admin/history?user_id='+encodeURIComponent(userId)+'&limit=50&offset='+offset);
+    if(requestId!==adminHistoryRequest) return;
+    $('adminHistoryTitle').textContent='История: '+data.employee.name;
+    const list=$('adminHistory');
+    const rows=renderAdminHistoryItems(data.items||[]);
+    if(append){
+      const oldMore=list.querySelector('.admin-history-more');
+      if(oldMore) oldMore.remove();
+      list.insertAdjacentHTML('beforeend', rows);
+    }else{
+      list.innerHTML=rows||'<div class="hempty">Завершённых смен пока нет.</div>';
+    }
+    adminHistoryOffset=offset+(data.items||[]).length;
+    if(data.page && data.page.has_more){
+      list.insertAdjacentHTML('beforeend','<button class="mini admin-history-more">Показать ещё</button>');
+      list.querySelector('.admin-history-more').onclick=()=>loadAdminHistory(userId,true);
+    }
+    if(!append) box.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){
+    if(requestId!==adminHistoryRequest) return;
+    if(e.status===401) closeAdmin();
+    if(!append) $('adminHistory').innerHTML='<div class="hempty">Не удалось загрузить историю.</div>';
+    else{
+      const more=$('adminHistory').querySelector('.admin-history-more');
+      if(more){more.disabled=false;more.textContent='Повторить загрузку';}
+    }
+    toast(e.message || 'Не удалось загрузить историю смен.');
+  }
+}
+$('adminHistoryClose').onclick=()=>{
+  adminHistoryRequest++;
+  adminHistoryUserId=null;
+  adminHistoryOffset=0;
+  $('adminHistoryBox').classList.add('hidden');
+};
+
+async function forceCloseShift(sid, btn){
+  btn.disabled=true; btn.textContent='Закрываю…';
+  try{
+    await adminApi('/api/admin/force-close', {method:'POST', body:JSON.stringify({shift_id:sid})});
+    toast('Смена закрыта.');
+    await loadAdmin(true);
+  }catch(e){
+    if(e.status===401) closeAdmin();
+    toast(e.message || 'Не удалось закрыть смену.');
+    btn.disabled=false; btn.textContent='Закрыть смену';
+  }
+}
+
+function renderPeriodInfo(data){
+  /* Две декады: дневная и ночная — каждая со своей датой и счётчиком дня. */
+  const paint = (id, pi)=>{
+    const box = $(id);
+    if(!box) return false;
+    if(!pi){ box.textContent = '—'; return false; }
+    box.textContent = `с ${pi.started_label} · идёт ${pi.day_number}-й день`;
+    box.classList.toggle('overdue', !!pi.overdue);
+    return !!pi.overdue;
+  };
+  const overdueDay = paint('periodInfoDay', data.period_info_day);
+  const overdueNight = paint('periodInfoNight', data.period_info_night);
+  $('periodHint').textContent = (overdueDay || overdueNight)
+    ? 'Одна из декад идёт больше 10 дней — пора закрывать.'
+    : 'Дневные — старт смены с 05:00 до 17:00, ночные — с 17:00 до 05:00. Обнуление действует только на свою группу. История смен сохраняется.';
+}
+
+async function startNewPeriod(segment){
+  const btn = $(segment === 'night' ? 'btnNewPeriodNight' : 'btnNewPeriodDay');
+  btn.disabled = true; btn.textContent = 'Открываю…';
+  try{
+    await adminApi('/api/admin/period/new', {method:'POST',
+      body:JSON.stringify({confirm:true, segment: segment})});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    toast(segment === 'night'
+      ? 'Новая декада ночных открыта. Счётчики группы обнулены.'
+      : 'Новая декада дневных открыта. Счётчики группы обнулены.');
+    await loadAdmin(true);
+  }catch(e){
+    if(e.status===401) closeAdmin();
+    toast(e.message || 'Не удалось открыть декаду.');
+  }finally{
+    btn.disabled = false; btn.textContent = 'Новая декада';
+  }
+}
+
+async function loadAdmin(silent=false){
+  if(!adminToken) return;
+  if(!silent){
+    $('adminOpen').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminClosed').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminEmployees').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminPeriodDay').innerHTML='<div class="hempty">Загружаю…</div>';
+    $('adminPeriodNight').innerHTML='<div class="hempty">Загружаю…</div>';
+  }
+  try{
+    const data = await adminApi('/api/admin/dashboard');
+    $('adminCityName').textContent=(data.city && data.city.name)||'—';
+    $('adminUpdated').textContent = 'Обновлено: '+new Date(data.generated_at).toLocaleString('ru-RU');
+    renderPeriodInfo(data);
+    $('adminOpen').innerHTML=renderAdminRoleGroups(
+      data.open||[], renderAdminShift, 'Открытых смен сейчас нет.'
+    );
+    $('adminClosed').innerHTML=renderAdminRoleGroups(
+      data.closed_today||[], renderAdminShift, 'Сегодня завершённых смен пока нет.'
+    );
+    document.querySelectorAll('.admin-force-close').forEach(btn=>{
+      btn.onclick=()=>confirmAction('Закрыть смену этого сотрудника сейчас?',
+        ()=>forceCloseShift(Number(btn.dataset.sid), btn));
+    });
+    $('adminEmployees').innerHTML=renderAdminRoleGroups(
+      data.employees||[], renderAdminEmployee, 'Сотрудники пока не найдены.'
+    );
+    /* Декады по группам — часы и действия (без денег). Строка кликабельна:
+       открывает смены сотрудника за декаду. */
+    const periodRow = item=>{
+      const dot = item.open_now ? '🟢 ' : '';
+      return `<button class="admin-row period-emp${item.open_now?' active':''}" data-user-id="${Number(item.user_id)}">
+        <div class="top"><span>${dot}${esc(item.name)}</span><span>${hm(item.worked_minutes||0)}</span></div>
+        <div class="meta">смен ${Number(item.shifts)||0} · действий ${Number(item.actions)||0}</div></button>`;
+    };
+    $('adminPeriodDay').innerHTML = renderAdminRoleGroups(
+      data.period_day||[], periodRow, 'В дневной декаде смен пока нет.');
+    $('adminPeriodNight').innerHTML = renderAdminRoleGroups(
+      data.period_night||[], periodRow, 'В ночной декаде смен пока нет.');
+    document.querySelectorAll('#adminEmployees .admin-history-open, .period-emp').forEach(btn=>{
+      btn.onclick=()=>loadAdminHistory(Number(btn.dataset.userId));
+    });
+    /* Сводка для начальника: сколько людей и часов в каждой группе. */
+    const sum = list => (list||[]).reduce((acc,it)=>acc+(it.worked_minutes||0),0);
+    const dayList = data.period_day||[], nightList = data.period_night||[];
+    $('adminPeriodSummary').textContent =
+      `☀️ ${dayList.length} чел · ${hm(sum(dayList))}   ·   🌙 ${nightList.length} чел · ${hm(sum(nightList))}`;
+    const pd = data.period_info_day, pn = data.period_info_night;
+    $('adminOpenPeriod').textContent = (pd||pn)
+      ? `Декады: ☀️ с ${pd?pd.started_label:'—'} · 🌙 с ${pn?pn.started_label:'—'}`
+      : '';
+  }catch(e){
+    if(e.status===401) closeAdmin();
+    toast(e.message || 'Не удалось загрузить админку');
+  }
+}
+
+/* ---------- история (в Профиле) ---------- */
+async function loadHistory(){
+  $('hList').innerHTML = '<div class="hempty">Загружаю…</div>';
+  try{
+    const data = await api('/api/history');
+    histLoaded = true;
+    if(!data.items.length){
+      $('hList').innerHTML = '<div class="hempty">Пока нет закрытых смен.</div>';
+    } else {
+      $('hList').innerHTML = data.items.map(it=>{
+        const ptName = {hourly:'почасовая',salary:'оклад',piece:'сделка'}[it.pay_type]||'';
+        const dist = it.district ? ' · '+esc(it.district) : '';
+        const city = it.city_name ? ' · '+esc(it.city_name) : '';
+        const cmt = it.comment ? `<div class="cmt">💬 ${esc(it.comment)}</div>` : '';
+        return `<div class="hrow" id="hrow-${it.shift_id}">
+          <div style="flex:1;min-width:0"><div class="d">${esc(it.date)}</div>
+          <div class="meta"><span class="bdg">${esc(ptName)}</span> ${esc(it.worked)}${dist}${city}</div>${cmt}</div>
+          <div class="e">${rub(it.earned)} ₽</div>
+          <button class="edit" data-sid="${Number(it.shift_id)}" data-comment="${esc(it.comment||'')}">✏️</button>
+          <button class="del" data-sid="${Number(it.shift_id)}" data-date="${esc(it.date)}">🗑</button></div>`;
+      }).join('');
+      document.querySelectorAll('#hList .del').forEach(b=>{
+        b.onclick = ()=> confirmDelete(parseInt(b.dataset.sid), b.dataset.date);
+      });
+      document.querySelectorAll('#hList .edit').forEach(b=>{
+        b.onclick = ()=> editComment(parseInt(b.dataset.sid), b.dataset.comment);
+      });
+    }
+    /* «Всего заработано» — за текущую декаду; сам список смен остаётся полным */
+    const periodSum = (data.items || [])
+      .filter(it => it.in_period)
+      .reduce((sum, it) => sum + (Number(it.earned) || 0), 0);
+    $('hTotal').textContent = rub(periodSum) + ' ₽';
+    $('hTotalLabel').textContent = data.period_started_at
+      ? 'Заработано за декаду'
+      : 'Всего заработано';
+  }catch(e){
+    $('hList').innerHTML = '<div class="hempty">Не удалось загрузить историю.</div>';
+  }
+}
+
+function editComment(sid, current){
+  const row = $('hrow-'+sid);
+  if(!row || row.parentNode.querySelector('.edit-cmt[data-for="'+sid+'"]')) return;
+  const box = document.createElement('div');
+  box.className = 'edit-cmt';
+  box.dataset.for = sid;
+  box.innerHTML = `<textarea maxlength="500" placeholder="Комментарий к смене">${esc(current||'')}</textarea>
+    <div class="btns"><button class="cancel-c">Отмена</button><button class="save-c">Сохранить</button></div>`;
+  row.after(box);
+  const ta = box.querySelector('textarea');
+  box.querySelector('.cancel-c').onclick = ()=> box.remove();
+  box.querySelector('.save-c').onclick = async ()=>{
+    const btn = box.querySelector('.save-c'); btn.disabled = true; btn.textContent = 'Сохраняю…';
+    try{
+      await api('/api/shift/comment', { method:'POST', body: JSON.stringify({ shift_id: sid, comment: ta.value.trim() })});
+      if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      box.remove();
+      toast('Комментарий сохранён');
+      await loadHistory();
+    }catch(e){
+      toast(e.message || 'Не удалось сохранить комментарий');
+      btn.disabled = false; btn.textContent = 'Сохранить';
+    }
+  };
+}
+
+function confirmDelete(sid, date){
+  const row = $('hrow-'+sid);
+  if(!row || row.querySelector('.confirm-del')) return;
+  const box = document.createElement('div');
+  box.className = 'confirm-del';
+  box.innerHTML = `<span>Удалить смену от ${esc(date)}? Отчёт в «Отчётах» тоже удалится.</span>
+    <button class="no">Нет</button><button class="yes">Удалить</button>`;
+  row.after(box);
+  box.querySelector('.no').onclick = ()=> box.remove();
+  box.querySelector('.yes').onclick = async ()=>{
+    box.querySelector('.yes').disabled = true;
+    try{
+      await api('/api/shift/delete', { method:'POST', body: JSON.stringify({ shift_id: sid })});
+      if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      box.remove(); row.remove();
+      toast('Смена удалена');
+      histLoaded = false;
+      await load();          // пересчёт дохода за месяц и статистики
+      await loadHistory();   // свежая история с новым итогом
+    }catch(e){
+      toast(e.message || 'Не удалось удалить');
+      box.remove();
+    }
+  };
+}
+
+/* ---------- регистрация (первый вход) ---------- */
+let regRole = "";
+document.querySelectorAll('#regRoleSeg button').forEach(b=>{
+  b.onclick = ()=>{
+    regRole = b.dataset.role;
+    document.querySelectorAll('#regRoleSeg button').forEach(x=>x.classList.toggle('on', x===b));
+  };
+});
+$('btnRegister').onclick = async ()=>{
+  const name = $('regName').value.trim();
+  $('regErr').classList.remove('show');
+  if(!name) return showErr('regErr','Впиши имя, например Иванов И.И.');
+  if(!regRole) return showErr('regErr','Выбери роль.');
+  const cityId = parseInt($('regCity').value);
+  if(!cityId) return showErr('regErr','Выбери город.');
+  const btn = $('btnRegister'); btn.disabled = true; btn.textContent = 'Сохраняю…';
+  try{
+    await api('/api/settings', { method:'POST', body: JSON.stringify({ name, role: regRole, city_id: cityId })});
+    if(tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    await load();
+  }catch(e){
+    showErr('regErr', e.message || 'Не получилось, попробуй ещё раз.');
+    btn.disabled = false; btn.textContent = 'Продолжить';
+  }
+};
+
+/* ---------- старт ---------- */
+if(tg){
+  tg.ready();
+  /* Свайп Telegram для сворачивания Mini App не должен перехватывать первое
+     касание по полю ввода. Метод доступен с Bot API 7.7. */
+  try{
+    if(tg.isVersionAtLeast && tg.isVersionAtLeast('7.7') && tg.disableVerticalSwipes){
+      tg.disableVerticalSwipes();
+    }
+  }catch(e){}
+  tg.expand();
+  try{ tg.setHeaderColor('#0A100C'); tg.setBackgroundColor('#0A100C'); }catch(e){}
+}
+load().then(ok=>{ if(ok) loadMyTasks(true); });
+let periodicLoadRunning=false;
+/* Открыта ли форма начала или окончания смены. Пока она открыта, фоновое
+   обновление не запускаем: перерисовка между открытием формы и тапом по полю
+   ломает открытие клавиатуры — именно поэтому сбой ловился на первом
+   открытии, а на повторном уже нет. */
+function isFormOpen(){
+  /* «Экран с вводом»: формы смены и экран регистрации. Пока любой из них
+     открыт, фоновые перерисовки стоят — иначе перестройка DOM между первым
+     тапом и подключением клавиатуры съедает ввод (особенно кириллицу). */
+  const s = $('startForm'), e = $('stopForm'), r = $('regScreen');
+  return (s && !s.classList.contains('hidden')) ||
+         (e && !e.classList.contains('hidden')) ||
+         (r && !r.classList.contains('hidden'));
+}
+
+setInterval(async ()=>{
+  /* Во время набора текста и при открытой форме ничего не перерисовываем. */
+  if(document.hidden || !STATE || periodicLoadRunning || stateMutationDepth > 0 ||
+     isTypingNow() || isFormOpen()) return;
+  periodicLoadRunning=true;
+  try{
+    const applied = await load({background:true});
+    if(!applied || isTypingNow() || isFormOpen()) return;
+    if(adminToken && !$('tab-more').classList.contains('hidden')) await loadAdmin(true);
+  }finally{
+    periodicLoadRunning=false;
+  }
+}, 20000);
+</script>
+</body>
+</html>

@@ -716,6 +716,124 @@ async def run():
         )
         await db.commit()
 
+    # Быстрый редактор сохраняет много плиток атомарно и защищён от конфликтов.
+    bulk_date_1 = (datetime.now(bot._city_tz(city)).date() + timedelta(days=4)).isoformat()
+    bulk_date_2 = (datetime.now(bot._city_tz(city)).date() + timedelta(days=5)).isoformat()
+    bulk_date_3 = (datetime.now(bot._city_tz(city)).date() + timedelta(days=6)).isoformat()
+    bulk_body = {
+        "city_id": city["id"], "role": "Скаут", "idempotency_key": "calendar-commit-1",
+        "changes": [
+            {"client_id": f"910006:{bulk_date_1}", "action": "set_preset",
+             "preset": "shift_1", "user_id": 910006, "work_date": bulk_date_1,
+             "expected": {"plan_id": None}},
+            {"client_id": f"910004:{bulk_date_2}", "action": "set_preset",
+             "preset": "shift_2", "user_id": 910004, "work_date": bulk_date_2,
+             "expected": {"plan_id": None}},
+        ],
+    }
+    bulk_created = await bot.api_crm_calendar_changes(Request(
+        900001, body=bulk_body, admin_token=network_token, method="POST",
+    ))
+    bulk_replay = await bot.api_crm_calendar_changes(Request(
+        900001, body=bulk_body, admin_token=network_token, method="POST",
+    ))
+    assert bulk_created.status == 201 and payload(bulk_created)["created"] == 2
+    assert bulk_replay.status == 200 and payload(bulk_replay)["idempotent_replay"] is True
+    created_items = {item["client_id"]: item for item in payload(bulk_created)["items"]}
+    first_item = created_items[f"910006:{bulk_date_1}"]
+    second_item = created_items[f"910004:{bulk_date_2}"]
+    changed_replay = dict(bulk_body)
+    changed_replay["changes"] = [dict(bulk_body["changes"][0], preset="shift_2")]
+    replay_conflict = await bot.api_crm_calendar_changes(Request(
+        900001, body=changed_replay, admin_token=network_token, method="POST",
+    ))
+    assert replay_conflict.status == 409
+
+    bulk_update_body = {
+        "city_id": city["id"], "role": "Скаут", "idempotency_key": "calendar-commit-2",
+        "changes": [
+            {"client_id": f"910006:{bulk_date_1}", "action": "set_preset",
+             "preset": "shift_2", "user_id": 910006, "work_date": bulk_date_1,
+             "expected": {"plan_id": first_item["plan_id"],
+                          "updated_at": first_item["updated_at"]}},
+            {"client_id": f"910004:{bulk_date_2}", "action": "cancel",
+             "user_id": 910004, "work_date": bulk_date_2,
+             "expected": {"plan_id": second_item["plan_id"],
+                          "updated_at": second_item["updated_at"]}},
+        ],
+    }
+    bulk_updated = await bot.api_crm_calendar_changes(Request(
+        900001, body=bulk_update_body, admin_token=network_token, method="POST",
+    ))
+    assert bulk_updated.status == 201
+    assert payload(bulk_updated)["updated"] == 1 and payload(bulk_updated)["cancelled"] == 1
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        db.row_factory = bot.aiosqlite.Row
+        first_row = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE id=?", (first_item["plan_id"],)
+        )).fetchone()
+        second_row = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE id=?", (second_item["plan_id"],)
+        )).fetchone()
+    assert (first_row["start_time"], first_row["end_time"]) == ("12:00", "22:00")
+    assert second_row["status"] == "cancelled"
+
+    # Одна устаревшая плитка отклоняет весь пакет: новая плитка не создаётся.
+    stale_body = {
+        "city_id": city["id"], "role": "Скаут", "idempotency_key": "calendar-commit-stale",
+        "changes": [
+            {"client_id": f"910006:{bulk_date_3}", "action": "set_preset",
+             "preset": "shift_1", "user_id": 910006, "work_date": bulk_date_3,
+             "expected": {"plan_id": None}},
+            {"client_id": f"910006:{bulk_date_1}", "action": "set_preset",
+             "preset": "shift_1", "user_id": 910006, "work_date": bulk_date_1,
+             "expected": {"plan_id": first_item["plan_id"], "updated_at": "stale"}},
+        ],
+    }
+    stale_response = await bot.api_crm_calendar_changes(Request(
+        900001, body=stale_body, admin_token=network_token, method="POST",
+    ))
+    assert stale_response.status == 409 and payload(stale_response)["applied"] == 0
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        not_created = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_planned_shifts WHERE user_id=910006 AND work_date=?",
+            (bulk_date_3,),
+        )).fetchone())[0]
+        await db.execute(
+            "UPDATE crm_planned_shifts SET actual_shift_id=? WHERE id=?",
+            (shift_id, first_item["plan_id"]),
+        )
+        await db.commit()
+    assert not_created == 0
+    started_body = {
+        "city_id": city["id"], "role": "Скаут", "idempotency_key": "calendar-commit-started",
+        "changes": [{"client_id": f"910006:{bulk_date_1}", "action": "cancel",
+                     "user_id": 910006, "work_date": bulk_date_1,
+                     "expected": {"plan_id": first_item["plan_id"],
+                                  "updated_at": first_row["updated_at"]}}],
+    }
+    started_response = await bot.api_crm_calendar_changes(Request(
+        900001, body=started_body, admin_token=network_token, method="POST",
+    ))
+    denied_bulk_role = await bot.api_crm_calendar_changes(Request(
+        900002, body={"city_id": city["id"], "role": "Водитель",
+                      "idempotency_key": "calendar-role-denied",
+                      "changes": [{"client_id": f"910002:{bulk_date_3}",
+                                   "action": "set_preset", "preset": "shift_1",
+                                   "user_id": 910002, "work_date": bulk_date_3,
+                                   "expected": {"plan_id": None}}]},
+        admin_token=scout_token, method="POST",
+    ))
+    assert started_response.status == 409
+    assert payload(started_response)["conflicts"][0]["reason"] == "started"
+    assert denied_bulk_role.status == 403
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM crm_planned_shifts WHERE id IN (?,?)",
+            (first_item["plan_id"], second_item["plan_id"]),
+        )
+        await db.commit()
+
     # Зарплата считается за выбранную декаду и не выходит за город доступа.
     local_today = datetime.now(bot._city_tz(city)).date()
     payroll_response = await bot.api_crm_payroll(Request(

@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-06 · личный график и ролевой календарь CRM"
+BUILD_VERSION = "2026-08-10 · массовое редактирование графика CRM"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -981,6 +981,19 @@ async def init_db():
                 request_json TEXT NOT NULL,
                 summary_json TEXT,
                 created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_calendar_commits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                admin_user_id INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                request_hash TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                result_json TEXT,
                 created_at TEXT NOT NULL
             )
         """)
@@ -8215,6 +8228,7 @@ async def api_crm_planned_shift_create(request):
             db, city, user_id, role, _crm_scope_role(context)
         )
         if target_error: return web.json_response({"error": "target", "message": target_error}, status=400)
+        await db.execute("BEGIN IMMEDIATE")
         if user_id is not None and not district:
             district = await choose_employee_district(db, user_id)
         segment = _crm_segment_from_time(start)
@@ -8227,6 +8241,7 @@ async def api_crm_planned_shift_create(request):
                 (city["id"], work_date.isoformat(), user_id, segment),
             )).fetchone()
             if duplicate:
+                await db.rollback()
                 return web.json_response({"error": "duplicate", "plan_id": duplicate[0]}, status=409)
         now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
         cur = await db.execute(
@@ -8365,6 +8380,255 @@ async def api_crm_planned_shifts_batch(request):
         await db.commit()
     return web.json_response({"ok": True, "batch_id": batch_id, **summary,
                               "idempotent_replay": False}, status=201)
+
+
+async def api_crm_calendar_changes(request):
+    """Atomically apply the quick-edit calendar draft created in the CRM UI."""
+    context, error = await _crm_admin(request, write=True)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error is not None:
+        return error
+    role, error = _crm_scoped_role(context, str(body.get("role") or "").strip() or None)
+    if error is not None:
+        return error
+    idempotency_key = str(body.get("idempotency_key") or "").strip()[:200]
+    raw_changes = body.get("changes")
+    presets = {"shift_1": ("09:00", "19:00"), "shift_2": ("12:00", "22:00")}
+    if not role or not idempotency_key or not isinstance(raw_changes, list) \
+            or not 1 <= len(raw_changes) <= 500:
+        return web.json_response(
+            {"error": "fields", "message": "Выберите группу и от 1 до 500 плиток."},
+            status=400,
+        )
+
+    normalized = []
+    cells = set()
+    client_ids = set()
+    dates = []
+    try:
+        for index, raw in enumerate(raw_changes):
+            if not isinstance(raw, dict):
+                raise ValueError
+            user_id = int(raw.get("user_id"))
+            work_date = _crm_date(raw.get("work_date"))
+            action = str(raw.get("action") or "").strip()
+            preset = str(raw.get("preset") or "").strip() or None
+            expected = raw.get("expected") or {}
+            plan_id = expected.get("plan_id")
+            plan_id = int(plan_id) if plan_id not in (None, "") else None
+            expected_updated_at = str(expected.get("updated_at") or "").strip() or None
+            client_id = str(raw.get("client_id") or f"{user_id}:{raw.get('work_date')}")[:120]
+            if not work_date or action not in {"set_preset", "cancel"}:
+                raise ValueError
+            if action == "set_preset" and preset not in presets:
+                raise ValueError
+            if action == "cancel" and plan_id is None:
+                raise ValueError
+            cell = (user_id, work_date.isoformat())
+            if cell in cells:
+                return web.json_response(
+                    {"error": "duplicate_cell", "message": "Одна плитка передана дважды."},
+                    status=400,
+                )
+            if client_id in client_ids:
+                return web.json_response(
+                    {"error": "duplicate_client_id", "message": "Ключ плитки передан дважды."},
+                    status=400,
+                )
+            cells.add(cell); client_ids.add(client_id); dates.append(work_date)
+            normalized.append({
+                "client_id": client_id, "action": action, "preset": preset,
+                "user_id": user_id, "work_date": work_date.isoformat(),
+                "plan_id": plan_id, "expected_updated_at": expected_updated_at,
+            })
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "changes", "message": "Проверьте данные изменённых плиток."},
+            status=400,
+        )
+    if (max(dates) - min(dates)).days + 1 > CRM_MAX_RANGE_DAYS:
+        return web.json_response(
+            {"error": "date_range", "message": f"Максимальный диапазон — {CRM_MAX_RANGE_DAYS} дней."},
+            status=400,
+        )
+
+    admin_uid = int(context["telegram_user"]["id"])
+    request_snapshot = {"city_id": city["id"], "role": role, "changes": normalized}
+    request_json = json.dumps(request_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    request_hash = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(_city_tz(city)).date().isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA busy_timeout=15000")
+        await db.execute("BEGIN IMMEDIATE")
+        replay = await (await db.execute(
+            "SELECT * FROM crm_calendar_commits WHERE idempotency_key=?", (idempotency_key,)
+        )).fetchone()
+        if replay:
+            await db.rollback()
+            if (replay["city_id"] != city["id"] or replay["admin_user_id"] != admin_uid
+                    or replay["request_hash"] != request_hash):
+                return web.json_response(
+                    {"error": "idempotency_key_conflict",
+                     "message": "Этот ключ сохранения уже использован для другого черновика."},
+                    status=409,
+                )
+            result = json.loads(replay["result_json"] or "{}")
+            result.update({"ok": True, "commit_id": replay["id"], "idempotent_replay": True})
+            return web.json_response(result)
+
+        user_ids = sorted({item["user_id"] for item in normalized})
+        placeholders = ",".join("?" for _ in user_ids)
+        users = await (await db.execute(
+            f"SELECT user_id,full_name,role,calendar_visible FROM users "
+            f"WHERE city_id=? AND user_id IN ({placeholders})",
+            [city["id"], *user_ids],
+        )).fetchall()
+        users_by_id = {int(row["user_id"]): row for row in users}
+        conflicts = []
+        for item in normalized:
+            user = users_by_id.get(item["user_id"])
+            if not user or (user["role"] or "").casefold() != role.casefold():
+                conflicts.append({"client_id": item["client_id"], "reason": "target_changed"})
+            elif not bool(user["calendar_visible"]):
+                conflicts.append({"client_id": item["client_id"], "reason": "employee_hidden"})
+            elif item["work_date"] < today:
+                conflicts.append({"client_id": item["client_id"], "reason": "past_date"})
+        if conflicts:
+            await db.rollback()
+            return web.json_response(
+                {"error": "calendar_conflict", "applied": 0, "conflicts": conflicts,
+                 "message": "Некоторые сотрудники или даты уже недоступны."}, status=409,
+            )
+
+        plan_ids = sorted({item["plan_id"] for item in normalized if item["plan_id"] is not None})
+        plans_by_id = {}
+        if plan_ids:
+            plan_marks = ",".join("?" for _ in plan_ids)
+            plan_rows = await (await db.execute(
+                f"SELECT * FROM crm_planned_shifts WHERE id IN ({plan_marks})", plan_ids
+            )).fetchall()
+            plans_by_id = {int(row["id"]): row for row in plan_rows}
+        occupied_rows = await (await db.execute(
+            f"SELECT * FROM crm_planned_shifts WHERE city_id=? AND status='scheduled' "
+            f"AND user_id IN ({placeholders}) AND work_date>=? AND work_date<=?",
+            [city["id"], *user_ids, min(dates).isoformat(), max(dates).isoformat()],
+        )).fetchall()
+        occupied = {}
+        for row in occupied_rows:
+            if _crm_segment_from_time(row["start_time"]) == "day":
+                occupied.setdefault((int(row["user_id"]), row["work_date"]), []).append(row)
+
+        conflicts = []
+        current_by_client = {}
+        for item in normalized:
+            current = plans_by_id.get(item["plan_id"]) if item["plan_id"] is not None else None
+            current_by_client[item["client_id"]] = current
+            if item["plan_id"] is None:
+                if occupied.get((item["user_id"], item["work_date"])):
+                    conflicts.append({"client_id": item["client_id"], "reason": "occupied"})
+                continue
+            if (not current or current["city_id"] != city["id"]
+                    or current["user_id"] != item["user_id"]
+                    or current["work_date"] != item["work_date"]
+                    or current["status"] != "scheduled"
+                    or _crm_segment_from_time(current["start_time"]) != "day"):
+                conflicts.append({"client_id": item["client_id"], "reason": "target_changed"})
+            elif current["actual_shift_id"] or current["auto_started_at"]:
+                conflicts.append({"client_id": item["client_id"], "reason": "started"})
+            elif not item["expected_updated_at"] or current["updated_at"] != item["expected_updated_at"]:
+                conflicts.append({"client_id": item["client_id"], "reason": "stale"})
+        if conflicts:
+            await db.rollback()
+            return web.json_response(
+                {"error": "calendar_conflict", "applied": 0, "conflicts": conflicts,
+                 "message": "Календарь уже изменился. Обновите его и повторите правки."}, status=409,
+            )
+
+        commit_cur = await db.execute(
+            "INSERT INTO crm_calendar_commits (city_id,role,admin_user_id,idempotency_key,"
+            "request_hash,request_json,created_at) VALUES (?,?,?,?,?,?,?)",
+            (city["id"], role, admin_uid, idempotency_key, request_hash, request_json, now_iso),
+        )
+        commit_id = commit_cur.lastrowid
+        counts = {"created": 0, "updated": 0, "cancelled": 0, "unchanged": 0}
+        result_items = []
+        notifications = {}
+        for item in normalized:
+            current = current_by_client[item["client_id"]]
+            result_updated_at = now_iso
+            if item["action"] == "cancel":
+                await db.execute(
+                    "UPDATE crm_planned_shifts SET status='cancelled',updated_by=?,updated_at=?,"
+                    "reminder_sent_at=NULL WHERE id=?",
+                    (admin_uid, now_iso, current["id"]),
+                )
+                counts["cancelled"] += 1
+                plan_id = int(current["id"])
+                notifications.setdefault(item["user_id"], []).append({
+                    "action": "cancel", "work_date": item["work_date"]})
+            else:
+                start, end = presets[item["preset"]]
+                if current and current["start_time"] == start and current["end_time"] == end \
+                        and (current["work_kind"] or "regular") == "regular":
+                    counts["unchanged"] += 1
+                    plan_id = int(current["id"])
+                    result_updated_at = current["updated_at"]
+                elif current:
+                    await db.execute(
+                        "UPDATE crm_planned_shifts SET start_time=?,end_time=?,work_kind='regular',"
+                        "status='scheduled',updated_by=?,updated_at=?,reminder_sent_at=NULL WHERE id=?",
+                        (start, end, admin_uid, now_iso, current["id"]),
+                    )
+                    counts["updated"] += 1
+                    plan_id = int(current["id"])
+                    notifications.setdefault(item["user_id"], []).append({
+                        "action": "set", "work_date": item["work_date"],
+                        "start_time": start, "end_time": end, "district": current["district"] or ""})
+                else:
+                    district = await choose_employee_district(db, item["user_id"])
+                    created = await db.execute(
+                        "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,"
+                        "role,district,note,work_kind,status,created_by,created_at,updated_by,updated_at) "
+                        "VALUES (?,?,?,?,?,NULL,?,'','regular','scheduled',?,?,?,?)",
+                        (city["id"], item["work_date"], start, end, item["user_id"], district,
+                         admin_uid, now_iso, admin_uid, now_iso),
+                    )
+                    plan_id = created.lastrowid
+                    counts["created"] += 1
+                    notifications.setdefault(item["user_id"], []).append({
+                        "action": "set", "work_date": item["work_date"],
+                        "start_time": start, "end_time": end, "district": district})
+            result_items.append({
+                "client_id": item["client_id"], "status": item["action"],
+                "plan_id": plan_id, "updated_at": result_updated_at,
+            })
+
+        for user_id, entries in notifications.items():
+            await _enqueue_crm_notification(
+                db, city["id"], user_id, "calendar_schedule_updated", commit_id,
+                {"commit_id": commit_id, "entries": entries},
+            )
+        result = {**counts, "items": result_items}
+        await db.execute(
+            "UPDATE crm_calendar_commits SET result_json=? WHERE id=?",
+            (json.dumps(result, ensure_ascii=False, default=str), commit_id),
+        )
+        await _crm_audit(
+            db, context, "planned_shift.calendar_commit", "calendar_commit", commit_id,
+            city["id"], after={"role": role, **counts, "changes": normalized},
+        )
+        await db.commit()
+    return web.json_response(
+        {"ok": True, "commit_id": commit_id, **result, "idempotent_replay": False}, status=201
+    )
 
 
 async def api_crm_planned_shift_update(request):
@@ -9116,6 +9380,22 @@ def _crm_notification_text(kind, payload):
         lines.extend(["", "🤖 Бот автоматически откроет смену в указанное время и закроет её по окончании.",
                       "✅ Если вы откроете смену самостоятельно, вторая смена не появится."])
         return "\n".join(lines)
+    if kind == "calendar_schedule_updated":
+        entries = list(payload.get("entries") or [])
+        lines = ["🗓 ГРАФИК ОБНОВЛЁН", ""]
+        for item in entries[:30]:
+            date_label = _crm_human_date(item.get("work_date"))
+            if item.get("action") == "cancel":
+                lines.append(f"• {date_label} — выходной")
+            else:
+                shift_time = f"{item.get('start_time', '—')}–{item.get('end_time', '—')}"
+                district_label = f" · {item.get('district')}" if item.get("district") else ""
+                lines.append(f"• {date_label} — {shift_time}{district_label}")
+        if len(entries) > 30:
+            lines.append(f"• Ещё изменений: {len(entries) - 30}")
+        lines.extend(["", "⏰ Перед рабочей сменой придёт отдельное напоминание.",
+                      "📱 Полный график доступен в разделе «Мой график»."])
+        return "\n".join(lines)
     if kind == "shift_reminder":
         lines = ["⏰ ДО НАЧАЛА СМЕНЫ 30 МИНУТ", "",
                  f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
@@ -9842,6 +10122,7 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/operational-signals", api_crm_operational_signals)
         app.router.add_get("/api/admin/crm/data-quality", api_crm_data_quality)
         app.router.add_get("/api/admin/crm/calendar", api_crm_calendar)
+        app.router.add_post("/api/admin/crm/calendar/changes", api_crm_calendar_changes)
         app.router.add_post("/api/admin/crm/planned-shifts/batch", api_crm_planned_shifts_batch)
         app.router.add_post("/api/admin/crm/planned-shifts", api_crm_planned_shift_create)
         app.router.add_patch("/api/admin/crm/planned-shifts/{plan_id}", api_crm_planned_shift_update)

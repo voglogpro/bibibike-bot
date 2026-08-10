@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-10 · единый черновик календаря, ночные и 12-часовые смены"
+BUILD_VERSION = "2026-08-10 · календарный черновик и пояснения к фото"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4139,8 +4139,35 @@ def _photo_action_codes(actions):
     return codes
 
 
+PHOTO_RESULT_ACTION_LABELS = {
+    "move": "переместил",
+    "fix": "поправил",
+    "repair": "требует ремонта",
+    "battery": "заменил АКБ",
+    "sticker": "оклеил",
+    "to_sc": "привёз на СЦ",
+    "from_sc": "вывез с СЦ",
+}
+
+
 def _photo_result_text(actions):
-    return "\n".join(_photo_action_codes(actions))
+    """Показывает по каждому номеру только фактически сохранённые действия."""
+    codes = _photo_action_codes(actions)
+    labels_by_code = {code: [] for code in codes}
+    for action in actions or []:
+        label = PHOTO_RESULT_ACTION_LABELS.get(str(action.get("action_type") or ""))
+        if not label:
+            continue
+        for raw_code in action.get("bike_codes") or []:
+            code = str(raw_code).strip()
+            labels = labels_by_code.get(code)
+            if labels is not None and label not in labels:
+                labels.append(label)
+    return "\n".join(
+        f"{code} — {', '.join(labels_by_code[code])}"
+        if labels_by_code[code] else code
+        for code in codes
+    )
 
 
 async def _reply_with_photo_result(message: Message, actions):

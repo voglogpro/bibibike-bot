@@ -63,7 +63,7 @@ def check_parsers():
         {"action_type": "move", "bike_codes": ["0915", "0103"], "quantity": 0},
         {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
     ])
-    assert photo_text == "0915\n0103", photo_text
+    assert photo_text == "0915 — переместил, требует ремонта\n0103 — переместил", photo_text
     assert photo_text.count("0915") == 1, photo_text
     assert "0103" in photo_text, photo_text
     assert bot._photo_result_text([]) == ""
@@ -308,7 +308,7 @@ async def check_photo_result_reply():
     await bot._reply_with_photo_result(message, [
         {"action_type": "move", "bike_codes": ["0915"], "quantity": 0}
     ])
-    assert message.replies == ["0915"]
+    assert message.replies == ["0915 — переместил"]
 
 
 async def check_photo_caption_priority():
@@ -329,7 +329,7 @@ async def check_photo_caption_priority():
         await bot.process_work_message(recognized, city)
     stats = await bot.get_stats(shift_id)
     assert stats["move"] == 1 and stats["repair"] == 0, stats
-    assert recognized.replies == ["0915"], recognized.replies
+    assert recognized.replies == ["0915 — переместил"], recognized.replies
 
     fallback = FakeMessage(
         uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,

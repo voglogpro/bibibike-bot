@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-10 · график на месяц и ответ по фото"
+BUILD_VERSION = "2026-08-10 · подписи к фото, настройки и район смены"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4112,22 +4112,14 @@ def _photo_action_codes(actions):
     for action in actions or []:
         for raw_code in action.get("bike_codes") or []:
             code = str(raw_code).strip()
-            if code and code not in seen:
+            if re.fullmatch(r"\d{4}", code) and code not in seen:
                 seen.add(code)
                 codes.append(code)
     return codes
 
 
 def _photo_result_text(actions):
-    codes = _photo_action_codes(actions)
-    if not codes:
-        return ""
-    if len(codes) == 1:
-        return f"✅ Фото распознано и записано.\n\nНомер байка:\n{codes[0]}"
-    return (
-        f"✅ Фото распознано и записано.\n\nРаспознано номеров: {len(codes)}\n"
-        + "\n".join(codes)
-    )
+    return "\n".join(_photo_action_codes(actions))
 
 
 async def _reply_with_photo_result(message: Message, actions):
@@ -4337,8 +4329,18 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         message_date.isoformat() if message_date else None, chat_id,
     )
 
-    # === НОВОЕ: в теме NPB считаем голые номера как замены АКБ ===
-    if bare_repair_topic:
+    # Если скриншот распознан, его переключатели — единственный источник
+    # действий. Подпись остаётся человеческим комментарием в Telegram и не
+    # смешивается с результатом изображения. Если изображение не распознано,
+    # подпись обрабатывается как обычное рабочее сообщение.
+    used_photo_actions = bool(photo_actions)
+    if used_photo_actions:
+        actions = photo_actions
+        logger.info(
+            "ФОТО-ЗАСЧИТАНО (подпись оставлена комментарием): uid=%s msg=%s -> %s",
+            uid, message.message_id, photo_actions,
+        )
+    elif bare_repair_topic:
         actions = parse_bare_repair_message(text)  # тема 4485: номера с любым описанием
     elif sticker_topic:
         actions = parse_sticker_message(text)      # тема 2290: номер + слово
@@ -4352,16 +4354,6 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         actions = parse_polyana_message(text)
     else:
         actions = parse_message(text)
-    # Скриншот засчитываем, только если в тексте действий не нашлось —
-    # приоритет всегда у того, что человек написал словами.
-    used_photo_actions = False
-    if not actions and photo_actions:
-        actions = photo_actions
-        used_photo_actions = True
-        logger.info(
-            "ФОТО-ЗАСЧИТАНО (сообщение с подписью): uid=%s msg=%s -> %s",
-            uid, message.message_id, actions
-        )
 
     logger.info(
         f"РАЗБОР: город={city['name']} роль_группы={city.get('role_group') or '—'} "
@@ -5116,8 +5108,10 @@ async def _employee_planned_shift(uid, city, active_shift=None):
             "district": plan.get("district") or "",
             "work_kind": plan.get("work_kind") or "regular",
             "actual_shift_id": plan.get("actual_shift_id"),
+            "updated_at": plan.get("updated_at"),
             "can_edit_start": not plan.get("actual_shift_id") and now < start_at,
             "can_edit_end": now < end_at,
+            "can_edit_district": True,
         }
     return None
 
@@ -5288,11 +5282,13 @@ async def api_state(request):
         "registered": bool(user and name and role and user_city_id),
         "cities": [
             {"id": item["id"], "key": item["city_key"], "name": item["name"],
-             "timezone_offset": item["timezone_offset"]}
+             "timezone_offset": item["timezone_offset"],
+             "districts": CITY_DISTRICTS.get(item["name"].casefold(), [])}
             for item in sorted(CITIES_BY_ID.values(), key=lambda value: value["name"])
         ],
         "city": {"id": city["id"], "key": city["city_key"], "name": city["name"],
-                 "timezone_offset": city["timezone_offset"]},
+                 "timezone_offset": city["timezone_offset"],
+                 "districts": CITY_DISTRICTS.get(city["name"].casefold(), [])},
         "active": bool(shift),
         "shift": shift_data,
         "planned_shift": planned_shift,
@@ -5341,7 +5337,7 @@ async def api_settings(request):
     # Во время активной смены профиль не должен «переезжать» в другой город
     # или роль: действия иначе окажутся отделены от открытого отчёта.
     if active_shift:
-        if city_id != active_shift.get("city_id"):
+        if city_was_sent and city_id != active_shift.get("city_id"):
             return web.json_response(
                 {"error": "active_city_change",
                  "message": "Сначала закройте активную смену, затем меняйте город."},
@@ -5399,8 +5395,11 @@ async def api_settings(request):
     if "photo_parse" in body:
         await set_user_photo_parse(uid, bool(body.get("photo_parse")))
 
-    if name and requested_role:
-        await add_user(uid, name, requested_role, city_id)
+    if name or requested_role:
+        final_name = name or current_user.get("full_name") or ""
+        final_role = requested_role or current_user.get("role") or ""
+        if final_name and final_role:
+            await add_user(uid, final_name, final_role, city_id)
 
     return web.json_response({"ok": True})
 
@@ -5416,7 +5415,7 @@ def _valid_time(t):
     return f"{int(h)}:{m}"   # нормализуем как в чате: 9:20, 18:05
 
 async def api_employee_planned_shift_update(request):
-    """Даёт сотруднику перенести начало будущей смены или продлить её конец."""
+    """Даёт сотруднику изменить время или район своей плановой смены."""
     tg_user = await _auth_user(request)
     if not tg_user:
         return web.json_response({"error": "auth"}, status=401)
@@ -5431,13 +5430,22 @@ async def api_employee_planned_shift_update(request):
                        if "start_time" in body else None)
     requested_end = (_valid_time(str(body.get("end_time") or "").strip())
                      if "end_time" in body else None)
+    district_was_sent = "district" in body
+    requested_district = str(body.get("district") or "").strip()[:200]
+    expected_updated_at = str(body.get("expected_updated_at") or "").strip()
     if (("start_time" in body and not requested_start)
             or ("end_time" in body and not requested_end)):
         return web.json_response(
             {"error": "time", "message": "Время должно быть в формате ЧЧ:ММ."}, status=400
         )
-    if requested_start is None and requested_end is None:
-        return web.json_response({"error": "fields", "message": "Укажите новое время."}, status=400)
+    if district_was_sent and not requested_district:
+        return web.json_response(
+            {"error": "district", "message": "Выберите район этой смены."}, status=400
+        )
+    if requested_start is None and requested_end is None and not district_was_sent:
+        return web.json_response(
+            {"error": "fields", "message": "Укажите новое время или район."}, status=400
+        )
 
     uid = int(tg_user["id"])
     async with aiosqlite.connect(DB_PATH) as db:
@@ -5453,6 +5461,12 @@ async def api_employee_planned_shift_update(request):
             await db.rollback()
             return web.json_response({"error": "not_found"}, status=404)
         current = dict(current_row)
+        if expected_updated_at and expected_updated_at != str(current.get("updated_at") or ""):
+            await db.rollback()
+            return web.json_response(
+                {"error": "stale", "message": "График уже изменён. Обновите данные и повторите."},
+                status=409,
+            )
         city = get_city(current["city_id"])
         if not city:
             await db.rollback()
@@ -5501,7 +5515,8 @@ async def api_employee_planned_shift_update(request):
                 {"error": "end_time", "message": "Новое окончание должно быть позже текущего времени."},
                 status=400,
             )
-        if current.get("actual_shift_id") and new_end_at <= old_end_at:
+        if (current.get("actual_shift_id") and requested_end is not None
+                and new_end_at <= old_end_at):
             await db.rollback()
             return web.json_response(
                 {"error": "extension", "message": "Во время смены окончание можно только продлить."},
@@ -5511,15 +5526,21 @@ async def api_employee_planned_shift_update(request):
         now_iso = datetime.now(timezone.utc).isoformat()
         reminder_sql = (",reminder_sent_at=NULL"
                         if requested_start is not None and not current.get("reminder_sent_at") else "")
+        district = requested_district if district_was_sent else (current.get("district") or "")
         await db.execute(
-            "UPDATE crm_planned_shifts SET start_time=?,end_time=?,updated_by=?,updated_at=?" +
+            "UPDATE crm_planned_shifts SET start_time=?,end_time=?,district=?,updated_by=?,updated_at=?" +
             reminder_sql + " WHERE id=?",
-            (start_time, end_time, uid, now_iso, plan_id),
+            (start_time, end_time, district, uid, now_iso, plan_id),
         )
         if current.get("actual_shift_id"):
+            updates = ["auto_close_at=?"]
+            params = [new_end_at.isoformat()]
+            if district_was_sent:
+                updates.append("district=?")
+                params.append(district)
             cursor = await db.execute(
-                "UPDATE shifts SET auto_close_at=? WHERE id=? AND user_id=? AND is_active=1",
-                (new_end_at.isoformat(), current["actual_shift_id"], uid),
+                f"UPDATE shifts SET {','.join(updates)} WHERE id=? AND user_id=? AND is_active=1",
+                [*params, current["actual_shift_id"], uid],
             )
             if cursor.rowcount != 1:
                 await db.rollback()
@@ -5532,11 +5553,14 @@ async def api_employee_planned_shift_update(request):
         await db.execute(
             "INSERT INTO admin_audit_log (admin_user_id,city_id,operation,entity_type,entity_id,"
             "before_json,after_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (uid, current["city_id"], "planned_shift.employee_time_update", "planned_shift",
+            (uid, current["city_id"], "planned_shift.employee_update", "planned_shift",
              str(plan_id), json.dumps(current, ensure_ascii=False, default=str),
              json.dumps(dict(updated), ensure_ascii=False, default=str), now_iso),
         )
         await db.commit()
+    updated_plan_shift_id = current.get("actual_shift_id")
+    if district_was_sent and updated_plan_shift_id:
+        await safe_flush_report_update(updated_plan_shift_id)
     updated_plan = dict(updated)
     payload = {
         "plan_id": updated_plan["id"], "work_date": updated_plan["work_date"],
@@ -5545,8 +5569,10 @@ async def api_employee_planned_shift_update(request):
         "district": updated_plan.get("district") or "",
         "work_kind": updated_plan.get("work_kind") or "regular",
         "actual_shift_id": updated_plan.get("actual_shift_id"),
+        "updated_at": updated_plan.get("updated_at"),
         "can_edit_start": not updated_plan.get("actual_shift_id") and now < new_start_at,
         "can_edit_end": now < new_end_at,
+        "can_edit_district": True,
     }
     return web.json_response({"ok": True, "planned_shift": payload})
 
@@ -8697,6 +8723,12 @@ async def api_crm_planned_shift_update(request):
             _crm_scope_role(context)
         ):
             await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
+        expected_updated_at = str(body.get("expected_updated_at") or "").strip()
+        if expected_updated_at and expected_updated_at != str(current["updated_at"] or ""):
+            await db.rollback()
+            return web.json_response(
+                {"error": "stale", "message": "Смена уже изменена. Обновите календарь."}, status=409
+            )
         merged = dict(current)
         for field in ("work_date", "start_time", "end_time", "user_id", "role", "district",
                       "note", "work_kind", "status"):
@@ -8731,9 +8763,24 @@ async def api_crm_planned_shift_update(request):
              str(merged.get("note") or "")[:2000], work_kind, merged["status"],
              context["telegram_user"]["id"], now_iso, 1 if reset_reminder else 0, plan_id),
         )
+        refresh_shift_id = None
+        if "district" in body and current["actual_shift_id"]:
+            actual = await (await db.execute(
+                "SELECT id,is_active FROM shifts WHERE id=? AND user_id=? AND city_id=?",
+                (current["actual_shift_id"], current["user_id"], current["city_id"]),
+            )).fetchone()
+            if not actual or not actual["is_active"]:
+                await db.rollback()
+                return web.json_response(
+                    {"error": "shift_closed", "message": "Завершённую смену менять нельзя."}, status=409
+                )
+            await db.execute("UPDATE shifts SET district=? WHERE id=?", (district, actual["id"]))
+            refresh_shift_id = actual["id"]
         updated = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
         await _crm_audit(db, context, "planned_shift.update", "planned_shift", plan_id,
                          current["city_id"], before=dict(current), after=dict(updated)); await db.commit()
+    if refresh_shift_id:
+        await safe_flush_report_update(refresh_shift_id)
     return web.json_response({"ok": True, "plan": dict(updated)})
 
 
@@ -9735,11 +9782,21 @@ async def process_planned_shifts_once():
         except ActiveShiftExists:
             continue
         async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
             await db.execute("BEGIN IMMEDIATE")
+            fresh_plan_row = await (await db.execute(
+                "SELECT * FROM crm_planned_shifts WHERE id=? AND status='scheduled'",
+                (plan["id"],),
+            )).fetchone()
+            if not fresh_plan_row:
+                await db.rollback()
+                continue
+            fresh_plan = dict(fresh_plan_row)
+            _, fresh_end_at = _planned_shift_times(fresh_plan, city)
+            fresh_district = fresh_plan.get("district") or ""
             await db.execute(
-                "UPDATE shifts SET auto_close_at=?,district=CASE WHEN district IS NULL OR district='' "
-                "THEN ? ELSE district END WHERE id=? AND is_active=1",
-                (end_at.isoformat(), plan.get("district") or "", shift_id),
+                "UPDATE shifts SET auto_close_at=?,district=? WHERE id=? AND is_active=1",
+                ((fresh_end_at or end_at).isoformat(), fresh_district, shift_id),
             )
             cur = await db.execute(
                 "UPDATE crm_planned_shifts SET actual_shift_id=?,auto_started_at=? "
@@ -9749,8 +9806,8 @@ async def process_planned_shifts_once():
             if cur.rowcount == 1:
                 await _enqueue_crm_notification(
                     db, plan["city_id"], plan["user_id"], "shift_auto_started", plan["id"],
-                    {"shift_id": shift_id, "start_time": plan["start_time"],
-                     "end_time": plan["end_time"], "district": plan.get("district") or ""},
+                    {"shift_id": shift_id, "start_time": fresh_plan["start_time"],
+                     "end_time": fresh_plan["end_time"], "district": fresh_district},
                 )
             await db.commit()
         if not active:

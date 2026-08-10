@@ -15,6 +15,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +63,7 @@ def check_parsers():
         {"action_type": "move", "bike_codes": ["0915", "0103"], "quantity": 0},
         {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
     ])
-    assert "Распознано номеров: 2" in photo_text, photo_text
+    assert photo_text == "0915\n0103", photo_text
     assert photo_text.count("0915") == 1, photo_text
     assert "0103" in photo_text, photo_text
     assert bot._photo_result_text([]) == ""
@@ -307,7 +308,40 @@ async def check_photo_result_reply():
     await bot._reply_with_photo_result(message, [
         {"action_type": "move", "bike_codes": ["0915"], "quantity": 0}
     ])
-    assert message.replies == ["✅ Фото распознано и записано.\n\nНомер байка:\n0915"]
+    assert message.replies == ["0915"]
+
+
+async def check_photo_caption_priority():
+    city = bot.get_city_by_group(bot.STAVROPOL_TRANSPORT_GROUP_ID)
+    uid = 930004
+    await bot.add_user(uid, "Фото Тест", "Водитель", city["id"])
+    await bot.set_user_photo_parse(uid, True)
+    shift_id = await insert_shift(uid, city, "Водитель")
+
+    recognized = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7101, None,
+    )
+    recognized.caption = "0001 требует ремонта"
+    recognized.photo = [SimpleNamespace(file_id="photo-1")]
+    photo_actions = [{"action_type": "move", "bike_codes": ["0915"], "quantity": 0}]
+    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(return_value=photo_actions)):
+        await bot.process_work_message(recognized, city)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 1 and stats["repair"] == 0, stats
+    assert recognized.replies == ["0915"], recognized.replies
+
+    fallback = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7102, None,
+    )
+    fallback.caption = "0001 требует ремонта"
+    fallback.photo = [SimpleNamespace(file_id="photo-2")]
+    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(return_value=[])):
+        await bot.process_work_message(fallback, city)
+    stats = await bot.get_stats(shift_id)
+    assert stats["repair"] == 1, stats
+    assert fallback.replies == [], fallback.replies
 
 
 async def main():
@@ -319,7 +353,8 @@ async def main():
         await check_database_and_message_burst()
         await check_report_rendering()
         await check_photo_result_reply()
-        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo reply")
+        await check_photo_caption_priority()
+        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo priority")
     finally:
         await bot.bot.session.close()
         shutil.rmtree(TEMP_DIR, ignore_errors=True)

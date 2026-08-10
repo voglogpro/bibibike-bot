@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-10 · подписи к фото, настройки и район смены"
+BUILD_VERSION = "2026-08-10 · единый черновик календаря, ночные и 12-часовые смены"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -268,6 +268,27 @@ CRM_UPLOAD_MAX_BYTES = max(
     1024 * 1024,
     min(10 * 1024 * 1024, int(os.getenv("CRM_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))),
 )
+
+# One source of truth for the quick CRM calendar.  The night hours for scouts
+# and chargers match the existing single-shift editor.  Driver presets keep
+# the familiar start times, but last the requested 12 hours.
+CRM_CALENDAR_PRESETS = {
+    "Скаут": [
+        {"id": "shift_1", "label": "Первая смена", "start_time": "09:00", "end_time": "19:00"},
+        {"id": "shift_2", "label": "Вторая смена", "start_time": "12:00", "end_time": "22:00"},
+        {"id": "night", "label": "Ночная смена", "start_time": "20:00", "end_time": "05:00"},
+    ],
+    "Водитель": [
+        {"id": "shift_1", "label": "Первая · 12 ч", "start_time": "09:00", "end_time": "21:00"},
+        {"id": "shift_2", "label": "Вторая · 12 ч", "start_time": "12:00", "end_time": "00:00"},
+        {"id": "night", "label": "Ночная · 12 ч", "start_time": "20:00", "end_time": "08:00"},
+    ],
+    "Чарджер": [
+        {"id": "shift_1", "label": "Первая смена", "start_time": "09:00", "end_time": "19:00"},
+        {"id": "shift_2", "label": "Вторая смена", "start_time": "12:00", "end_time": "22:00"},
+        {"id": "night", "label": "Ночная смена", "start_time": "20:00", "end_time": "05:00"},
+    ],
+}
 
 def _webapp_button():
     """Кнопка под отчётом, открывающая мини-приложение прямо из группы.
@@ -6335,6 +6356,7 @@ async def api_admin_login(request):
         "expires_at": expires,
         "role": account["role"],
         "role_scope": account.get("role_scope"),
+        "calendar_presets": CRM_CALENDAR_PRESETS,
         "city": {"id": city["id"], "name": city["name"],
                  "districts": CITY_DISTRICTS.get(city["name"].casefold(), [])},
         "cities": [
@@ -8349,17 +8371,29 @@ async def api_crm_planned_shifts_batch(request):
             or (work_days, rest_days) not in {(2, 1), (2, 2), (3, 1)}
             or (end_date - start_date).days + 1 > CRM_MAX_RANGE_DAYS):
         return web.json_response({"error": "fields"}, status=400)
+    admin_uid = int(context["telegram_user"]["id"])
+    request_snapshot = {"city_id": city["id"], "user_ids": user_ids,
+                        "date_from": start_date.isoformat(), "date_to": end_date.isoformat(),
+                        "work_days": work_days, "rest_days": rest_days, "start_time": start,
+                        "end_time": end, "district": district, "note": note,
+                        "work_kind": work_kind}
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA busy_timeout=15000")
         await db.execute("BEGIN IMMEDIATE")
         existing = await (await db.execute(
-            "SELECT id,city_id,summary_json FROM crm_planning_batches WHERE idempotency_key=?",
+            "SELECT id,city_id,summary_json,request_json,created_by FROM crm_planning_batches "
+            "WHERE idempotency_key=?",
             (idempotency_key,),
         )).fetchone()
         if existing:
             await db.rollback()
-            if existing["city_id"] != city["id"]:
+            try:
+                same_request = json.loads(existing["request_json"] or "{}") == request_snapshot
+            except (TypeError, ValueError, json.JSONDecodeError):
+                same_request = False
+            if (existing["city_id"] != city["id"]
+                    or int(existing["created_by"] or 0) != admin_uid or not same_request):
                 return web.json_response({"error": "idempotency_key_conflict"}, status=409)
             summary = json.loads(existing["summary_json"] or "{}")
             summary.update({"ok": True, "batch_id": existing["id"], "idempotent_replay": True})
@@ -8380,33 +8414,49 @@ async def api_crm_planned_shifts_batch(request):
             f"AND user_id IN ({placeholders})",
             [city["id"], *user_ids],
         )
-        now_iso = datetime.now(timezone.utc).isoformat(); admin_uid = context["telegram_user"]["id"]
-        request_snapshot = {"city_id": city["id"], "user_ids": user_ids,
-                            "date_from": start_date.isoformat(), "date_to": end_date.isoformat(),
-                            "work_days": work_days, "rest_days": rest_days, "start_time": start,
-                            "end_time": end, "district": district, "note": note,
-                            "work_kind": work_kind}
+        now_iso = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
             "INSERT INTO crm_planning_batches (city_id,idempotency_key,date_from,date_to,work_days,"
             "rest_days,request_json,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (city["id"], idempotency_key, start_date.isoformat(), end_date.isoformat(),
              work_days, rest_days, json.dumps(request_snapshot, ensure_ascii=False), admin_uid, now_iso),
         )
-        batch_id = cur.lastrowid; created = 0; skipped = 0
-        counts = {str(uid): {"created": 0, "skipped": 0, "dates": []} for uid in user_ids}
+        batch_id = cur.lastrowid; created = 0; skipped = 0; requested = 0
+        counts = {
+            str(uid): {"requested": 0, "created": 0, "kept": 0, "kept_exact": 0,
+                       "conflicts": 0, "skipped": 0, "dates": []}
+            for uid in user_ids
+        }
         current = start_date; cycle = work_days + rest_days; segment = _crm_segment_from_time(start)
         while current <= end_date:
             if (current - start_date).days % cycle < work_days:
                 work_date = current.isoformat()
                 for uid in user_ids:
+                    requested += 1
+                    counts[str(uid)]["requested"] += 1
+                    counts[str(uid)]["dates"].append(work_date)
                     duplicate = await (await db.execute(
-                        "SELECT id FROM crm_planned_shifts WHERE city_id=? AND work_date=? AND user_id=? "
+                        "SELECT id,start_time,end_time,district,work_kind FROM crm_planned_shifts "
+                        "WHERE city_id=? AND work_date=? AND user_id=? "
                         "AND status='scheduled' AND CASE WHEN CAST(substr(start_time,1,2) AS INTEGER)>=5 "
                         "AND CAST(substr(start_time,1,2) AS INTEGER)<17 THEN 'day' ELSE 'night' END=? LIMIT 1",
                         (city["id"], work_date, uid, segment),
                     )).fetchone()
                     if duplicate:
-                        skipped += 1; counts[str(uid)]["skipped"] += 1; continue
+                        skipped += 1
+                        counts[str(uid)]["skipped"] += 1
+                        counts[str(uid)]["kept"] += 1
+                        exact = (
+                            _valid_time(duplicate["start_time"]) == start
+                            and _valid_time(duplicate["end_time"]) == end
+                            and (duplicate["work_kind"] or "regular") == work_kind
+                            and (not district or (duplicate["district"] or "") == district)
+                        )
+                        if exact:
+                            counts[str(uid)]["kept_exact"] += 1
+                        else:
+                            counts[str(uid)]["conflicts"] += 1
+                        continue
                     employee_district = district or await choose_employee_district(db, uid)
                     await db.execute(
                         "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,role,"
@@ -8416,17 +8466,20 @@ async def api_crm_planned_shifts_batch(request):
                          admin_uid, now_iso, admin_uid, now_iso, batch_id),
                     )
                     created += 1; counts[str(uid)]["created"] += 1
-                    counts[str(uid)]["dates"].append(work_date)
             current += timedelta(days=1)
         for uid in user_ids:
             await _enqueue_crm_notification(
                 db, city["id"], uid, "plan_batch", batch_id,
                 {"batch_id": batch_id, "date_from": start_date.isoformat(),
                  "date_to": end_date.isoformat(), "start_time": start, "end_time": end,
+                 "work_days": work_days, "rest_days": rest_days,
                  "district": district, "note": note, "work_kind": work_kind,
                  **counts[str(uid)]},
             )
-        summary = {"created": created, "skipped": skipped, "by_user": counts}
+        conflicts = sum(item["conflicts"] for item in counts.values())
+        summary = {"requested": requested, "created": created, "kept": skipped,
+                   "conflicts": conflicts,
+                   "skipped": skipped, "by_user": counts}
         await db.execute("UPDATE crm_planning_batches SET summary_json=? WHERE id=?",
                          (json.dumps(summary, ensure_ascii=False), batch_id))
         await _crm_audit(db, context, "planned_shift.batch_create", "planning_batch", batch_id,
@@ -8452,7 +8505,10 @@ async def api_crm_calendar_changes(request):
         return error
     idempotency_key = str(body.get("idempotency_key") or "").strip()[:200]
     raw_changes = body.get("changes")
-    presets = {"shift_1": ("09:00", "19:00"), "shift_2": ("12:00", "22:00")}
+    role_presets = {
+        item["id"]: (item["start_time"], item["end_time"])
+        for item in CRM_CALENDAR_PRESETS.get(role or "", [])
+    }
     if not role or not idempotency_key or not isinstance(raw_changes, list) \
             or not 1 <= len(raw_changes) <= 500:
         return web.json_response(
@@ -8473,16 +8529,39 @@ async def api_crm_calendar_changes(request):
             action = str(raw.get("action") or "").strip()
             preset = str(raw.get("preset") or "").strip() or None
             expected = raw.get("expected") or {}
+            value = raw.get("value") or {}
             plan_id = expected.get("plan_id")
             plan_id = int(plan_id) if plan_id not in (None, "") else None
             expected_updated_at = str(expected.get("updated_at") or "").strip() or None
             client_id = str(raw.get("client_id") or f"{user_id}:{raw.get('work_date')}")[:120]
-            if not work_date or action not in {"set_preset", "cancel"}:
+            if not work_date or action not in {"set_preset", "set_custom", "cancel"}:
                 raise ValueError
-            if action == "set_preset" and preset not in presets:
+            if action == "set_preset" and preset not in role_presets:
                 raise ValueError
             if action == "cancel" and plan_id is None:
                 raise ValueError
+            custom = None
+            if action == "set_custom":
+                custom_start = _valid_time(value.get("start_time"))
+                custom_end = _valid_time(value.get("end_time"))
+                custom_kind = str(value.get("work_kind") or "regular").strip().lower()
+                if not custom_start or not custom_end or custom_kind not in {"regular", "extra"}:
+                    raise ValueError
+                start_hour, start_minute = custom_start.split(":")
+                end_hour, end_minute = custom_end.split(":")
+                start_minutes = int(start_hour) * 60 + int(start_minute)
+                end_minutes = int(end_hour) * 60 + int(end_minute)
+                custom_start = f"{int(start_hour):02d}:{start_minute}"
+                custom_end = f"{int(end_hour):02d}:{end_minute}"
+                duration = (end_minutes - start_minutes) % (24 * 60)
+                if not 60 <= duration <= 18 * 60:
+                    raise ValueError
+                custom = {
+                    "start_time": custom_start,
+                    "end_time": custom_end,
+                    "district": str(value.get("district") or "").strip()[:200],
+                    "work_kind": custom_kind,
+                }
             cell = (user_id, work_date.isoformat())
             if cell in cells:
                 return web.json_response(
@@ -8499,6 +8578,7 @@ async def api_crm_calendar_changes(request):
                 "client_id": client_id, "action": action, "preset": preset,
                 "user_id": user_id, "work_date": work_date.isoformat(),
                 "plan_id": plan_id, "expected_updated_at": expected_updated_at,
+                "value": custom,
             })
     except (TypeError, ValueError):
         return web.json_response(
@@ -8577,24 +8657,44 @@ async def api_crm_calendar_changes(request):
         )).fetchall()
         occupied = {}
         for row in occupied_rows:
-            if _crm_segment_from_time(row["start_time"]) == "day":
-                occupied.setdefault((int(row["user_id"]), row["work_date"]), []).append(row)
+            occupied.setdefault((int(row["user_id"]), row["work_date"]), []).append(row)
+        local_tz = _city_tz(city)
+        actual_from = datetime.combine(min(dates), datetime.min.time(), tzinfo=local_tz).isoformat()
+        actual_to = datetime.combine(
+            max(dates) + timedelta(days=1), datetime.min.time(), tzinfo=local_tz
+        ).isoformat()
+        actual_rows = await (await db.execute(
+            f"SELECT user_id,start_at,created_at FROM shifts WHERE city_id=? "
+            f"AND user_id IN ({placeholders}) AND COALESCE(start_at,created_at)>=? "
+            f"AND COALESCE(start_at,created_at)<?",
+            [city["id"], *user_ids, actual_from, actual_to],
+        )).fetchall()
+        actual_cells = set()
+        for row in actual_rows:
+            started_at = _parse_datetime(row["start_at"] or row["created_at"])
+            if started_at:
+                actual_cells.add((int(row["user_id"]), started_at.astimezone(local_tz).date().isoformat()))
 
         conflicts = []
         current_by_client = {}
         for item in normalized:
             current = plans_by_id.get(item["plan_id"]) if item["plan_id"] is not None else None
             current_by_client[item["client_id"]] = current
+            cell_plans = occupied.get((item["user_id"], item["work_date"]), [])
+            if (item["user_id"], item["work_date"]) in actual_cells:
+                conflicts.append({"client_id": item["client_id"], "reason": "started"})
+                continue
             if item["plan_id"] is None:
-                if occupied.get((item["user_id"], item["work_date"])):
+                if cell_plans:
                     conflicts.append({"client_id": item["client_id"], "reason": "occupied"})
                 continue
             if (not current or current["city_id"] != city["id"]
                     or current["user_id"] != item["user_id"]
                     or current["work_date"] != item["work_date"]
-                    or current["status"] != "scheduled"
-                    or _crm_segment_from_time(current["start_time"]) != "day"):
+                    or current["status"] != "scheduled"):
                 conflicts.append({"client_id": item["client_id"], "reason": "target_changed"})
+            elif any(int(plan["id"]) != int(current["id"]) for plan in cell_plans):
+                conflicts.append({"client_id": item["client_id"], "reason": "occupied"})
             elif current["actual_shift_id"] or current["auto_started_at"]:
                 conflicts.append({"client_id": item["client_id"], "reason": "started"})
             elif not item["expected_updated_at"] or current["updated_at"] != item["expected_updated_at"]:
@@ -8629,30 +8729,51 @@ async def api_crm_calendar_changes(request):
                 notifications.setdefault(item["user_id"], []).append({
                     "action": "cancel", "work_date": item["work_date"]})
             else:
-                start, end = presets[item["preset"]]
+                if item["action"] == "set_custom":
+                    start = item["value"]["start_time"]
+                    end = item["value"]["end_time"]
+                    work_kind = item["value"]["work_kind"]
+                    district = item["value"]["district"]
+                    if not district:
+                        district = (current["district"] if current else "") or await choose_employee_district(
+                            db, item["user_id"]
+                        )
+                else:
+                    start, end = role_presets[item["preset"]]
+                    work_kind = "regular"
+                    district = (current["district"] if current else "") or await choose_employee_district(
+                        db, item["user_id"]
+                    )
                 if current and current["start_time"] == start and current["end_time"] == end \
-                        and (current["work_kind"] or "regular") == "regular":
+                        and (current["work_kind"] or "regular") == work_kind \
+                        and (current["district"] or "") == district:
                     counts["unchanged"] += 1
                     plan_id = int(current["id"])
                     result_updated_at = current["updated_at"]
                 elif current:
+                    if current["start_time"] != start or current["end_time"] != end:
+                        await db.execute(
+                            "DELETE FROM crm_notification_outbox WHERE user_id=? AND kind='shift_reminder' "
+                            "AND entity_id=?",
+                            (item["user_id"], current["id"]),
+                        )
                     await db.execute(
-                        "UPDATE crm_planned_shifts SET start_time=?,end_time=?,work_kind='regular',"
-                        "status='scheduled',updated_by=?,updated_at=?,reminder_sent_at=NULL WHERE id=?",
-                        (start, end, admin_uid, now_iso, current["id"]),
+                        "UPDATE crm_planned_shifts SET start_time=?,end_time=?,district=?,work_kind=?,"
+                        "status='scheduled',updated_by=?,updated_at=?,reminder_sent_at=NULL,"
+                        "auto_closed_at=NULL WHERE id=?",
+                        (start, end, district, work_kind, admin_uid, now_iso, current["id"]),
                     )
                     counts["updated"] += 1
                     plan_id = int(current["id"])
                     notifications.setdefault(item["user_id"], []).append({
                         "action": "set", "work_date": item["work_date"],
-                        "start_time": start, "end_time": end, "district": current["district"] or ""})
+                        "start_time": start, "end_time": end, "district": district})
                 else:
-                    district = await choose_employee_district(db, item["user_id"])
                     created = await db.execute(
                         "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,"
                         "role,district,note,work_kind,status,created_by,created_at,updated_by,updated_at) "
-                        "VALUES (?,?,?,?,?,NULL,?,'','regular','scheduled',?,?,?,?)",
-                        (city["id"], item["work_date"], start, end, item["user_id"], district,
+                        "VALUES (?,?,?,?,?,NULL,?,'',?,'scheduled',?,?,?,?)",
+                        (city["id"], item["work_date"], start, end, item["user_id"], district, work_kind,
                          admin_uid, now_iso, admin_uid, now_iso),
                     )
                     plan_id = created.lastrowid
@@ -8734,13 +8855,21 @@ async def api_crm_planned_shift_update(request):
             not current["actual_shift_id"] and
             (work_date.isoformat() != current["work_date"] or start != current["start_time"])
         )
+        if reset_reminder:
+            await db.execute(
+                "DELETE FROM crm_notification_outbox WHERE user_id=? AND kind='shift_reminder' "
+                "AND entity_id=?",
+                (current["user_id"], plan_id),
+            )
         await db.execute(
             "UPDATE crm_planned_shifts SET work_date=?,start_time=?,end_time=?,user_id=?,role=?,"
             "district=?,note=?,work_kind=?,status=?,updated_by=?,updated_at=?,"
-            "reminder_sent_at=CASE WHEN ? THEN NULL ELSE reminder_sent_at END WHERE id=?",
+            "reminder_sent_at=CASE WHEN ? THEN NULL ELSE reminder_sent_at END,"
+            "auto_closed_at=CASE WHEN ? THEN NULL ELSE auto_closed_at END WHERE id=?",
             (work_date.isoformat(), start, end, user_id, role, district,
              str(merged.get("note") or "")[:2000], work_kind, merged["status"],
-             context["telegram_user"]["id"], now_iso, 1 if reset_reminder else 0, plan_id),
+             context["telegram_user"]["id"], now_iso, 1 if reset_reminder else 0,
+             1 if reset_reminder else 0, plan_id),
         )
         refresh_shift_id = None
         if "district" in body and current["actual_shift_id"]:
@@ -8773,6 +8902,7 @@ async def api_crm_context(request):
         "role": context["admin"]["role"],
         "role_scope": context["admin"].get("role_scope"),
         "can_write": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
+        "calendar_presets": CRM_CALENDAR_PRESETS,
         "cities": [{
             "id": city_id,
             "name": get_city(city_id)["name"],
@@ -9500,11 +9630,25 @@ def _crm_notification_text(kind, payload):
                 "📞 Сообщите руководителю.")
     dates = payload.get("dates") or []
     is_extra = payload.get("work_kind") == "extra"
-    lines = ["💼 ДОБАВЛЕН ГРАФИК ПОДРАБОТОК" if is_extra else "🗓 ОПУБЛИКОВАН НОВЫЙ ГРАФИК", "",
+    requested = int(payload.get("requested") or (int(payload.get("created") or 0) + int(payload.get("kept") or payload.get("skipped") or 0)))
+    created = int(payload.get("created") or 0)
+    kept = int(payload.get("kept") or payload.get("skipped") or 0)
+    conflicts = int(payload.get("conflicts") or 0)
+    work_days = payload.get("work_days")
+    rest_days = payload.get("rest_days")
+    lines = ["💼 ГРАФИК ПОДРАБОТОК ОБНОВЛЁН" if is_extra else "🗓 ГРАФИК ОБНОВЛЁН", "",
              f"📆 Период: {_crm_human_date(payload.get('date_from'))} — {_crm_human_date(payload.get('date_to'))}",
-             f"🕒 Время смен: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}",
-             f"✅ Назначено выходов: {payload.get('created', 0)}"]
-    if dates: lines.extend(["", "📌 Ваши рабочие дни:", *[f"• {_crm_human_date(item)}" for item in dates]])
+             *([f"🔁 Схема: {work_days}/{rest_days}"] if work_days and rest_days else []),
+             f"🕒 Запрошенное время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}",
+             f"📋 По выбранной схеме: {requested}",
+             f"✅ Добавлено новых: {created}",
+             f"🟢 Уже было в календаре: {kept}"]
+    if conflicts:
+        lines.append(
+            f"⚠️ Существующие смены с другим временем, районом или типом: {conflicts}. "
+            "Они сохранены без изменений — проверьте точное время в «Моём графике»."
+        )
+    if dates: lines.extend(["", "📌 Все рабочие дни по выбранной схеме:", *[f"• {_crm_human_date(item)}" for item in dates]])
     if district: lines.extend(["", f"📍 Район: {district}"])
     if details: lines.extend(["", "📝 Комментарий руководителя:", details])
     lines.extend(["", "⏰ За 30 минут до каждой смены придёт отдельное напоминание.",

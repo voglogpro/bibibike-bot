@@ -417,10 +417,34 @@ async def run():
         900002, body=batch_body, admin_token=scout_token,
     ))
     assert batch.status == 201 and payload(batch)["created"] == 8
+    assert payload(batch)["requested"] == 8 and payload(batch)["kept"] == 0
     batch_replay = await bot.api_crm_planned_shifts_batch(Request(
         900002, body=batch_body, admin_token=scout_token,
     ))
     assert batch_replay.status == 200 and payload(batch_replay)["idempotent_replay"] is True
+    mismatched_replay = await bot.api_crm_planned_shifts_batch(Request(
+        900002, body={**batch_body, "end_time": "17:00"}, admin_token=scout_token,
+    ))
+    assert mismatched_replay.status == 409
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        conflicting_plan = await (await db.execute(
+            "SELECT id FROM crm_planned_shifts WHERE batch_id=? ORDER BY id LIMIT 1",
+            (payload(batch)["batch_id"],),
+        )).fetchone()
+        await db.execute(
+            "UPDATE crm_planned_shifts SET start_time='12:00',end_time='22:00' WHERE id=?",
+            (conflicting_plan[0],),
+        )
+        await db.commit()
+    filled_body = {**batch_body, "idempotency_key": "crm-test-batch-2-1-filled"}
+    filled_batch = await bot.api_crm_planned_shifts_batch(Request(
+        900002, body=filled_body, admin_token=scout_token,
+    ))
+    assert filled_batch.status == 201
+    assert payload(filled_batch)["requested"] == 8
+    assert payload(filled_batch)["created"] == 0 and payload(filled_batch)["kept"] == 8
+    assert payload(filled_batch)["conflicts"] == 1
+    assert all(len(item["dates"]) == 4 for item in payload(filled_batch)["by_user"].values())
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         batch_plan_count = (await (await db.execute(
             "SELECT COUNT(*) FROM crm_planned_shifts WHERE batch_id=?", (payload(batch)["batch_id"],)
@@ -430,6 +454,16 @@ async def run():
             (payload(batch)["batch_id"],)
         )).fetchone())[0]
     assert batch_plan_count == 8 and batch_notice_count == 2
+    schedule_notice = bot._crm_notification_text("plan_batch", {
+        "date_from": "2026-08-01", "date_to": "2026-08-31",
+        "start_time": "09:00", "end_time": "19:00",
+        "requested": 16, "created": 6, "kept": 10, "conflicts": 1,
+        "work_days": 2, "rest_days": 2,
+        "dates": ["2026-08-01", "2026-08-02", "2026-08-05"],
+    })
+    assert "По выбранной схеме: 16" in schedule_notice
+    assert "Добавлено новых: 6" in schedule_notice and "Уже было в календаре: 10" in schedule_notice
+    assert "Схема: 2/2" in schedule_notice and "с другим временем" in schedule_notice
 
     # Фото задания доставляется через outbox; повторная публикация не создаёт дубль.
     photo_task_response = await bot.api_crm_task_create(Request(
@@ -832,6 +866,71 @@ async def run():
             "DELETE FROM crm_planned_shifts WHERE id IN (?,?)",
             (first_item["plan_id"], second_item["plan_id"]),
         )
+        await db.commit()
+
+    # Быстрые шаблоны зависят от роли: у водителей дневные и ночные выходы по 12 часов.
+    driver_bulk = await bot.api_crm_calendar_changes(Request(
+        900001, body={
+            "city_id": city["id"], "role": "Водитель",
+            "idempotency_key": "calendar-driver-presets",
+            "changes": [
+                {"client_id": f"910002:{bulk_date_1}", "action": "set_preset",
+                 "preset": "shift_1", "user_id": 910002, "work_date": bulk_date_1,
+                 "expected": {"plan_id": None}},
+                {"client_id": f"910002:{bulk_date_2}", "action": "set_preset",
+                 "preset": "night", "user_id": 910002, "work_date": bulk_date_2,
+                 "expected": {"plan_id": None}},
+                {"client_id": f"910002:{bulk_date_3}", "action": "set_custom",
+                 "user_id": 910002, "work_date": bulk_date_3,
+                 "value": {"start_time": "18:30", "end_time": "06:30",
+                           "district": "Центр", "work_kind": "extra"},
+                 "expected": {"plan_id": None}},
+            ],
+        }, admin_token=network_token, method="POST",
+    ))
+    assert driver_bulk.status == 201 and payload(driver_bulk)["created"] == 3, payload(driver_bulk)
+    driver_ids = [item["plan_id"] for item in payload(driver_bulk)["items"]]
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        db.row_factory = bot.aiosqlite.Row
+        driver_rows = await (await db.execute(
+            "SELECT start_time,end_time,district,work_kind FROM crm_planned_shifts "
+            "WHERE id IN (?,?,?) ORDER BY work_date",
+            driver_ids,
+        )).fetchall()
+        await db.execute("DELETE FROM crm_planned_shifts WHERE id IN (?,?,?)", driver_ids)
+        await db.commit()
+    assert [(row["start_time"], row["end_time"]) for row in driver_rows] == [
+        ("09:00", "21:00"), ("20:00", "08:00"), ("18:30", "06:30")
+    ]
+    assert driver_rows[2]["district"] == "Центр" and driver_rows[2]["work_kind"] == "extra"
+
+    # Пустая плановая плитка не должна затирать уже существующий фактический выход.
+    actual_start = datetime.fromisoformat(bulk_date_1).replace(
+        hour=10, tzinfo=bot._city_tz(city)
+    )
+    actual_end = actual_start + timedelta(hours=2)
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        actual_cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,district,is_active,"
+            "created_at,city_id,start_at,end_at,source) VALUES (?,?,?,?,?,?,0,?,?,?,?, 'bot')",
+            (910002, "Тестовый водитель", "Водитель", "10:00", "12:00", "Центр",
+             actual_start.isoformat(), city["id"], actual_start.isoformat(), actual_end.isoformat()),
+        )
+        actual_plan_guard_id = actual_cur.lastrowid
+        await db.commit()
+    actual_guard = await bot.api_crm_calendar_changes(Request(
+        900001, body={
+            "city_id": city["id"], "role": "Водитель",
+            "idempotency_key": "calendar-actual-shift-guard",
+            "changes": [{"client_id": f"910002:{bulk_date_1}", "action": "set_preset",
+                         "preset": "shift_1", "user_id": 910002,
+                         "work_date": bulk_date_1, "expected": {"plan_id": None}}],
+        }, admin_token=network_token, method="POST",
+    ))
+    assert actual_guard.status == 409
+    assert payload(actual_guard)["conflicts"][0]["reason"] == "started"
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute("DELETE FROM shifts WHERE id=?", (actual_plan_guard_id,))
         await db.commit()
 
     # Зарплата считается за выбранную декаду и не выходит за город доступа.

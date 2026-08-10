@@ -5111,7 +5111,6 @@ async def _employee_planned_shift(uid, city, active_shift=None):
             "updated_at": plan.get("updated_at"),
             "can_edit_start": not plan.get("actual_shift_id") and now < start_at,
             "can_edit_end": now < end_at,
-            "can_edit_district": True,
         }
     return None
 
@@ -5282,13 +5281,11 @@ async def api_state(request):
         "registered": bool(user and name and role and user_city_id),
         "cities": [
             {"id": item["id"], "key": item["city_key"], "name": item["name"],
-             "timezone_offset": item["timezone_offset"],
-             "districts": CITY_DISTRICTS.get(item["name"].casefold(), [])}
+             "timezone_offset": item["timezone_offset"]}
             for item in sorted(CITIES_BY_ID.values(), key=lambda value: value["name"])
         ],
         "city": {"id": city["id"], "key": city["city_key"], "name": city["name"],
-                 "timezone_offset": city["timezone_offset"],
-                 "districts": CITY_DISTRICTS.get(city["name"].casefold(), [])},
+                 "timezone_offset": city["timezone_offset"]},
         "active": bool(shift),
         "shift": shift_data,
         "planned_shift": planned_shift,
@@ -5415,7 +5412,7 @@ def _valid_time(t):
     return f"{int(h)}:{m}"   # нормализуем как в чате: 9:20, 18:05
 
 async def api_employee_planned_shift_update(request):
-    """Даёт сотруднику изменить время или район своей плановой смены."""
+    """Даёт сотруднику перенести начало будущей смены или продлить её конец."""
     tg_user = await _auth_user(request)
     if not tg_user:
         return web.json_response({"error": "auth"}, status=401)
@@ -5430,22 +5427,14 @@ async def api_employee_planned_shift_update(request):
                        if "start_time" in body else None)
     requested_end = (_valid_time(str(body.get("end_time") or "").strip())
                      if "end_time" in body else None)
-    district_was_sent = "district" in body
-    requested_district = str(body.get("district") or "").strip()[:200]
     expected_updated_at = str(body.get("expected_updated_at") or "").strip()
     if (("start_time" in body and not requested_start)
             or ("end_time" in body and not requested_end)):
         return web.json_response(
             {"error": "time", "message": "Время должно быть в формате ЧЧ:ММ."}, status=400
         )
-    if district_was_sent and not requested_district:
-        return web.json_response(
-            {"error": "district", "message": "Выберите район этой смены."}, status=400
-        )
-    if requested_start is None and requested_end is None and not district_was_sent:
-        return web.json_response(
-            {"error": "fields", "message": "Укажите новое время или район."}, status=400
-        )
+    if requested_start is None and requested_end is None:
+        return web.json_response({"error": "fields", "message": "Укажите новое время."}, status=400)
 
     uid = int(tg_user["id"])
     async with aiosqlite.connect(DB_PATH) as db:
@@ -5526,21 +5515,15 @@ async def api_employee_planned_shift_update(request):
         now_iso = datetime.now(timezone.utc).isoformat()
         reminder_sql = (",reminder_sent_at=NULL"
                         if requested_start is not None and not current.get("reminder_sent_at") else "")
-        district = requested_district if district_was_sent else (current.get("district") or "")
         await db.execute(
-            "UPDATE crm_planned_shifts SET start_time=?,end_time=?,district=?,updated_by=?,updated_at=?" +
+            "UPDATE crm_planned_shifts SET start_time=?,end_time=?,updated_by=?,updated_at=?" +
             reminder_sql + " WHERE id=?",
-            (start_time, end_time, district, uid, now_iso, plan_id),
+            (start_time, end_time, uid, now_iso, plan_id),
         )
         if current.get("actual_shift_id"):
-            updates = ["auto_close_at=?"]
-            params = [new_end_at.isoformat()]
-            if district_was_sent:
-                updates.append("district=?")
-                params.append(district)
             cursor = await db.execute(
-                f"UPDATE shifts SET {','.join(updates)} WHERE id=? AND user_id=? AND is_active=1",
-                [*params, current["actual_shift_id"], uid],
+                "UPDATE shifts SET auto_close_at=? WHERE id=? AND user_id=? AND is_active=1",
+                (new_end_at.isoformat(), current["actual_shift_id"], uid),
             )
             if cursor.rowcount != 1:
                 await db.rollback()
@@ -5553,14 +5536,11 @@ async def api_employee_planned_shift_update(request):
         await db.execute(
             "INSERT INTO admin_audit_log (admin_user_id,city_id,operation,entity_type,entity_id,"
             "before_json,after_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (uid, current["city_id"], "planned_shift.employee_update", "planned_shift",
+            (uid, current["city_id"], "planned_shift.employee_time_update", "planned_shift",
              str(plan_id), json.dumps(current, ensure_ascii=False, default=str),
              json.dumps(dict(updated), ensure_ascii=False, default=str), now_iso),
         )
         await db.commit()
-    updated_plan_shift_id = current.get("actual_shift_id")
-    if district_was_sent and updated_plan_shift_id:
-        await safe_flush_report_update(updated_plan_shift_id)
     updated_plan = dict(updated)
     payload = {
         "plan_id": updated_plan["id"], "work_date": updated_plan["work_date"],
@@ -5572,7 +5552,6 @@ async def api_employee_planned_shift_update(request):
         "updated_at": updated_plan.get("updated_at"),
         "can_edit_start": not updated_plan.get("actual_shift_id") and now < new_start_at,
         "can_edit_end": now < new_end_at,
-        "can_edit_district": True,
     }
     return web.json_response({"ok": True, "planned_shift": payload})
 

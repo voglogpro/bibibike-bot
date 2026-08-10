@@ -66,15 +66,11 @@ async def run():
         }))
     assert extension.status == 200
 
-    report_refresh = AsyncMock(return_value=True)
-    with patch.object(bot, "_auth_user", AsyncMock(return_value={"id": 990001})), \
-            patch.object(bot, "safe_flush_report_update", report_refresh):
+    with patch.object(bot, "_auth_user", AsyncMock(return_value={"id": 990001})):
         district_update = await bot.api_employee_planned_shift_update(
             UpdateRequest({"district": "Новый район"})
         )
-    assert district_update.status == 200 and report_refresh.await_count == 1, (
-        district_update.status, district_update.text, report_refresh.await_count,
-    )
+    assert district_update.status == 400, district_update.text
 
     with patch.object(bot, "_auth_user", AsyncMock(return_value={"id": 990001})):
         settings_update = await bot.api_settings(UpdateRequest({
@@ -104,7 +100,7 @@ async def run():
             "SELECT edit_mode,photo_parse FROM users WHERE user_id=990001"
         )).fetchone()
     assert shift_count == 1 and plan[0] and plan[1]
-    assert plan[2] == "Новый район" and extended_deadline[1] == "Новый район"
+    assert plan[2] == "Центр" and extended_deadline[1] == "Центр"
     assert tuple(settings) == (1, 1)
     assert reminder[0] and reminder_rows == 1
     assert datetime.fromisoformat(extended_deadline[0]).astimezone(bot._city_tz(city)).strftime("%H:%M") == (now + timedelta(hours=3)).strftime("%H:%M")
@@ -114,7 +110,7 @@ async def run():
     })
     assert "30 МИНУТ" in sample and "📍 Район: ФМР" in sample
     assert "🚀 В 09:00" in sample and "🏁 В 19:00" in sample
-    print("PASS CRM automation: reminder, auto-start, active settings and shift district")
+    print("PASS CRM automation: reminder, auto-start, active settings and admin-only district")
 
 
 try:

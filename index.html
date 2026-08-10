@@ -369,7 +369,7 @@
   .center{color:#E4EEE6}.center .sm{color:#8B9890}
   @media(min-width:600px){body{padding-top:20px}.panel{padding:18px}.tabbar{bottom:0}}
   @media(max-width:360px){body{padding-left:7px;padding-right:7px}.panel{padding:14px}.earn .val{font-size:36px}.tile{padding:12px}}
-  .planned-shift-card{background:#111B15;border:1px solid rgba(49,216,67,.28);border-radius:16px;padding:14px;margin-bottom:12px}.planned-shift-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.planned-shift-kicker{color:var(--green);font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.planned-shift-title{font-size:15px;font-weight:900;margin-top:4px}.planned-shift-meta{color:var(--muted);font-size:11px;line-height:1.5;margin-top:5px}.planned-shift-timer{margin:12px 0 0;padding:10px;border-radius:11px;background:#0B2715;color:#8EF09B;text-align:center;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}.planned-shift-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}.planned-shift-buttons button{border:1px solid var(--line);border-radius:11px;background:#18231C;color:var(--ink);min-height:42px;padding:9px 5px;font-size:10px;font-weight:850}.planned-shift-editor{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.planned-shift-editor .field{margin-bottom:9px}.planned-shift-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.planned-shift-editor-actions button{min-height:43px;border-radius:11px;border:1px solid var(--line);font-weight:850}.planned-shift-editor-actions .cancel{background:#18231C;color:var(--ink)}.planned-shift-editor-actions .save-plan{background:var(--green);color:#07120A;border-color:var(--green)}.active-settings-hint{padding:10px 12px;border:1px solid rgba(255,179,44,.3);border-radius:12px;background:#2A2211;color:#FFD16B;font-size:11px;line-height:1.45;margin:10px 0}.identity-locked{opacity:.58;pointer-events:none}
+  .planned-shift-card{background:#111B15;border:1px solid rgba(49,216,67,.28);border-radius:16px;padding:14px;margin-bottom:12px}.planned-shift-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.planned-shift-kicker{color:var(--green);font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.planned-shift-title{font-size:15px;font-weight:900;margin-top:4px}.planned-shift-meta{color:var(--muted);font-size:11px;line-height:1.5;margin-top:5px}.planned-shift-timer{margin:12px 0 0;padding:10px;border-radius:11px;background:#0B2715;color:#8EF09B;text-align:center;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}.planned-shift-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.planned-shift-buttons button{border:1px solid var(--line);border-radius:11px;background:#18231C;color:var(--ink);min-height:42px;padding:9px;font-size:11px;font-weight:850}.planned-shift-editor{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.planned-shift-editor .field{margin-bottom:9px}.planned-shift-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.planned-shift-editor-actions button{min-height:43px;border-radius:11px;border:1px solid var(--line);font-weight:850}.planned-shift-editor-actions .cancel{background:#18231C;color:var(--ink)}.planned-shift-editor-actions .save-plan{background:var(--green);color:#07120A;border-color:var(--green)}.active-settings-hint{padding:10px 12px;border:1px solid rgba(255,179,44,.3);border-radius:12px;background:#2A2211;color:#FFD16B;font-size:11px;line-height:1.45;margin:10px 0}.identity-locked{opacity:.58;pointer-events:none}
 </style>
 </head>
 <body>
@@ -450,11 +450,9 @@
           <div class="planned-shift-buttons" id="plannedShiftButtons">
             <button id="editPlannedStart">Изменить начало</button>
             <button id="editPlannedEnd">Продлить смену</button>
-            <button id="editPlannedDistrict">Изменить район</button>
           </div>
           <div class="planned-shift-editor hidden" id="plannedShiftEditor">
-            <div class="field" id="plannedShiftTimeField"><label id="plannedShiftEditLabel">Новое время</label><input class="tinput time" id="plannedShiftEditTime" inputmode="numeric" placeholder="09:20" maxlength="5"></div>
-            <div class="field hidden" id="plannedShiftDistrictField"><label>Район этой смены</label><input class="tinput" id="plannedShiftEditDistrict" list="plannedShiftDistrictOptions" maxlength="200" placeholder="Выберите или введите район"><datalist id="plannedShiftDistrictOptions"></datalist><div class="hint">Изменение действует только для этой смены и не меняет район в профиле.</div></div>
+            <div class="field"><label id="plannedShiftEditLabel">Новое время</label><input class="tinput time" id="plannedShiftEditTime" inputmode="numeric" placeholder="09:20" maxlength="5"></div>
             <div class="planned-shift-editor-actions"><button class="cancel" id="plannedShiftEditCancel">Отмена</button><button class="save-plan" id="plannedShiftEditSave">Сохранить</button></div>
           </div>
         </div>
@@ -975,23 +973,13 @@ function renderPlannedShift(){
   $('plannedShiftMeta').textContent=(plan.district?`Район: ${plan.district}`:'Район пока не выбран')+' · бот откроет и закроет смену сам';
   $('editPlannedStart').classList.toggle('hidden',!plan.can_edit_start);
   $('editPlannedEnd').classList.toggle('hidden',!plan.can_edit_end);
-  $('editPlannedDistrict').classList.toggle('hidden',!plan.can_edit_district);
-  $('plannedShiftButtons').classList.toggle('hidden',!plan.can_edit_start&&!plan.can_edit_end&&!plan.can_edit_district);
+  $('plannedShiftButtons').classList.toggle('hidden',!plan.can_edit_start&&!plan.can_edit_end);
   paintPlannedCountdown();
 }
-function openPlannedEditor(mode){
+function openPlannedTimeEditor(mode){
   const plan=STATE&&STATE.planned_shift;if(!plan)return;plannedEditMode=mode;
-  const districtMode=mode==='district';
-  $('plannedShiftTimeField').classList.toggle('hidden',districtMode);
-  $('plannedShiftDistrictField').classList.toggle('hidden',!districtMode);
-  if(districtMode){
-    $('plannedShiftEditDistrict').value=plan.district||'';
-    const districts=(STATE.city&&STATE.city.districts)||[],current=plan.district||'';
-    $('plannedShiftDistrictOptions').innerHTML=[...new Set([current,...districts].filter(Boolean))].map(value=>`<option value="${esc(value)}"></option>`).join('');
-  }else{
-    $('plannedShiftEditLabel').textContent=mode==='start'?'Новое время начала':'Новое время окончания';
-    $('plannedShiftEditTime').value=mode==='start'?plan.start_time:plan.end_time;
-  }
+  $('plannedShiftEditLabel').textContent=mode==='start'?'Новое время начала':'Новое время окончания';
+  $('plannedShiftEditTime').value=mode==='start'?plan.start_time:plan.end_time;
   $('plannedShiftEditor').classList.remove('hidden');
 }
 function maskTime(inp){
@@ -1303,23 +1291,21 @@ $('btnStopForm').onclick = ()=>{
   $('stopForm').classList.remove('hidden');
   /* Прокрутку не делаем — см. форму начала смены. */
 };
-$('editPlannedStart').onclick=()=>openPlannedEditor('start');
-$('editPlannedEnd').onclick=()=>openPlannedEditor('end');
-$('editPlannedDistrict').onclick=()=>openPlannedEditor('district');
+$('editPlannedStart').onclick=()=>openPlannedTimeEditor('start');
+$('editPlannedEnd').onclick=()=>openPlannedTimeEditor('end');
 $('plannedShiftEditCancel').onclick=()=>{$('plannedShiftEditor').classList.add('hidden');plannedEditMode=''};
 $('plannedShiftEditSave').onclick=async()=>{
-  const plan=STATE&&STATE.planned_shift,time=$('plannedShiftEditTime').value.trim(),district=$('plannedShiftEditDistrict').value.trim();
+  const plan=STATE&&STATE.planned_shift,time=$('plannedShiftEditTime').value.trim();
   if(!plan||!plannedEditMode)return;
-  if(plannedEditMode!=='district'&&!/^\d{1,2}:\d{2}$/.test(time))return toast('Введите время в формате ЧЧ:ММ');
-  if(plannedEditMode==='district'&&!district)return toast('Выберите район этой смены');
+  if(!/^\d{1,2}:\d{2}$/.test(time))return toast('Введите время в формате ЧЧ:ММ');
   const button=$('plannedShiftEditSave');button.disabled=true;button.textContent='Сохраняю…';
   try{
     const body={expected_updated_at:plan.updated_at};
-    const field=plannedEditMode==='district'?'district':plannedEditMode==='start'?'start_time':'end_time';
-    body[field]=field==='district'?district:time;
+    const field=plannedEditMode==='start'?'start_time':'end_time';
+    body[field]=time;
     await api(`/api/planned-shifts/${plan.plan_id}`,{method:'PATCH',body:JSON.stringify(body)});
     $('plannedShiftEditor').classList.add('hidden');plannedEditMode='';
-    toast(field==='district'?(STATE.active?'Район текущей смены изменён':'Район смены изменён'):field==='start_time'?'Начало перенесено, окончание сдвинуто на то же время':'Автоматическое закрытие перенесено');
+    toast(field==='start_time'?'Начало перенесено, окончание сдвинуто на то же время':'Автоматическое закрытие перенесено');
     await load();
   }catch(e){toast(e.message||'Не удалось изменить время')}finally{button.disabled=false;button.textContent='Сохранить'}
 };

@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-10 · массовое редактирование графика CRM"
+BUILD_VERSION = "2026-08-10 · график на месяц и ответ по фото"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4105,6 +4105,49 @@ async def try_parse_screenshot_message(message: Message, city, shift):
         return []
 
 
+def _photo_action_codes(actions):
+    """Возвращает распознанные номера без дублей, сохраняя ведущие нули."""
+    codes = []
+    seen = set()
+    for action in actions or []:
+        for raw_code in action.get("bike_codes") or []:
+            code = str(raw_code).strip()
+            if code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+    return codes
+
+
+def _photo_result_text(actions):
+    codes = _photo_action_codes(actions)
+    if not codes:
+        return ""
+    if len(codes) == 1:
+        return f"✅ Фото распознано и записано.\n\nНомер байка:\n{codes[0]}"
+    return (
+        f"✅ Фото распознано и записано.\n\nРаспознано номеров: {len(codes)}\n"
+        + "\n".join(codes)
+    )
+
+
+async def _reply_with_photo_result(message: Message, actions):
+    """Ответ Telegram не должен отменять уже сохранённые в БД действия."""
+    text = _photo_result_text(actions)
+    if not text:
+        return
+    try:
+        await message.reply(text)
+        logger.info(
+            "ФОТО-ОТВЕТ: uid=%s msg=%s номера=%s",
+            message.from_user.id, message.message_id, _photo_action_codes(actions),
+        )
+    except Exception as exc:
+        logger.warning(
+            "ФОТО-ОТВЕТ НЕ ОТПРАВЛЕН: uid=%s msg=%s ошибка=%s",
+            getattr(message.from_user, "id", None), message.message_id, exc,
+        )
+
+
 async def _process_work_message_locked(message: Message, city, npb=False, edited=False,
                                        moves=False, repair_topic=False,
                                        bare_repair_topic=False, sticker_topic=False):
@@ -4266,6 +4309,8 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                     await freeze_earned(sid)
                 schedule_report_update(sid)
             schedule_report_update(shift["id"])
+            if not edited and not existing_shift_ids:
+                await _reply_with_photo_result(message, photo_actions)
             return
 
         # Фото/стикер без подписи может получить корректную подпись уже после
@@ -4309,8 +4354,10 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         actions = parse_message(text)
     # Скриншот засчитываем, только если в тексте действий не нашлось —
     # приоритет всегда у того, что человек написал словами.
+    used_photo_actions = False
     if not actions and photo_actions:
         actions = photo_actions
+        used_photo_actions = True
         logger.info(
             "ФОТО-ЗАСЧИТАНО (сообщение с подписью): uid=%s msg=%s -> %s",
             uid, message.message_id, actions
@@ -4347,6 +4394,8 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                     await freeze_earned(sid)
                 schedule_report_update(sid)
         schedule_report_update(shift['id'])
+    if used_photo_actions and not edited and not existing_shift_ids:
+        await _reply_with_photo_result(message, actions)
 
 
 # Aiogram обрабатывает несколько входящих обновлений параллельно. Без этой

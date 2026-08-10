@@ -42,6 +42,10 @@ class FakeMessage:
         self.message_id = message_id
         self.date = date or datetime.now(timezone.utc)
         self.edit_date = edit_date
+        self.replies = []
+
+    async def reply(self, text):
+        self.replies.append(text)
 
 
 def assert_action(actions, action_type, codes=None, quantity=None):
@@ -54,6 +58,15 @@ def assert_action(actions, action_type, codes=None, quantity=None):
 
 
 def check_parsers():
+    photo_text = bot._photo_result_text([
+        {"action_type": "move", "bike_codes": ["0915", "0103"], "quantity": 0},
+        {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
+    ])
+    assert "Распознано номеров: 2" in photo_text, photo_text
+    assert photo_text.count("0915") == 1, photo_text
+    assert "0103" in photo_text, photo_text
+    assert bot._photo_result_text([]) == ""
+
     assert_action(bot.parse_message("Переместил 4821 4907 5512"), "move",
                   ["4821", "4907", "5512"], 0)
     assert_action(bot.parse_message("Поправил 4630"), "fix", ["4630"], 0)
@@ -289,6 +302,14 @@ async def check_report_rendering():
     assert "Поменял АКБ: 2" in text
 
 
+async def check_photo_result_reply():
+    message = FakeMessage(77, -100, None, 15, "")
+    await bot._reply_with_photo_result(message, [
+        {"action_type": "move", "bike_codes": ["0915"], "quantity": 0}
+    ])
+    assert message.replies == ["✅ Фото распознано и записано.\n\nНомер байка:\n0915"]
+
+
 async def main():
     try:
         await bot.init_db()
@@ -297,7 +318,8 @@ async def main():
         await check_stavropol_processing()
         await check_database_and_message_burst()
         await check_report_rendering()
-        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report")
+        await check_photo_result_reply()
+        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo reply")
     finally:
         await bot.bot.session.close()
         shutil.rmtree(TEMP_DIR, ignore_errors=True)

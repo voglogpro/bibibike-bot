@@ -234,7 +234,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-10 · календарный черновик и пояснения к фото"
+BUILD_VERSION = "2026-08-13 · общий To-Do и единый ответ на фотоальбом"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -908,7 +908,11 @@ async def init_db():
                 updated_by INTEGER NOT NULL,
                 updated_at TEXT NOT NULL,
                 published_at TEXT,
-                requires_photo INTEGER NOT NULL DEFAULT 0
+                requires_photo INTEGER NOT NULL DEFAULT 0,
+                due_time TEXT,
+                client_request_id TEXT,
+                client_request_hash TEXT,
+                created_via TEXT NOT NULL DEFAULT 'crm'
             )
         """)
         await db.execute("""
@@ -1168,6 +1172,10 @@ async def init_db():
             "ALTER TABLE crm_planned_shifts ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'regular'",
             "ALTER TABLE crm_tasks ADD COLUMN district TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN completion_mode TEXT NOT NULL DEFAULT 'manual'",
+            "ALTER TABLE crm_tasks ADD COLUMN due_time TEXT",
+            "ALTER TABLE crm_tasks ADD COLUMN client_request_id TEXT",
+            "ALTER TABLE crm_tasks ADD COLUMN client_request_hash TEXT",
+            "ALTER TABLE crm_tasks ADD COLUMN created_via TEXT NOT NULL DEFAULT 'crm'",
             "ALTER TABLE crm_planned_shifts ADD COLUMN batch_id INTEGER",
             "ALTER TABLE crm_planned_shifts ADD COLUMN auto_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE crm_planned_shifts ADD COLUMN reminder_sent_at TEXT",
@@ -1345,6 +1353,10 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_tasks_city_range_status "
             "ON crm_tasks(city_id, date_from, date_to, status)"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_creator_request "
+            "ON crm_tasks(created_by, client_request_id) WHERE client_request_id IS NOT NULL"
         )
         now_iso = datetime.now(timezone.utc).isoformat()
         for admin_uid in NETWORK_ADMIN_USER_IDS:
@@ -9162,10 +9174,13 @@ async def _crm_publish_task(db, task_id, expected_city_id=None, actor_user_id=No
     date_from = task["date_from"] or task["work_date"]
     date_to = task["date_to"] or date_from
     for uid in recipients:
+        if actor_user_id is not None and int(uid) == int(actor_user_id):
+            continue
         await _enqueue_crm_notification(
             db, task["city_id"], uid, "task_assigned", task_id,
             {"task_id": task_id, "title": task["title"], "date_from": date_from,
-             "date_to": date_to, "district": task["district"] or "",
+             "date_to": date_to, "due_time": task["due_time"],
+             "district": task["district"] or "",
              "description": task["description"] or "",
              "requires_photo": bool(task["requires_photo"]),
              "brief_attachment_id": brief[0] if brief else None},
@@ -9208,7 +9223,11 @@ async def _crm_task_payloads(db, rows, detailed=False, viewer_user_id=None):
             "FROM crm_task_attachments WHERE task_id=?"
         )
         attachment_params = [task["id"]]
-        if viewer_user_id is not None:
+        viewer_is_creator = (
+            viewer_user_id is not None
+            and int(task.get("created_by") or 0) == int(viewer_user_id)
+        )
+        if viewer_user_id is not None and not viewer_is_creator:
             attachment_sql += " AND (kind='brief' OR (kind='result' AND assignee_user_id=?))"
             attachment_params.append(viewer_user_id)
         attachment_sql += " ORDER BY id"
@@ -9226,6 +9245,8 @@ async def _crm_task_payloads(db, rows, detailed=False, viewer_user_id=None):
             "title": task["title"], "description": task["description"],
             "priority": task["priority"], "status": task["status"],
             "requires_photo": bool(task.get("requires_photo")),
+            "due_time": task.get("due_time"),
+            "created_via": task.get("created_via") or "crm",
             "created_by": task["created_by"], "created_at": task["created_at"],
             "updated_at": task["updated_at"], "published_at": task["published_at"],
             "targets": [dict(row) for row in targets], "progress": _crm_progress(assignees),
@@ -9523,6 +9544,148 @@ async def api_crm_task_admin_comment(request):
     return web.json_response({"ok": True, "comment_id": cur.lastrowid}, status=201)
 
 
+def _employee_todo_name_is_valid(value):
+    name = " ".join(str(value or "").split())
+    if not name or len(name) < 3:
+        return False
+    lowered = name.casefold()
+    return not (lowered == "сотрудник" or lowered.startswith("сотрудник #")
+                or lowered == "employee" or lowered.startswith("employee #"))
+
+
+async def api_employee_task_directory(request):
+    """Return assignable real profiles from the authenticated employee's city only."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    user = await get_user(tg_user["id"])
+    city = get_city((user or {}).get("city_id"))
+    if not city:
+        return web.json_response({"error": "city"}, status=409)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT user_id,full_name,role FROM users WHERE city_id=? "
+            "AND full_name IS NOT NULL AND role IS NOT NULL ORDER BY full_name COLLATE NOCASE",
+            (city["id"],),
+        )).fetchall()
+    items = [dict(row) for row in rows if _employee_todo_name_is_valid(row["full_name"])]
+    return web.json_response({"city": {"id": city["id"], "name": city["name"]},
+                              "items": items})
+
+
+async def api_employee_task_create(request):
+    """Create and publish a same-city task atomically, with retry-safe idempotency."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    creator = await get_user(tg_user["id"])
+    city = get_city((creator or {}).get("city_id"))
+    if not city or not _employee_todo_name_is_valid((creator or {}).get("full_name")):
+        return web.json_response({"error": "city"}, status=409)
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    title = str(body.get("title") or "").strip()
+    description = str(body.get("description") or "").strip()
+    priority = str(body.get("priority") or "normal").strip().lower()
+    due_date = _crm_date(body.get("due_date") or body.get("work_date"))
+    due_time = str(body.get("due_time") or "").strip() or None
+    if due_time:
+        try:
+            due_time = datetime.strptime(due_time, "%H:%M").strftime("%H:%M")
+        except ValueError:
+            return web.json_response({"error": "due_time"}, status=400)
+    try:
+        raw_ids = body.get("assignee_user_ids")
+        if raw_ids is None:
+            raw_ids = [body.get("assignee_user_id")]
+        assignee_ids = list(dict.fromkeys(int(value) for value in raw_ids if value is not None))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "assignee_user_ids"}, status=400)
+    request_id = str(body.get("client_request_id") or "").strip()
+    city_today = datetime.now(_city_tz(city)).date()
+    if (not title or len(title) > 200 or len(description) > 10000
+            or priority not in {"low", "normal", "high", "urgent"}
+            or not due_date or due_date < city_today
+            or (due_date - city_today).days >= CRM_MAX_RANGE_DAYS
+            or not 1 <= len(assignee_ids) <= 10
+            or not request_id or len(request_id) > 120):
+        return web.json_response({"error": "fields"}, status=400)
+    request_shape = {
+        "title": title, "description": description, "priority": priority,
+        "due_date": due_date.isoformat(), "due_time": due_time,
+        "assignee_user_ids": assignee_ids,
+        "requires_photo": bool(body.get("requires_photo")),
+    }
+    request_hash = hashlib.sha256(json.dumps(
+        request_shape, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        existing = await (await db.execute(
+            "SELECT * FROM crm_tasks WHERE created_by=? AND client_request_id=?",
+            (tg_user["id"], request_id),
+        )).fetchone()
+        if existing:
+            if existing["client_request_hash"] != request_hash:
+                await db.rollback()
+                return web.json_response({"error": "idempotency_conflict"}, status=409)
+            payload = (await _crm_task_payloads(db, [existing], detailed=True,
+                                                viewer_user_id=tg_user["id"]))[0]
+            await db.rollback()
+            return web.json_response({"ok": True, "task": payload,
+                                      "already_created": True})
+        created_since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        recent_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_tasks WHERE created_by=? AND created_via='employee' "
+            "AND created_at>=?", (tg_user["id"], created_since),
+        )).fetchone())[0]
+        if int(recent_count or 0) >= 50:
+            await db.rollback()
+            return web.json_response(
+                {"error": "task_rate_limit",
+                 "message": "Достигнут лимит задач за сутки. Попробуйте позже."}, status=429
+            )
+        placeholders = ",".join("?" for _ in assignee_ids)
+        rows = await (await db.execute(
+            f"SELECT user_id,full_name,role FROM users WHERE city_id=? "
+            f"AND user_id IN ({placeholders})", [city["id"], *assignee_ids],
+        )).fetchall()
+        recipients = {row["user_id"]: dict(row) for row in rows
+                      if _employee_todo_name_is_valid(row["full_name"])}
+        if len(recipients) != len(assignee_ids):
+            await db.rollback()
+            return web.json_response({"error": "assignee_scope",
+                                      "message": "Один или несколько сотрудников недоступны."}, status=403)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cur = await db.execute(
+            "INSERT INTO crm_tasks (city_id,work_date,title,description,priority,status,created_by,"
+            "created_at,updated_by,updated_at,requires_photo,date_from,date_to,district,"
+            "completion_mode,due_time,client_request_id,client_request_hash,created_via) "
+            "VALUES (?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (city["id"], due_date.isoformat(), title, description, priority, tg_user["id"],
+             now_iso, tg_user["id"], now_iso, 1 if body.get("requires_photo") else 0,
+             due_date.isoformat(), due_date.isoformat(), "", "manual", due_time,
+             request_id, request_hash, "employee"),
+        )
+        task_id = cur.lastrowid
+        await db.executemany(
+            "INSERT INTO crm_task_targets (task_id,target_type,user_id,role) "
+            "VALUES (?,'user',?,NULL)", [(task_id, uid) for uid in assignee_ids],
+        )
+        await _crm_task_event(db, task_id, tg_user["id"], "task.created.employee",
+                              {"assignee_count": len(assignee_ids), "due_time": due_time})
+        task, _ = await _crm_publish_task(db, task_id, city["id"], tg_user["id"])
+        await db.commit()
+        row = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+        payload = (await _crm_task_payloads(db, [row], detailed=True,
+                                            viewer_user_id=tg_user["id"]))[0]
+    return web.json_response({"ok": True, "task": payload,
+                              "already_created": False}, status=201)
+
+
 async def api_employee_tasks_mine(request):
     tg_user = await _auth_user(request)
     if not tg_user: return web.json_response({"error": "auth"}, status=401)
@@ -9531,28 +9694,49 @@ async def api_employee_tasks_mine(request):
     if not city: return web.json_response({"error": "city"}, status=409)
     date_range, error = _crm_range(request, city, default_days=31)
     if error is not None: return error
+    scope = str(request.query.get("scope") or "inbox").strip().lower()
+    if scope not in {"inbox", "outbox", "all"}:
+        return web.json_response({"error": "scope"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        if scope == "inbox":
+            access_sql = "a.user_id=? AND t.status IN ('published','cancelled')"
+            access_params = [tg_user["id"]]
+        elif scope == "outbox":
+            access_sql = "t.created_by=?"
+            access_params = [tg_user["id"]]
+        else:
+            access_sql = "(a.user_id=? OR t.created_by=?)"
+            access_params = [tg_user["id"], tg_user["id"]]
         rows = await (await db.execute(
             "SELECT t.*,a.status AS my_status,a.status_comment AS my_status_comment,"
-            "a.updated_at AS my_updated_at FROM crm_tasks t JOIN crm_task_assignees a "
-            "ON a.task_id=t.id WHERE a.user_id=? AND t.city_id=? AND t.status='published' "
-            "AND COALESCE(t.date_to,t.work_date)>=? AND COALESCE(t.date_from,t.work_date)<=? "
+            "a.updated_at AS my_updated_at,u.full_name AS creator_name FROM crm_tasks t "
+            "LEFT JOIN crm_task_assignees a ON a.task_id=t.id AND a.user_id=? "
+            "LEFT JOIN users u ON u.user_id=t.created_by WHERE " + access_sql + " AND t.city_id=? "
+            "AND (((t.status='published') AND EXISTS (SELECT 1 FROM crm_task_assignees active_a "
+            "WHERE active_a.task_id=t.id AND active_a.status!='accepted')) OR "
+            "(COALESCE(t.date_to,t.work_date)>=? AND COALESCE(t.date_from,t.work_date)<=?)) "
             "ORDER BY COALESCE(t.date_from,t.work_date),t.id",
-            (tg_user["id"], city["id"], date_range["from"], date_range["to"]),
+            [tg_user["id"], *access_params, city["id"], date_range["from"], date_range["to"]],
         )).fetchall()
-        payloads = await _crm_task_payloads(db, rows, viewer_user_id=tg_user["id"])
+        payloads = await _crm_task_payloads(db, rows, detailed=scope in {"outbox", "all"},
+                                            viewer_user_id=tg_user["id"])
         for payload, row in zip(payloads, rows):
             payload["my_status"] = row["my_status"]
             payload["my_status_comment"] = row["my_status_comment"] or ""
             payload["my_updated_at"] = row["my_updated_at"]
+            payload["creator_name"] = row["creator_name"] or ""
+            payload["is_creator"] = row["created_by"] == tg_user["id"]
     return web.json_response({"city": {"id": city["id"], "name": city["name"]},
-                              "items": payloads})
+                              "scope": scope, "items": payloads})
 
 
 async def api_employee_task_progress(request):
     tg_user = await _auth_user(request)
     if not tg_user: return web.json_response({"error": "auth"}, status=401)
+    user = await get_user(tg_user["id"])
+    city = get_city((user or {}).get("city_id"))
+    if not city: return web.json_response({"error": "city"}, status=409)
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: task_id = int(request.match_info["task_id"])
@@ -9563,8 +9747,10 @@ async def api_employee_task_progress(request):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
         row = await (await db.execute(
-            "SELECT a.*,t.status AS task_status,t.requires_photo FROM crm_task_assignees a JOIN crm_tasks t "
-            "ON t.id=a.task_id WHERE a.task_id=? AND a.user_id=?", (task_id, tg_user["id"])
+            "SELECT a.*,t.status AS task_status,t.requires_photo,t.created_by,t.city_id,t.title "
+            "FROM crm_task_assignees a JOIN crm_tasks t "
+            "ON t.id=a.task_id WHERE a.task_id=? AND a.user_id=? AND t.city_id=?",
+            (task_id, tg_user["id"], city["id"])
         )).fetchone()
         if not row or row["task_status"] != "published":
             await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
@@ -9590,17 +9776,161 @@ async def api_employee_task_progress(request):
                     {"error": "result_photo_required",
                      "message": "Перед отправкой результата приложите фото."}, status=409
                 )
+        effective_status = (
+            "accepted" if status == "submitted"
+            and int(row["created_by"]) == int(tg_user["id"])
+            else status
+        )
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute("UPDATE crm_task_assignees SET status=?,status_comment=?,updated_at=? "
                          "WHERE task_id=? AND user_id=?",
-                         (status, comment, now_iso, task_id, tg_user["id"]))
+                         (effective_status, comment, now_iso, task_id, tg_user["id"]))
         if comment:
             await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
                              "VALUES (?,?,?,?)", (task_id, tg_user["id"], comment, now_iso))
-        await _crm_task_event(db, task_id, tg_user["id"], "assignee.progress",
-                              {"status": status, "comment": comment})
+        event_id = await _crm_task_event(
+            db, task_id, tg_user["id"], "assignee.progress",
+            {"status": effective_status, "comment": comment},
+        )
+        if status in {"submitted", "blocked"} and int(row["created_by"]) != int(tg_user["id"]):
+            await _enqueue_crm_notification(
+                db, row["city_id"], row["created_by"],
+                "task_submitted" if status == "submitted" else "task_blocked", event_id,
+                {"task_id": task_id, "title": row["title"],
+                 "assignee_name": (user or {}).get("full_name") or "Сотрудник",
+                 "comment": comment},
+            )
+        await db.commit()
+    return web.json_response({"ok": True, "status": effective_status,
+                              "updated_at": now_iso})
+
+
+async def api_employee_task_review(request):
+    """A task author may accept or return a submitted result."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    user = await get_user(tg_user["id"])
+    city = get_city((user or {}).get("city_id"))
+    if not city:
+        return web.json_response({"error": "city"}, status=409)
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    try:
+        task_id = int(request.match_info["task_id"])
+        assignee_user_id = int(request.match_info["user_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "id"}, status=400)
+    status = str(body.get("status") or "").strip()
+    comment = str(body.get("comment") or "").strip()
+    if status not in {"accepted", "in_progress"} or len(comment) > 2000:
+        return web.json_response({"error": "status"}, status=400)
+    if status == "in_progress" and not comment:
+        return web.json_response({"error": "return_reason"}, status=400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        task = await (await db.execute(
+            "SELECT * FROM crm_tasks WHERE id=? AND city_id=? AND created_by=? "
+            "AND status='published'", (task_id, city["id"], tg_user["id"]),
+        )).fetchone()
+        assignee = await (await db.execute(
+            "SELECT * FROM crm_task_assignees WHERE task_id=? AND user_id=?",
+            (task_id, assignee_user_id),
+        )).fetchone()
+        if not task or not assignee:
+            await db.rollback()
+            return web.json_response({"error": "not_found"}, status=404)
+        if assignee["status"] != "submitted":
+            await db.rollback()
+            return web.json_response({"error": "review"}, status=409)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_task_assignees SET status=?,status_comment=?,updated_at=? "
+            "WHERE task_id=? AND user_id=?",
+            (status, comment, now_iso, task_id, assignee_user_id),
+        )
+        if comment:
+            await db.execute(
+                "INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
+                "VALUES (?,?,?,?)", (task_id, tg_user["id"], comment, now_iso),
+            )
+        event_id = await _crm_task_event(
+            db, task_id, tg_user["id"], "assignee.review.employee",
+            {"user_id": assignee_user_id, "status": status, "comment": comment},
+        )
+        await _enqueue_crm_notification(
+            db, task["city_id"], assignee_user_id, "task_reviewed", event_id,
+            {"task_id": task_id, "title": task["title"], "status": status,
+             "comment": comment},
+        )
         await db.commit()
     return web.json_response({"ok": True, "status": status, "updated_at": now_iso})
+
+
+async def api_employee_task_cancel(request):
+    """Soft-cancel a task owned by the authenticated author."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    user = await get_user(tg_user["id"])
+    city = get_city((user or {}).get("city_id"))
+    if not city:
+        return web.json_response({"error": "city"}, status=409)
+    try:
+        task_id = int(request.match_info["task_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "task_id"}, status=400)
+    body = await _request_json_object(request)
+    body = body if body is not None else {}
+    reason = str(body.get("reason") or "").strip()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        task = await (await db.execute(
+            "SELECT * FROM crm_tasks WHERE id=? AND city_id=? AND created_by=?",
+            (task_id, city["id"], tg_user["id"]),
+        )).fetchone()
+        if not task:
+            await db.rollback()
+            return web.json_response({"error": "not_found"}, status=404)
+        if task["status"] == "cancelled":
+            await db.rollback()
+            return web.json_response({"ok": True, "already_cancelled": True})
+        if task["status"] != "published":
+            await db.rollback()
+            return web.json_response({"error": "status"}, status=409)
+        assignee_states = await (await db.execute(
+            "SELECT status FROM crm_task_assignees WHERE task_id=?", (task_id,),
+        )).fetchall()
+        if assignee_states and all(row[0] == "accepted" for row in assignee_states):
+            await db.rollback()
+            return web.json_response({"error": "task_completed"}, status=409)
+        if not reason or len(reason) > 500:
+            await db.rollback()
+            return web.json_response({"error": "reason"}, status=400)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_tasks SET status='cancelled',updated_by=?,updated_at=? WHERE id=?",
+            (tg_user["id"], now_iso, task_id),
+        )
+        event_id = await _crm_task_event(
+            db, task_id, tg_user["id"], "task.cancelled.employee",
+            {"reason": reason},
+        )
+        recipients = await (await db.execute(
+            "SELECT user_id FROM crm_task_assignees WHERE task_id=?", (task_id,),
+        )).fetchall()
+        for recipient in recipients:
+            if int(recipient[0]) != int(tg_user["id"]):
+                await _enqueue_crm_notification(
+                    db, task["city_id"], recipient[0], "task_cancelled", event_id,
+                    {"task_id": task_id, "title": task["title"], "reason": reason},
+                )
+        await db.commit()
+    return web.json_response({"ok": True, "already_cancelled": False,
+                              "updated_at": now_iso})
 
 
 async def api_employee_task_comment(request):
@@ -9613,12 +9943,13 @@ async def api_employee_task_comment(request):
     text_body = str(body.get("body") or "").strip()
     if not text_body or len(text_body) > 4000: return web.json_response({"error": "body"}, status=400)
     async with aiosqlite.connect(DB_PATH) as db:
-        assignee = await (await db.execute(
-            "SELECT 1 FROM crm_task_assignees a JOIN crm_tasks t ON t.id=a.task_id "
-            "WHERE a.task_id=? AND a.user_id=? AND t.status='published'",
-            (task_id, tg_user["id"]),
+        allowed = await (await db.execute(
+            "SELECT 1 FROM crm_tasks t LEFT JOIN crm_task_assignees a "
+            "ON a.task_id=t.id AND a.user_id=? WHERE t.id=? AND t.status='published' "
+            "AND (a.user_id IS NOT NULL OR t.created_by=?)",
+            (tg_user["id"], task_id, tg_user["id"]),
         )).fetchone()
-        if not assignee: return web.json_response({"error": "not_found"}, status=404)
+        if not allowed: return web.json_response({"error": "not_found"}, status=404)
         now_iso = datetime.now(timezone.utc).isoformat()
         cur = await db.execute("INSERT INTO crm_task_comments (task_id,author_user_id,body,created_at) "
                                "VALUES (?,?,?,?)", (task_id, tg_user["id"], text_body, now_iso))
@@ -9637,13 +9968,14 @@ def _crm_image_type(data):
 
 
 async def _crm_task_event(db, task_id, actor_user_id, event_type, payload=None):
-    await db.execute(
+    cursor = await db.execute(
         "INSERT INTO crm_task_events (task_id,actor_user_id,event_type,payload_json,created_at) "
         "VALUES (?,?,?,?,?)",
         (task_id, actor_user_id, event_type,
          json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else None,
          datetime.now(timezone.utc).isoformat()),
     )
+    return cursor.lastrowid
 
 
 def _crm_miniapp_link(task_id=None):
@@ -9668,12 +10000,36 @@ def _crm_notification_text(kind, payload):
         date_from = _crm_human_date(payload.get("date_from"))
         date_to = payload.get("date_to")
         dates = date_from if not date_to or date_to == payload.get("date_from") else f"{date_from} — {_crm_human_date(date_to)}"
-        lines = ["📋 НОВОЕ ЗАДАНИЕ", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
+        lines = ["📋 НОВАЯ ЗАДАЧА", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
+        if payload.get("due_time"): lines.append(f"🕒 Срок: до {payload.get('due_time')}")
         if district: lines.append(f"📍 Район: {district}")
         if details: lines.extend(["", "📝 Что нужно сделать:", details])
-        if payload.get("requires_photo"): lines.extend(["", "📸 Руководитель ожидает фото результата в личном чате."])
-        lines.extend(["", "✅ Всё задание уже находится в этом сообщении — открывать отдельный раздел не нужно."])
+        if payload.get("requires_photo"): lines.extend(["", "📸 Автор задачи ожидает фото результата."])
+        lines.extend(["", "Откройте раздел «Задачи», чтобы начать выполнение и отправить результат."])
         return "\n".join(lines)
+    if kind == "task_submitted":
+        return (f"✅ ЗАДАЧА ГОТОВА К ПРОВЕРКЕ\n\n🎯 {payload.get('title') or 'Без названия'}\n"
+                f"👤 Исполнитель: {payload.get('assignee_name') or 'Сотрудник'}\n\n"
+                "Откройте задачи, чтобы принять результат или вернуть его в работу.")
+    if kind == "task_blocked":
+        result = (f"⚠️ ПРОБЛЕМА С ЗАДАЧЕЙ\n\n🎯 {payload.get('title') or 'Без названия'}\n"
+                  f"👤 Исполнитель: {payload.get('assignee_name') or 'Сотрудник'}")
+        if payload.get("comment"):
+            result += f"\n\n💬 {payload.get('comment')}"
+        result += "\n\nОткройте раздел «Задачи», чтобы помочь исполнителю."
+        return result
+    if kind == "task_reviewed":
+        accepted = payload.get("status") == "accepted"
+        text = "✅ РЕЗУЛЬТАТ ПРИНЯТ" if accepted else "↩️ ЗАДАЧА ВОЗВРАЩЕНА В РАБОТУ"
+        result = f"{text}\n\n🎯 {payload.get('title') or 'Без названия'}"
+        if payload.get("comment"):
+            result += f"\n\n💬 {payload.get('comment')}"
+        return result
+    if kind == "task_cancelled":
+        result = f"🚫 ЗАДАЧА ОТМЕНЕНА\n\n🎯 {payload.get('title') or 'Без названия'}"
+        if payload.get("reason"):
+            result += f"\n\n💬 {payload.get('reason')}"
+        return result
     if kind == "planned_shift":
         is_extra = payload.get("work_kind") == "extra"
         lines = ["💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА", "",
@@ -9768,12 +10124,14 @@ async def deliver_crm_notifications_once(limit=50):
     for row in rows:
         payload = json.loads(row["payload_json"] or "{}")
         text = _crm_notification_text(row["kind"], payload)
-        task_id = payload.get("task_id") if row["kind"] == "task_assigned" else None
+        task_id = payload.get("task_id") if row["kind"] in {
+            "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
+        } else None
         if row["kind"] in {"planned_shift", "shift_reminder", "shift_auto_started"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
-        keyboard = None if row["kind"] == "task_assigned" else InlineKeyboardMarkup(inline_keyboard=[[
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
         ]])
         try:
@@ -10246,15 +10604,23 @@ async def api_crm_attachment(request):
         if row and context:
             allowed = bool(await _crm_task_in_scope(db, row["task_id"], context))
         elif row:
+            task_owner = await (await db.execute(
+                "SELECT 1 FROM crm_tasks WHERE id=? AND created_by=?",
+                (row["task_id"], tg_user["id"]),
+            )).fetchone()
             assigned = await (await db.execute(
                 "SELECT 1 FROM crm_task_assignees WHERE task_id=? AND user_id=?",
                 (row["task_id"], tg_user["id"]),
             )).fetchone()
             if row["kind"] == "result":
-                allowed = bool(assigned and row["assignee_user_id"] == tg_user["id"]
-                               and row["task_status"] == "published")
+                allowed = bool(
+                    task_owner or (
+                        assigned and row["assignee_user_id"] == tg_user["id"]
+                        and row["task_status"] == "published"
+                    )
+                )
             else:
-                allowed = bool(assigned and row["task_status"] == "published")
+                allowed = bool(task_owner or (assigned and row["task_status"] == "published"))
     if not row or not allowed: return web.json_response({"error": "not_found"}, status=404)
     path = os.path.join(CRM_UPLOAD_DIR, row["storage_key"])
     if not os.path.isfile(path): return web.json_response({"error": "file_missing"}, status=404)
@@ -10470,7 +10836,14 @@ async def start_api_server():
         )
         app.router.add_get("/api/admin/crm/admins", api_crm_admins)
         app.router.add_post("/api/admin/crm/admins", api_crm_admin_upsert)
+        app.router.add_get("/api/crm/task-directory", api_employee_task_directory)
+        app.router.add_post("/api/crm/tasks", api_employee_task_create)
         app.router.add_get("/api/crm/tasks/mine", api_employee_tasks_mine)
+        app.router.add_post("/api/crm/tasks/{task_id}/cancel", api_employee_task_cancel)
+        app.router.add_post(
+            "/api/crm/tasks/{task_id}/assignees/{user_id}/review",
+            api_employee_task_review,
+        )
         app.router.add_post("/api/crm/tasks/{task_id}/attachments", api_employee_task_upload)
         app.router.add_post("/api/crm/tasks/{task_id}/progress", api_employee_task_progress)
         app.router.add_post("/api/crm/tasks/{task_id}/comments", api_employee_task_comment)

@@ -32,7 +32,8 @@ spec.loader.exec_module(bot)
 
 
 class FakeMessage:
-    def __init__(self, uid, chat_id, topic, message_id, text, *, date=None, edit_date=None):
+    def __init__(self, uid, chat_id, topic, message_id, text, *, date=None, edit_date=None,
+                 media_group_id=None):
         self.text = text
         self.caption = None
         self.from_user = SimpleNamespace(
@@ -43,6 +44,7 @@ class FakeMessage:
         self.message_id = message_id
         self.date = date or datetime.now(timezone.utc)
         self.edit_date = edit_date
+        self.media_group_id = media_group_id
         self.replies = []
 
     async def reply(self, text):
@@ -310,6 +312,20 @@ async def check_photo_result_reply():
     ])
     assert message.replies == ["0915 — переместил"]
 
+    first = FakeMessage(77, -100, None, 16, "", media_group_id="album-1")
+    second = FakeMessage(77, -100, None, 17, "", media_group_id="album-1")
+    with patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
+        await bot._reply_with_photo_result(first, [
+            {"action_type": "move", "bike_codes": ["0103"], "quantity": 0},
+        ])
+        await bot._reply_with_photo_result(second, [
+            {"action_type": "move", "bike_codes": ["0915"], "quantity": 0},
+            {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
+        ])
+        await asyncio.sleep(0.03)
+    assert first.replies == ["0103 — переместил\n0915 — переместил, требует ремонта"]
+    assert second.replies == []
+
 
 async def check_photo_caption_priority():
     city = bot.get_city_by_group(bot.STAVROPOL_TRANSPORT_GROUP_ID)
@@ -342,6 +358,76 @@ async def check_photo_caption_priority():
     stats = await bot.get_stats(shift_id)
     assert stats["repair"] == 1, stats
     assert fallback.replies == [], fallback.replies
+
+    album_first = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7103, None, media_group_id="work-album-1",
+    )
+    album_first.photo = [SimpleNamespace(file_id="photo-3")]
+    album_second = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7104, None, media_group_id="work-album-1",
+    )
+    album_second.photo = [SimpleNamespace(file_id="photo-4")]
+
+    async def parse_album(message, _city, _shift):
+        if message.message_id == 7103:
+            return [{"action_type": "move", "bike_codes": ["0103"], "quantity": 0}]
+        return [
+            {"action_type": "move", "bike_codes": ["0915"], "quantity": 0},
+            {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
+        ]
+
+    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(side_effect=parse_album)), \
+            patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
+        await asyncio.gather(
+            bot.process_work_message(album_first, city),
+            bot.process_work_message(album_second, city),
+        )
+        await asyncio.sleep(0.03)
+    assert album_first.replies == [
+        "0103 — переместил\n0915 — переместил, требует ремонта"
+    ], album_first.replies
+    assert album_second.replies == [], album_second.replies
+
+    # Второй снимок приходит почти в момент ответа и долго распознаётся:
+    # ранний таймер обязан отмениться, ответ всё равно остаётся один.
+    delayed_first = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7105, None, media_group_id="work-album-2",
+    )
+    delayed_first.photo = [SimpleNamespace(file_id="photo-5")]
+    delayed_second = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7106, None, media_group_id="work-album-2",
+    )
+    delayed_second.photo = [SimpleNamespace(file_id="photo-6")]
+
+    delayed_second_started = asyncio.Event()
+
+    async def parse_delayed_album(message, _city, _shift):
+        if message.message_id == 7106:
+            delayed_second_started.set()
+            await asyncio.sleep(0.06)
+        code = "0201" if message.message_id == 7105 else "0202"
+        return [{"action_type": "move", "bike_codes": [code], "quantity": 0}]
+
+    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(side_effect=parse_delayed_album)), \
+            patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.10):
+        await bot.process_work_message(delayed_first, city)
+        await asyncio.sleep(0.02)
+        second_task = asyncio.create_task(bot.process_work_message(delayed_second, city))
+        # Дождаться фактического входа второго update в OCR: к этому моменту
+        # process_work_message уже отменил таймер первого ответа.
+        await delayed_second_started.wait()
+        await asyncio.sleep(0.04)
+        assert delayed_first.replies == [] and delayed_second.replies == []
+        await second_task
+        await asyncio.sleep(0.15)
+    assert delayed_first.replies == ["0201 — переместил\n0202 — переместил"]
+    assert delayed_second.replies == []
+    assert bot._photo_media_group_pending == {}
+    assert bot._photo_media_group_replies == {}
 
 
 async def main():

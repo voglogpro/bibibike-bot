@@ -3924,7 +3924,10 @@ PHOTO_TOGGLE_ORDER = {
     4: ("move_toggle", "warehouse", "on_line", "repair"),
 }
 PHOTO_MAX_IMAGE_BYTES = 8 * 1024 * 1024     # не тянем гигантские файлы
+PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC = 2.0      # ждём все снимки Telegram-альбома
 _photo_libs_missing_logged = False
+_photo_media_group_replies = {}
+_photo_media_group_pending = {}
 
 
 def _photo_libs():
@@ -4170,7 +4173,7 @@ def _photo_result_text(actions):
     )
 
 
-async def _reply_with_photo_result(message: Message, actions):
+async def _send_photo_result(message: Message, actions):
     """Ответ Telegram не должен отменять уже сохранённые в БД действия."""
     text = _photo_result_text(actions)
     if not text:
@@ -4186,6 +4189,61 @@ async def _reply_with_photo_result(message: Message, actions):
             "ФОТО-ОТВЕТ НЕ ОТПРАВЛЕН: uid=%s msg=%s ошибка=%s",
             getattr(message.from_user, "id", None), message.message_id, exc,
         )
+
+
+async def _flush_photo_media_group_reply(key, generation):
+    try:
+        await asyncio.sleep(PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC)
+    except asyncio.CancelledError:
+        return
+    # Новый элемент альбома мог прийти, когда таймер уже досыпал, но OCR/БД
+    # для него ещё работают. Последний process_work_message запустит таймер
+    # заново после снятия pending-счётчика.
+    if _photo_media_group_pending.get(key):
+        return
+    entry = _photo_media_group_replies.get(key)
+    if not entry or entry["generation"] != generation:
+        return
+    _photo_media_group_replies.pop(key, None)
+    await _send_photo_result(entry["message"], entry["actions"])
+
+
+def _photo_media_group_key(message):
+    media_group_id = str(getattr(message, "media_group_id", "") or "").strip()
+    if not media_group_id or not getattr(message, "from_user", None):
+        return None
+    return (message.chat.id, message.from_user.id, media_group_id)
+
+
+def _schedule_photo_media_group_reply(key):
+    entry = _photo_media_group_replies.get(key)
+    if not entry:
+        return
+    previous_task = entry.get("task")
+    if previous_task and not previous_task.done():
+        previous_task.cancel()
+    entry["task"] = asyncio.create_task(
+        _flush_photo_media_group_reply(key, entry["generation"])
+    )
+
+
+async def _reply_with_photo_result(message: Message, actions):
+    """Для Telegram-альбома собирает все снимки в один общий ответ."""
+    key = _photo_media_group_key(message)
+    if key is None:
+        await _send_photo_result(message, actions)
+        return
+    entry = _photo_media_group_replies.get(key)
+    if entry is None:
+        entry = {"message": message, "actions": [], "generation": 0, "task": None}
+        _photo_media_group_replies[key] = entry
+    entry["actions"].extend(actions or [])
+    entry["generation"] += 1
+    # Если другие снимки этого альбома уже ждут персональный ingest-lock,
+    # таймер запустит последний из них. Так медленный OCR не разобьёт альбом
+    # на несколько ответов.
+    if not _photo_media_group_pending.get(key):
+        _schedule_photo_media_group_reply(key)
 
 
 async def _process_work_message_locked(message: Message, city, npb=False, edited=False,
@@ -4452,6 +4510,13 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
     sender = getattr(message, "from_user", None)
     if not sender or getattr(sender, "is_bot", False):
         return
+    album_key = _photo_media_group_key(message)
+    if album_key is not None:
+        _photo_media_group_pending[album_key] = _photo_media_group_pending.get(album_key, 0) + 1
+        album_entry = _photo_media_group_replies.get(album_key)
+        active_reply_task = album_entry.get("task") if album_entry else None
+        if active_reply_task and not active_reply_task.done():
+            active_reply_task.cancel()
     key = (city["id"], message.chat.id, sender.id)
     entry = _work_ingest_locks.get(key)
     if entry is None:
@@ -4470,6 +4535,13 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
         entry["users"] -= 1
         if entry["users"] == 0 and _work_ingest_locks.get(key) is entry:
             _work_ingest_locks.pop(key, None)
+        if album_key is not None:
+            pending = _photo_media_group_pending.get(album_key, 1) - 1
+            if pending > 0:
+                _photo_media_group_pending[album_key] = pending
+            else:
+                _photo_media_group_pending.pop(album_key, None)
+                _schedule_photo_media_group_reply(album_key)
 
 # ============================================================
 # ЧАТ 1 (и остальные темы, кроме ОТЧЕТОВ) — НОВЫЕ СООБЩЕНИЯ

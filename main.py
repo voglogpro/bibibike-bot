@@ -50,7 +50,7 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import BaseFilter, Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    WebAppInfo, FSInputFile,
+    WebAppInfo, FSInputFile, InputMediaPhoto,
 )
 from aiogram.exceptions import TelegramBadRequest
 
@@ -152,6 +152,15 @@ KHIMKI_CHARGERS_GROUP_ID      = -1004390770669
 KHIMKI_CHARGERS_TOPIC_BATTERY = 4
 KHIMKI_CHARGERS_TOPIC_REPORTS = 3
 
+# Выделенные Telegram-темы, где сообщение с ведущим «/» и @тегами
+# превращается в общую To-Do задачу. Роль ограничивает получателей темы;
+# None означает, что можно назначать скаутам, водителям и чарджерам города.
+TASK_CHAT_ROUTES = {
+    (GROUP_ID, 1): {"city_key": DEFAULT_CITY_KEY, "role": None},
+    (KHIMKI_SCOUTS_GROUP_ID, 101): {"city_key": "khimki", "role": "Скаут"},
+    (KHIMKI_DRIVERS_GROUP_ID, 2212): {"city_key": "khimki", "role": "Водитель"},
+}
+
 # Дополнительные рабочие темы, которые бот слушает сверх основных.
 # Тип парсера каждой темы выбирается отдельными таблицами ниже.
 # Формат: {chat_id группы: (id темы, ...)}. Добавить тему — одна цифра сюда.
@@ -234,7 +243,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-13 · общий To-Do и единый ответ на фотоальбом"
+BUILD_VERSION = "2026-08-14 · задачи из чатов, история и напоминание о конце смены"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -912,7 +921,9 @@ async def init_db():
                 due_time TEXT,
                 client_request_id TEXT,
                 client_request_hash TEXT,
-                created_via TEXT NOT NULL DEFAULT 'crm'
+                created_via TEXT NOT NULL DEFAULT 'crm',
+                archived_at TEXT,
+                archive_reason TEXT
             )
         """)
         await db.execute("""
@@ -992,6 +1003,18 @@ async def init_db():
                 created_at TEXT NOT NULL,
                 sent_at TEXT,
                 UNIQUE(user_id, kind, entity_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_notification_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                outbox_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                delete_after TEXT NOT NULL,
+                deleted_at TEXT,
+                UNIQUE(user_id, message_id)
             )
         """)
         await db.execute("""
@@ -1176,6 +1199,9 @@ async def init_db():
             "ALTER TABLE crm_tasks ADD COLUMN client_request_id TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN client_request_hash TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN created_via TEXT NOT NULL DEFAULT 'crm'",
+            "ALTER TABLE crm_tasks ADD COLUMN archived_at TEXT",
+            "ALTER TABLE crm_tasks ADD COLUMN archive_reason TEXT",
+            "ALTER TABLE shifts ADD COLUMN end_reminder_sent_at TEXT",
             "ALTER TABLE crm_planned_shifts ADD COLUMN batch_id INTEGER",
             "ALTER TABLE crm_planned_shifts ADD COLUMN auto_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE crm_planned_shifts ADD COLUMN reminder_sent_at TEXT",
@@ -1353,6 +1379,10 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_tasks_city_range_status "
             "ON crm_tasks(city_id, date_from, date_to, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_notification_messages_cleanup "
+            "ON crm_notification_messages(deleted_at, delete_after, id)"
         )
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_creator_request "
@@ -4559,6 +4589,257 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
 # ЧАТ 1 (и остальные темы, кроме ОТЧЕТОВ) — НОВЫЕ СООБЩЕНИЯ
 # ============================================================
 _private_task_dates = {}
+_task_chat_albums = {}
+
+
+def _task_chat_route(message):
+    thread_id = GENERAL_TOPIC if message.message_thread_id is None else message.message_thread_id
+    return TASK_CHAT_ROUTES.get((message.chat.id, thread_id))
+
+
+def _task_message_starts_task(message):
+    text = str(message.text or message.caption or "").strip()
+    if not text.startswith("/"):
+        return False
+    usernames, user_ids = _task_text_mentions(message, text)
+    return bool(usernames or user_ids)
+
+
+class TaskChatFilter(BaseFilter):
+    async def __call__(self, message: Message):
+        route = _task_chat_route(message)
+        if not route:
+            return False
+        # Все части альбома надо собрать вместе: подпись со слешем бывает
+        # только у одного фото и может прийти не первой. Одиночные обычные
+        # сообщения оставляем существующему рабочему парсеру.
+        if message.media_group_id or _task_message_starts_task(message):
+            return {"task_route": route}
+        return False
+
+
+async def _task_chat_city(route):
+    for city in CITIES_BY_ID.values():
+        if _city_key(city) == route["city_key"]:
+            return city
+    return None
+
+
+def _task_text_mentions(message, text):
+    usernames = {value.casefold() for value in re.findall(r"@([A-Za-z0-9_]{5,32})", text)}
+    user_ids = set()
+    for entity in list(message.entities or []) + list(message.caption_entities or []):
+        entity_type = getattr(entity, "type", "")
+        if getattr(entity_type, "value", entity_type) == "text_mention" and getattr(entity, "user", None):
+            user_ids.add(int(entity.user.id))
+    return usernames, user_ids
+
+
+async def _create_task_from_chat(messages, route, raw_text):
+    source = messages[0]
+    sender = getattr(source, "from_user", None)
+    city = await _task_chat_city(route)
+    if not sender or not city:
+        return
+    creator = await get_user(sender.id)
+    if not creator or int(creator.get("city_id") or 0) != int(city["id"]):
+        await source.reply("Не удалось создать задачу: сначала откройте Mini App и выберите свой город.")
+        return
+    text = str(raw_text or "").strip()
+    if not text.startswith("/"):
+        return
+    text = text[1:].lstrip()
+    usernames = set()
+    mentioned_ids = set()
+    for item in messages:
+        item_text = str(item.text or item.caption or "")
+        item_usernames, item_ids = _task_text_mentions(item, item_text)
+        usernames.update(item_usernames); mentioned_ids.update(item_ids)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        targets = []
+        if usernames:
+            placeholders = ",".join("?" for _ in usernames)
+            targets.extend(await (await db.execute(
+                f"SELECT * FROM users WHERE city_id=? AND LOWER(telegram_username) IN ({placeholders})",
+                [city["id"], *sorted(usernames)],
+            )).fetchall())
+        if mentioned_ids:
+            placeholders = ",".join("?" for _ in mentioned_ids)
+            targets.extend(await (await db.execute(
+                f"SELECT * FROM users WHERE city_id=? AND user_id IN ({placeholders})",
+                [city["id"], *sorted(mentioned_ids)],
+            )).fetchall())
+    resolved_usernames = {str(row["telegram_username"] or "").casefold() for row in targets}
+    resolved_ids = {int(row["user_id"]) for row in targets}
+    if (usernames - resolved_usernames) or (mentioned_ids - resolved_ids):
+        await source.reply(
+            "Не все отмеченные сотрудники найдены. Попросите их открыть Mini App "
+            "или написать боту один раз, затем отправьте задачу заново."
+        )
+        return
+    by_id = {int(row["user_id"]): dict(row) for row in targets
+             if _employee_todo_name_is_valid(row["full_name"])}
+    role = route.get("role")
+    if role:
+        role_targets = {uid: row for uid, row in by_id.items()
+                        if str(row.get("role") or "").casefold() == role.casefold()}
+        if len(role_targets) != len(by_id):
+            await source.reply(f"В этой теме можно ставить задачи только сотрудникам роли «{role}».")
+            return
+        by_id = role_targets
+    if not by_id:
+        await source.reply(
+            "Не нашёл отмеченных сотрудников в этом городе и роли. "
+            "Попросите их открыть Mini App или написать боту один раз."
+        )
+        return
+    clean = re.sub(r"@([A-Za-z0-9_]{5,32})", "", text)
+    clean_lines = [re.sub(r"\s+", " ", line).strip(" —-\t")
+                   for line in clean.splitlines()]
+    clean = "\n".join(line for line in clean_lines if line).strip()
+    if not clean:
+        clean = "Задача из рабочего чата"
+    title = clean.splitlines()[0][:200]
+    description = clean[:10000]
+    priority = "urgent" if re.search(r"\b(?:срочно|приоритет)\b", clean, re.I) else "normal"
+    work_date = _message_time_in_city(source, city).date().isoformat()
+    album_id = str(getattr(source, "media_group_id", "") or "")
+    request_id = f"task-chat:{source.chat.id}:{album_id or source.message_id}"
+    request_shape = {
+        "title": title, "description": description, "priority": priority,
+        "due_date": work_date, "assignee_user_ids": sorted(by_id),
+        "photo_message_ids": [int(item.message_id) for item in messages if item.photo],
+    }
+    request_hash = hashlib.sha256(json.dumps(
+        request_shape, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+    downloaded = []
+    try:
+        os.makedirs(CRM_UPLOAD_DIR, exist_ok=True)
+        for item in messages:
+            if not item.photo:
+                continue
+            storage_key = f"{uuid.uuid4().hex}.jpg"
+            path = os.path.join(CRM_UPLOAD_DIR, storage_key)
+            file_info = await bot.get_file(item.photo[-1].file_id)
+            await bot.download_file(file_info.file_path, destination=path)
+            if os.path.getsize(path) > CRM_UPLOAD_MAX_BYTES:
+                raise ValueError("Одно из фото задачи превышает лимит 10 МБ.")
+            with open(path, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            downloaded.append({"storage_key": storage_key, "path": path,
+                               "size": os.path.getsize(path), "sha256": digest})
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            existing = await (await db.execute(
+                "SELECT id,client_request_hash FROM crm_tasks "
+                "WHERE created_by=? AND client_request_id=?",
+                (sender.id, request_id),
+            )).fetchone()
+            if existing:
+                await db.rollback()
+                if existing["client_request_hash"] == request_hash:
+                    await source.reply(f"Задача #{existing['id']} уже была отправлена.")
+                    return
+                await source.reply("Не удалось повторить задачу: содержимое сообщения изменилось.")
+                return
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cur = await db.execute(
+                "INSERT INTO crm_tasks (city_id,work_date,title,description,priority,status,created_by,"
+                "created_at,updated_by,updated_at,requires_photo,date_from,date_to,district,"
+                "completion_mode,client_request_id,client_request_hash,created_via) "
+                "VALUES (?,?,?,?,?,'draft',?,?,?,?,0,?,?,?,'manual',?,?,?)",
+                (city["id"], work_date, title, description, priority, sender.id,
+                 now_iso, sender.id, now_iso, work_date, work_date, "",
+                 request_id, request_hash, "telegram_chat"),
+            )
+            task_id = cur.lastrowid
+            await db.executemany(
+                "INSERT INTO crm_task_targets (task_id,target_type,user_id,role) "
+                "VALUES (?,'user',?,NULL)", [(task_id, uid) for uid in sorted(by_id)],
+            )
+            for index, item in enumerate(downloaded, 1):
+                await db.execute(
+                    "INSERT INTO crm_task_attachments (task_id,storage_key,original_name,mime_type,"
+                    "size_bytes,sha256,kind,assignee_user_id,uploaded_by,created_at) "
+                    "VALUES (?,?,?,?,?,?,'brief',NULL,?,?)",
+                    (task_id, item["storage_key"], f"telegram-task-{index}.jpg", "image/jpeg",
+                     item["size"], item["sha256"], sender.id, now_iso),
+                )
+            await _crm_task_event(
+                db, task_id, sender.id, "task.created.telegram_chat",
+                {"chat_id": source.chat.id, "message_ids": request_shape["photo_message_ids"],
+                 "assignee_count": len(by_id)},
+            )
+            await _crm_publish_task(db, task_id, city["id"], sender.id)
+            await db.commit()
+        names = ", ".join(row["full_name"] for row in by_id.values())
+        photo_text = f" · фото: {len(downloaded)}" if downloaded else ""
+        await source.reply(f"✅ Задача #{task_id} отправлена: {names}{photo_text}")
+    except Exception:
+        logger.exception("Не удалось создать задачу из рабочего чата")
+        await source.reply("Не удалось создать задачу. Попробуйте ещё раз.")
+    finally:
+        # После успешной транзакции файлы уже принадлежат задаче. При ошибке до
+        # INSERT удаляем только сироты; существующие записи определяем по БД.
+        for item in downloaded:
+            async with aiosqlite.connect(DB_PATH) as db:
+                linked = await (await db.execute(
+                    "SELECT 1 FROM crm_task_attachments WHERE storage_key=?",
+                    (item["storage_key"],),
+                )).fetchone()
+            if not linked:
+                try: os.remove(item["path"])
+                except OSError: pass
+
+
+async def _flush_task_chat_album(key, generation):
+    await asyncio.sleep(1.5)
+    entry = _task_chat_albums.get(key)
+    if not entry or entry["generation"] != generation:
+        return
+    _task_chat_albums.pop(key, None)
+    if entry["text"]:
+        await _create_task_from_chat(entry["messages"], entry["route"], entry["text"])
+        return
+    # Альбом без явного `/ @сотрудник` — не задача. Передаём каждую его
+    # часть прежнему рабочему парсеру, чтобы OCR и учёт действий не изменились.
+    messages = sorted(entry["messages"], key=lambda item: item.message_id)
+    city = get_city_by_group(messages[0].chat.id) if messages else None
+    if not city:
+        return
+    for item in messages:
+        kind = topic_parser_kind(city, item.message_thread_id)
+        await process_work_message(
+            item, city, npb=(kind == "npb"), moves=(kind == "moves"),
+            repair_topic=(kind == "repair"), bare_repair_topic=(kind == "bare_repair"),
+            sticker_topic=(kind == "sticker"),
+        )
+
+
+@cmd_router.message(TaskChatFilter())
+async def task_chat_message(message: Message, task_route):
+    route = task_route
+    media_group_id = str(message.media_group_id or "")
+    text = str(message.text or message.caption or "").strip()
+    if media_group_id:
+        key = (message.chat.id, media_group_id)
+        entry = _task_chat_albums.setdefault(
+            key, {"messages": [], "text": "", "route": route, "generation": 0, "task": None}
+        )
+        entry["messages"].append(message)
+        if _task_message_starts_task(message):
+            entry["text"] = text
+        entry["generation"] += 1
+        task = entry.get("task")
+        if task and not task.done():
+            task.cancel()
+        entry["task"] = asyncio.create_task(_flush_task_chat_album(key, entry["generation"]))
+        return
+    if _task_message_starts_task(message):
+        await _create_task_from_chat([message], route, text)
 
 
 async def _private_manager_context(user_id):
@@ -5653,8 +5934,16 @@ async def api_employee_planned_shift_update(request):
             (start_time, end_time, uid, now_iso, plan_id),
         )
         if current.get("actual_shift_id"):
+            # Продление после уже отправленного предупреждения должно создать
+            # новое предупреждение для нового времени, а не упереться в UNIQUE outbox.
+            await db.execute(
+                "DELETE FROM crm_notification_outbox "
+                "WHERE user_id=? AND kind='shift_end_reminder' AND entity_id=?",
+                (uid, current["actual_shift_id"]),
+            )
             cursor = await db.execute(
-                "UPDATE shifts SET auto_close_at=? WHERE id=? AND user_id=? AND is_active=1",
+                "UPDATE shifts SET auto_close_at=?,end_reminder_sent_at=NULL "
+                "WHERE id=? AND user_id=? AND is_active=1",
                 (new_end_at.isoformat(), current["actual_shift_id"], uid),
             )
             if cursor.rowcount != 1:
@@ -6210,10 +6499,51 @@ async def _auto_close_shift(shift):
     logger.info(f"Смена {shift['id']} закрыта автоматически (дедлайн {end_time}).")
 
 
+async def process_shift_end_reminders_once():
+    """Напоминает сотруднику за 30 минут до автоматического окончания смены."""
+    now_utc = datetime.now(timezone.utc)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM shifts WHERE is_active=1 AND auto_close_at IS NOT NULL "
+            "AND end_reminder_sent_at IS NULL"
+        )).fetchall()
+    sent = 0
+    for raw in rows:
+        shift = dict(raw)
+        deadline = _parse_datetime(shift.get("auto_close_at"))
+        city = get_city(shift.get("city_id")) or get_default_city()
+        if not deadline or not city:
+            continue
+        deadline_utc = deadline.astimezone(timezone.utc)
+        if not (deadline_utc - timedelta(minutes=30) <= now_utc < deadline_utc):
+            continue
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            fresh = await (await db.execute(
+                "SELECT is_active,end_reminder_sent_at FROM shifts WHERE id=?", (shift["id"],)
+            )).fetchone()
+            if not fresh or not fresh[0] or fresh[1]:
+                await db.rollback(); continue
+            local_deadline = deadline.astimezone(_city_tz(city))
+            await _enqueue_crm_notification(
+                db, shift["city_id"], shift["user_id"], "shift_end_reminder", shift["id"],
+                {"shift_id": shift["id"], "end_time": local_deadline.strftime("%H:%M"),
+                 "district": shift.get("district") or ""},
+            )
+            await db.execute(
+                "UPDATE shifts SET end_reminder_sent_at=? WHERE id=? AND end_reminder_sent_at IS NULL",
+                (now_utc.isoformat(), shift["id"]),
+            )
+            await db.commit(); sent += 1
+    return sent
+
+
 async def auto_close_worker():
     """Раз в 30 сек закрывает активные смены, у которых наступил дедлайн."""
     while True:
         try:
+            await process_shift_end_reminders_once()
             now_utc = datetime.now(timezone.utc)
             async with aiosqlite.connect(DB_PATH) as db:
                 db.row_factory = aiosqlite.Row
@@ -9171,6 +9501,9 @@ async def _crm_publish_task(db, task_id, expected_city_id=None, actor_user_id=No
         "SELECT id FROM crm_task_attachments WHERE task_id=? AND kind='brief' ORDER BY id LIMIT 1",
         (task_id,),
     )).fetchone()
+    creator = await (await db.execute(
+        "SELECT full_name FROM users WHERE user_id=?", (task["created_by"],),
+    )).fetchone()
     date_from = task["date_from"] or task["work_date"]
     date_to = task["date_to"] or date_from
     for uid in recipients:
@@ -9180,6 +9513,7 @@ async def _crm_publish_task(db, task_id, expected_city_id=None, actor_user_id=No
             db, task["city_id"], uid, "task_assigned", task_id,
             {"task_id": task_id, "title": task["title"], "date_from": date_from,
              "date_to": date_to, "due_time": task["due_time"],
+             "creator_name": (creator[0] if creator else "") or "Сотрудник",
              "district": task["district"] or "",
              "description": task["description"] or "",
              "requires_photo": bool(task["requires_photo"]),
@@ -9247,6 +9581,8 @@ async def _crm_task_payloads(db, rows, detailed=False, viewer_user_id=None):
             "requires_photo": bool(task.get("requires_photo")),
             "due_time": task.get("due_time"),
             "created_via": task.get("created_via") or "crm",
+            "archived_at": task.get("archived_at"),
+            "archive_reason": task.get("archive_reason") or "",
             "created_by": task["created_by"], "created_at": task["created_at"],
             "updated_at": task["updated_at"], "published_at": task["published_at"],
             "targets": [dict(row) for row in targets], "progress": _crm_progress(assignees),
@@ -9553,6 +9889,21 @@ def _employee_todo_name_is_valid(value):
                 or lowered == "employee" or lowered.startswith("employee #"))
 
 
+async def archive_expired_tasks_once():
+    """Убирает задачи из активной ленты через 48 часов, сохраняя историю."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE crm_tasks SET archived_at=?,archive_reason='expired' "
+            "WHERE archived_at IS NULL AND status='published' "
+            "AND COALESCE(published_at,created_at)<=?",
+            (now_iso, cutoff),
+        )
+        await db.commit()
+        return max(0, int(cur.rowcount or 0))
+
+
 async def api_employee_task_directory(request):
     """Return assignable real profiles from the authenticated employee's city only."""
     tg_user = await _auth_user(request)
@@ -9697,6 +10048,7 @@ async def api_employee_tasks_mine(request):
     scope = str(request.query.get("scope") or "inbox").strip().lower()
     if scope not in {"inbox", "outbox", "all"}:
         return web.json_response({"error": "scope"}, status=400)
+    await archive_expired_tasks_once()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         if scope == "inbox":
@@ -9713,7 +10065,7 @@ async def api_employee_tasks_mine(request):
             "a.updated_at AS my_updated_at,u.full_name AS creator_name FROM crm_tasks t "
             "LEFT JOIN crm_task_assignees a ON a.task_id=t.id AND a.user_id=? "
             "LEFT JOIN users u ON u.user_id=t.created_by WHERE " + access_sql + " AND t.city_id=? "
-            "AND (((t.status='published') AND EXISTS (SELECT 1 FROM crm_task_assignees active_a "
+            "AND (((t.status='published' AND t.archived_at IS NULL) AND EXISTS (SELECT 1 FROM crm_task_assignees active_a "
             "WHERE active_a.task_id=t.id AND active_a.status!='accepted')) OR "
             "(COALESCE(t.date_to,t.work_date)>=? AND COALESCE(t.date_from,t.work_date)<=?)) "
             "ORDER BY COALESCE(t.date_from,t.work_date),t.id",
@@ -9747,12 +10099,12 @@ async def api_employee_task_progress(request):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
         row = await (await db.execute(
-            "SELECT a.*,t.status AS task_status,t.requires_photo,t.created_by,t.city_id,t.title "
+            "SELECT a.*,t.status AS task_status,t.archived_at,t.requires_photo,t.created_by,t.city_id,t.title "
             "FROM crm_task_assignees a JOIN crm_tasks t "
             "ON t.id=a.task_id WHERE a.task_id=? AND a.user_id=? AND t.city_id=?",
             (task_id, tg_user["id"], city["id"])
         )).fetchone()
-        if not row or row["task_status"] != "published":
+        if not row or row["task_status"] != "published" or row["archived_at"]:
             await db.rollback(); return web.json_response({"error": "not_found"}, status=404)
         allowed_transitions = {
             "assigned": {"seen", "in_progress"},
@@ -9833,7 +10185,8 @@ async def api_employee_task_review(request):
         await db.execute("BEGIN IMMEDIATE")
         task = await (await db.execute(
             "SELECT * FROM crm_tasks WHERE id=? AND city_id=? AND created_by=? "
-            "AND status='published'", (task_id, city["id"], tg_user["id"]),
+            "AND status='published' AND archived_at IS NULL",
+            (task_id, city["id"], tg_user["id"]),
         )).fetchone()
         assignee = await (await db.execute(
             "SELECT * FROM crm_task_assignees WHERE task_id=? AND user_id=?",
@@ -9901,6 +10254,9 @@ async def api_employee_task_cancel(request):
         if task["status"] != "published":
             await db.rollback()
             return web.json_response({"error": "status"}, status=409)
+        if task["archived_at"]:
+            await db.rollback()
+            return web.json_response({"error": "task_archived"}, status=409)
         assignee_states = await (await db.execute(
             "SELECT status FROM crm_task_assignees WHERE task_id=?", (task_id,),
         )).fetchall()
@@ -10001,11 +10357,13 @@ def _crm_notification_text(kind, payload):
         date_to = payload.get("date_to")
         dates = date_from if not date_to or date_to == payload.get("date_from") else f"{date_from} — {_crm_human_date(date_to)}"
         lines = ["📋 НОВАЯ ЗАДАЧА", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
+        lines.append(f"👤 Автор: {payload.get('creator_name') or 'Сотрудник'}")
         if payload.get("due_time"): lines.append(f"🕒 Срок: до {payload.get('due_time')}")
         if district: lines.append(f"📍 Район: {district}")
         if details: lines.extend(["", "📝 Что нужно сделать:", details])
         if payload.get("requires_photo"): lines.extend(["", "📸 Автор задачи ожидает фото результата."])
-        lines.extend(["", "Откройте раздел «Задачи», чтобы начать выполнение и отправить результат."])
+        lines.extend(["", "Откройте раздел «Задачи», чтобы начать выполнение и отправить результат.",
+                      "Сообщение автоматически удалится через два дня, задача останется в истории."])
         return "\n".join(lines)
     if kind == "task_submitted":
         return (f"✅ ЗАДАЧА ГОТОВА К ПРОВЕРКЕ\n\n🎯 {payload.get('title') or 'Без названия'}\n"
@@ -10065,6 +10423,13 @@ def _crm_notification_text(kind, payload):
         lines.extend(["", f"🚀 В {payload.get('start_time', 'назначенное время')} бот сам откроет вашу смену.",
                       f"🏁 В {payload.get('end_time', 'конце смены')} бот автоматически её закроет.",
                       "✅ Дополнительных действий сейчас не требуется."])
+        return "\n".join(lines)
+    if kind == "shift_end_reminder":
+        lines = ["⏳ ДО КОНЦА СМЕНЫ 30 МИНУТ", "",
+                 f"🏁 Смена автоматически закроется в {payload.get('end_time', 'назначенное время')}."]
+        if district: lines.append(f"📍 Район: {district}")
+        lines.extend(["", "Если хотите поработать дольше — измените окончание смены в приложении.",
+                      "Проверьте, что все действия и результаты задач отправлены."])
         return "\n".join(lines)
     if kind == "shift_auto_started":
         lines = ["🟢 СМЕНА ОТКРЫТА АВТОМАТИЧЕСКИ", "",
@@ -10127,7 +10492,7 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
-        if row["kind"] in {"planned_shift", "shift_reminder", "shift_auto_started"}:
+        if row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder", "shift_auto_started"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
@@ -10135,32 +10500,59 @@ async def deliver_crm_notifications_once(limit=50):
             InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
         ]])
         try:
+            sent_messages = []
             photo_sent = False
-            if row["kind"] == "task_assigned" and payload.get("brief_attachment_id"):
+            if row["kind"] == "task_assigned" and task_id:
                 async with aiosqlite.connect(DB_PATH) as photo_db:
-                    attachment = await (await photo_db.execute(
-                        "SELECT storage_key FROM crm_task_attachments WHERE id=? AND kind='brief'",
-                        (payload["brief_attachment_id"],),
-                    )).fetchone()
-                photo_path = os.path.join(CRM_UPLOAD_DIR, attachment[0]) if attachment else None
-                if photo_path and os.path.isfile(photo_path):
+                    attachments = await (await photo_db.execute(
+                        "SELECT storage_key FROM crm_task_attachments "
+                        "WHERE task_id=? AND kind='brief' ORDER BY id LIMIT 10",
+                        (task_id,),
+                    )).fetchall()
+                photo_paths = [os.path.join(CRM_UPLOAD_DIR, item[0]) for item in attachments]
+                photo_paths = [path for path in photo_paths if os.path.isfile(path)]
+                if photo_paths:
                     try:
-                        long_caption = len(text) > 1024
-                        await bot.send_photo(row["user_id"], FSInputFile(photo_path),
-                                             caption=("📎 Карта или фотография к новому заданию"
-                                                      if long_caption else text),
-                                             reply_markup=None if long_caption else keyboard)
-                        photo_sent = not long_caption
+                        if len(photo_paths) > 1:
+                            album = await bot.send_media_group(
+                                row["user_id"],
+                                [InputMediaPhoto(media=FSInputFile(path)) for path in photo_paths],
+                            )
+                            sent_messages.extend(album)
+                            sent_messages.append(await bot.send_message(
+                                row["user_id"], text, reply_markup=keyboard,
+                            ))
+                            photo_sent = True
+                        else:
+                            long_caption = len(text) > 1024
+                            sent_messages.append(await bot.send_photo(
+                                row["user_id"], FSInputFile(photo_paths[0]),
+                                caption=("📎 Фотография к новой задаче" if long_caption else text),
+                                reply_markup=None if long_caption else keyboard,
+                            ))
+                            photo_sent = not long_caption
                     except Exception as photo_error:
                         logger.warning("CRM outbox: фото не отправлено, использую текст: %s", photo_error)
             if not photo_sent:
-                await bot.send_message(row["user_id"], text, reply_markup=keyboard)
+                sent_messages.append(await bot.send_message(
+                    row["user_id"], text, reply_markup=keyboard,
+                ))
             async with aiosqlite.connect(DB_PATH) as db:
+                sent_iso = datetime.now(timezone.utc).isoformat()
                 await db.execute(
                     "UPDATE crm_notification_outbox SET status='sent',attempt_count=attempt_count+1,"
                     "sent_at=?,last_error=NULL WHERE id=? AND status IN ('pending','retry')",
-                    (datetime.now(timezone.utc).isoformat(), row["id"]),
+                    (sent_iso, row["id"]),
                 )
+                if row["kind"].startswith("task_"):
+                    delete_after = (datetime.now(timezone.utc) + timedelta(hours=47)).isoformat()
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO crm_notification_messages "
+                        "(outbox_id,user_id,message_id,created_at,delete_after) VALUES (?,?,?,?,?)",
+                        [(row["id"], row["user_id"], item.message_id, sent_iso, delete_after)
+                         for item in sent_messages
+                         if isinstance(getattr(item, "message_id", None), int)],
+                    )
                 await db.commit()
             delivered += 1
         except Exception as exc:
@@ -10187,6 +10579,49 @@ async def crm_notification_worker():
         except Exception:
             logger.exception("Ошибка фоновой доставки CRM-уведомлений")
         await asyncio.sleep(15)
+
+
+async def cleanup_task_messages_once(limit=200):
+    """Удаляет личные Telegram-сообщения задач до достижения лимита 48 часов."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM crm_notification_messages WHERE deleted_at IS NULL "
+            "AND delete_after<=? ORDER BY id LIMIT ?", (now_iso, int(limit)),
+        )).fetchall()
+    cleaned = 0
+    for row in rows:
+        try:
+            await bot.delete_message(row["user_id"], row["message_id"])
+        except TelegramBadRequest:
+            # Сообщение уже удалено пользователем или Telegram — считаем очищенным.
+            pass
+        except Exception as exc:
+            logger.warning("Не удалось удалить старое сообщение задачи %s: %s", row["id"], exc)
+            continue
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE crm_notification_messages SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                (datetime.now(timezone.utc).isoformat(), row["id"]),
+            )
+            await db.commit()
+        cleaned += 1
+    return cleaned
+
+
+async def todo_cleanup_worker():
+    while True:
+        try:
+            archived = await archive_expired_tasks_once()
+            deleted = await cleanup_task_messages_once()
+            if archived or deleted:
+                logger.info("To-Do очистка: архивировано=%s, удалено сообщений=%s", archived, deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Ошибка ежедневной очистки To-Do")
+        await asyncio.sleep(3600)
 
 
 def _crm_normalized_district(value):
@@ -10375,7 +10810,13 @@ async def process_planned_shifts_once():
             _, fresh_end_at = _planned_shift_times(fresh_plan, city)
             fresh_district = fresh_plan.get("district") or ""
             await db.execute(
-                "UPDATE shifts SET auto_close_at=?,district=? WHERE id=? AND is_active=1",
+                "DELETE FROM crm_notification_outbox "
+                "WHERE user_id=? AND kind='shift_end_reminder' AND entity_id=?",
+                (fresh_plan["user_id"], shift_id),
+            )
+            await db.execute(
+                "UPDATE shifts SET auto_close_at=?,district=?,end_reminder_sent_at=NULL "
+                "WHERE id=? AND is_active=1",
                 ((fresh_end_at or end_at).isoformat(), fresh_district, shift_id),
             )
             cur = await db.execute(
@@ -10876,6 +11317,7 @@ async def main():
     crm_planned_shift_task = asyncio.create_task(crm_planned_shift_worker())
     crm_notification_task = asyncio.create_task(crm_notification_worker())
     crm_shift_sync_task = asyncio.create_task(crm_shift_task_sync_worker())
+    todo_cleanup_task = asyncio.create_task(todo_cleanup_worker())
     dp = Dispatcher()
     dp.include_router(private_router)
     dp.include_router(cmd_router)
@@ -10931,10 +11373,11 @@ async def main():
         crm_planned_shift_task.cancel()
         crm_notification_task.cancel()
         crm_shift_sync_task.cancel()
+        todo_cleanup_task.cancel()
         try:
             await asyncio.gather(kpi_task, scheduled_report_task, auto_close_task,
                                  crm_planned_shift_task, crm_notification_task,
-                                 crm_shift_sync_task)
+                                 crm_shift_sync_task, todo_cleanup_task)
         except asyncio.CancelledError:
             pass
 

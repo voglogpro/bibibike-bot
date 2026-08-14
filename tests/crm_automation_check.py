@@ -110,6 +110,44 @@ async def run():
     })
     assert "30 МИНУТ" in sample and "📍 Район: ФМР" in sample
     assert "🚀 В 09:00" in sample and "🏁 В 19:00" in sample
+
+    # Активная смена получает одно предупреждение за 30 минут. После продления
+    # старый dedupe-ключ очищается, поэтому новое время тоже сможет напомнить.
+    near_end = datetime.now(timezone.utc) + timedelta(minutes=20)
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "UPDATE shifts SET auto_close_at=?,end_reminder_sent_at=NULL WHERE id=?",
+            (near_end.isoformat(), plan[0]),
+        )
+        await db.commit()
+    assert await bot.process_shift_end_reminders_once() == 1
+    assert await bot.process_shift_end_reminders_once() == 0
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        first_end_notice = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_notification_outbox "
+            "WHERE kind='shift_end_reminder' AND entity_id=?", (plan[0],),
+        )).fetchone())[0]
+    assert first_end_notice == 1
+
+    with patch.object(bot, "_auth_user", AsyncMock(return_value={"id": 990001})):
+        second_extension = await bot.api_employee_planned_shift_update(UpdateRequest({
+            "end_time": (now + timedelta(hours=4)).strftime("%H:%M")
+        }))
+    assert second_extension.status == 200
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        reset = await (await db.execute(
+            "SELECT end_reminder_sent_at FROM shifts WHERE id=?", (plan[0],)
+        )).fetchone()
+        old_notice_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_notification_outbox "
+            "WHERE kind='shift_end_reminder' AND entity_id=?", (plan[0],),
+        )).fetchone())[0]
+        await db.execute(
+            "UPDATE shifts SET auto_close_at=? WHERE id=?", (near_end.isoformat(), plan[0])
+        )
+        await db.commit()
+    assert reset[0] is None and old_notice_count == 0
+    assert await bot.process_shift_end_reminders_once() == 1
     print("PASS CRM automation: reminder, auto-start, active settings and admin-only district")
 
 

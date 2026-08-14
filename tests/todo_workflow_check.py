@@ -11,7 +11,7 @@ import importlib.util
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -247,6 +247,36 @@ async def run():
     assert cancelled.status == 200 and payload(cancelled)["already_cancelled"] is False
     assert cancel_replay.status == 200 and payload(cancel_replay)["already_cancelled"] is True
     assert await scalar("SELECT status FROM crm_tasks WHERE id=?", (cancel_id,)) == "cancelled"
+
+    # Незавершённые задачи автоматически уходят из основной ленты через 48 часов,
+    # но остаются доступными в истории и больше не могут менять состояние.
+    expired_created = await bot.api_employee_task_create(Request(
+        users["author"], method="POST",
+        body=create_body(users["colleague"], "todo-expired-1", "Старая задача"),
+    ))
+    expired_id = payload(expired_created)["task"]["task_id"]
+    old_iso = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "UPDATE crm_tasks SET published_at=?,created_at=? WHERE id=?",
+            (old_iso, old_iso, expired_id),
+        )
+        await db.commit()
+    assert await bot.archive_expired_tasks_once() == 1
+    assert await scalar(
+        "SELECT COUNT(*) FROM crm_tasks WHERE id=? AND archived_at IS NOT NULL "
+        "AND archive_reason='expired'", (expired_id,),
+    ) == 1
+    expired_progress = await bot.api_employee_task_progress(Request(
+        users["colleague"], method="POST", body={"status": "in_progress"},
+        match={"task_id": str(expired_id)},
+    ))
+    assert expired_progress.status == 404
+    history = await bot.api_employee_tasks_mine(Request(
+        users["colleague"], query={"scope": "inbox"},
+    ))
+    archived_item = next(item for item in payload(history)["items"] if item["task_id"] == expired_id)
+    assert archived_item["archived_at"] and archived_item["archive_reason"] == "expired"
 
     # Lifecycle decisions remain auditable.
     event_types = set()

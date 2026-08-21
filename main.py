@@ -336,6 +336,49 @@ work_router = Router()
 cmd_router = Router()
 private_router = Router()
 
+# Фоновые циклы не должны опрашивать SQLite каждые 15–30 секунд в простое.
+# События будят нужный worker сразу после локального изменения, а редкий
+# timeout остаётся страховкой для восстановления после сбоя/перезапуска.
+_notification_wakeup = asyncio.Event()
+_planned_shift_wakeup = asyncio.Event()
+_auto_close_wakeup = asyncio.Event()
+_scheduled_report_wakeup = asyncio.Event()
+_shift_task_sync_wakeup = asyncio.Event()
+
+
+def _reset_worker_events():
+    """Создаёт события в текущем runtime; полезно и для повторных test loops."""
+    global _notification_wakeup, _planned_shift_wakeup, _auto_close_wakeup
+    global _scheduled_report_wakeup, _shift_task_sync_wakeup
+    _notification_wakeup = asyncio.Event()
+    _planned_shift_wakeup = asyncio.Event()
+    _auto_close_wakeup = asyncio.Event()
+    _scheduled_report_wakeup = asyncio.Event()
+    _shift_task_sync_wakeup = asyncio.Event()
+
+
+async def _wait_worker(event, timeout):
+    """Ждёт полезное событие или редкий страховочный timeout."""
+    try:
+        await asyncio.wait_for(event.wait(), timeout=max(0.01, float(timeout)))
+    except asyncio.TimeoutError:
+        pass
+
+
+async def _commit_and_wake(db, *events):
+    """Публикует wakeup только после того, как изменения видны другим соединениям."""
+    await db.commit()
+    for event in events:
+        if event is not None:
+            event.set()
+
+
+def _wake_closed_shift():
+    """Будит потребителей сразу после фиксации закрытия смены."""
+    _shift_task_sync_wakeup.set()
+    _planned_shift_wakeup.set()
+    _auto_close_wakeup.set()
+
 # ============================================================
 # ЛОГИРОВАНИЕ  (пишем в stdout, чтобы BotHost точно показывал логи)
 # ============================================================
@@ -1052,6 +1095,12 @@ async def init_db():
                 matched_tasks INTEGER NOT NULL DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+        """)
         # Декады — расчётные периоды админки. «Обнуление» счётчиков это старт
         # новой декады: данные смен остаются в БД, меняется только точка отсчёта.
         await db.execute("""
@@ -1313,6 +1362,10 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_actions_shift_city ON actions(shift_id, city_id)"
         )
         await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_actions_message_lookup "
+            "ON actions(city_id, user_id, message_id, chat_id, shift_id)"
+        )
+        await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_shifts_city_active_start "
             "ON shifts(city_id, is_active, start_at)"
         )
@@ -1417,20 +1470,32 @@ async def init_db():
             "ON shifts(user_id) WHERE is_active = 1"
         )
         # Версии до постоянной привязки сообщения хранили её только в actions.
-        # Заполняем новую таблицу до начала обработки edit-событий.
-        legacy_links = await (await db.execute(
-            "SELECT a.city_id, a.user_id, a.message_id, a.shift_id, "
-            "COALESCE(s.created_at, ?) FROM actions a JOIN shifts s ON s.id = a.shift_id "
-            "WHERE a.city_id IS NOT NULL AND a.message_id IS NOT NULL AND a.id = "
-            "(SELECT MAX(a2.id) FROM actions a2 WHERE a2.city_id = a.city_id "
-            "AND a2.user_id = a.user_id AND a2.message_id = a.message_id)",
-            (datetime.now(timezone.utc).isoformat(),)
-        )).fetchall()
-        await db.executemany(
-            "INSERT OR IGNORE INTO work_message_links "
-            "(city_id, user_id, message_id, shift_id, created_at) VALUES (?, ?, ?, ?, ?)",
-            legacy_links
-        )
+        # Это одноразовая миграция: повторный полный проход по большой actions
+        # на каждом рестарте зря нагружал CPU и диск. Маркер пишется в той же
+        # транзакции, поэтому после аварии миграция безопасно повторится.
+        legacy_migration = "work_message_links_from_actions_v1"
+        await db.commit()
+        await db.execute("BEGIN IMMEDIATE")
+        migration_done = await (await db.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?", (legacy_migration,)
+        )).fetchone()
+        if not migration_done:
+            await db.execute(
+                "INSERT OR IGNORE INTO work_message_links "
+                "(city_id,chat_id,user_id,message_id,shift_id,created_at) "
+                "SELECT a.city_id,a.chat_id,a.user_id,a.message_id,a.shift_id,COALESCE(s.created_at,?) "
+                "FROM actions a JOIN (SELECT city_id,chat_id,user_id,message_id,MAX(id) AS id "
+                "FROM actions WHERE city_id IS NOT NULL AND user_id IS NOT NULL "
+                "AND message_id IS NOT NULL "
+                "GROUP BY city_id,chat_id,user_id,message_id) latest ON latest.id=a.id "
+                "JOIN shifts s ON s.id=a.shift_id",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            await db.execute(
+                "INSERT INTO schema_migrations (name,applied_at) VALUES (?,?)",
+                (legacy_migration, datetime.now(timezone.utc).isoformat()),
+            )
+        await db.commit()
 
         # Если предыдущий аварийный запуск успел создать две смены из одного
         # Telegram-отчёта, оставляем последнюю до создания UNIQUE-индекса.
@@ -2016,7 +2081,11 @@ async def start_shift(uid, name, role, time, district, city_id, source="bot",
              source, source_message_id, auto_close_at, period_id)
         )
         await db.commit()
-        return c.lastrowid
+        shift_id = c.lastrowid
+    _scheduled_report_wakeup.set()
+    if auto_close_at:
+        _auto_close_wakeup.set()
+    return shift_id
 
 # === НОВОЕ: расчёт заработка ===
 def _worked_min(start_time, end_time):
@@ -2102,6 +2171,7 @@ async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_overri
             return None
         await db.commit()
         sid = shift["id"]
+    _wake_closed_shift()
     # === НОВОЕ: заморозить заработок закрытой смены ===
     if sid:
         await freeze_earned(sid)
@@ -3478,6 +3548,7 @@ async def capture_manual_report(message: Message, city):
              message_time.isoformat(), event_time.isoformat())
         )
         await db.commit()
+    _wake_closed_shift()
     await freeze_earned(shift_id)
     if target_source == "manual_signal" and target_report_msg_id:
         await safe_flush_report_update(shift_id)
@@ -4816,7 +4887,7 @@ async def _create_task_from_chat(messages, route, raw_text):
                  "assignee_count": len(by_id)},
             )
             await _crm_publish_task(db, task_id, city["id"], sender.id)
-            await db.commit()
+            await _commit_and_wake(db, _notification_wakeup)
         names = ", ".join(row["full_name"] for row in by_id.values())
         photo_text = f" · фото: {len(downloaded)}" if downloaded else ""
         await source.reply(f"✅ Задача #{task_id} отправлена: {names}{photo_text}")
@@ -4994,7 +5065,7 @@ async def private_task_photo(message: Message):
             await _crm_audit(db, context, "task.telegram_create", "task", task_id, city["id"],
                              after={"user_id": target["user_id"], "work_date": work_date,
                                     "attachment_id": attachment.lastrowid})
-            await db.commit()
+            await _commit_and_wake(db, _notification_wakeup)
         _private_task_dates.pop(message.from_user.id, None)
         await message.answer(
             f"✅ Задание #{task_id} назначено: {target['full_name']}\n"
@@ -5522,6 +5593,16 @@ async def cors_mw(request, handler):
         resp = web.Response(status=204)
     else:
         resp = await handler(request)
+        # HTTP-изменения уже закоммичены к моменту возврата handler. Будим
+        # только связанные workers; это события пользователя, а не polling.
+        if request.method in {"POST", "PATCH", "PUT", "DELETE"} and resp.status < 400:
+            path = request.path
+            if ("planned-shift" in path or path.endswith("/calendar/changes")):
+                _planned_shift_wakeup.set()
+                _auto_close_wakeup.set()
+                _notification_wakeup.set()
+            elif "/tasks" in path or "/task-" in path:
+                _notification_wakeup.set()
     resp.headers["Access-Control-Allow-Origin"] = WEBAPP_ALLOW_ORIGIN
     resp.headers["Access-Control-Allow-Headers"] = (
         "Authorization, Content-Type, X-Init-Data, X-Admin-Token"
@@ -6542,20 +6623,22 @@ async def _auto_close_shift(shift):
         await db.commit()
         if cur.rowcount != 1:
             return
+    _wake_closed_shift()
     await freeze_earned(shift["id"])
     await safe_flush_report_update(shift["id"])
     logger.info(f"Смена {shift['id']} закрыта автоматически (дедлайн {end_time}).")
 
 
-async def process_shift_end_reminders_once():
+async def process_shift_end_reminders_once(rows=None, now_utc=None):
     """Напоминает сотруднику за 30 минут до автоматического окончания смены."""
-    now_utc = datetime.now(timezone.utc)
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(
-            "SELECT * FROM shifts WHERE is_active=1 AND auto_close_at IS NOT NULL "
-            "AND end_reminder_sent_at IS NULL"
-        )).fetchall()
+    now_utc = now_utc or datetime.now(timezone.utc)
+    if rows is None:
+        async with db_connect() as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                "SELECT * FROM shifts WHERE is_active=1 AND auto_close_at IS NOT NULL "
+                "AND end_reminder_sent_at IS NULL"
+            )).fetchall()
     sent = 0
     for raw in rows:
         shift = dict(raw)
@@ -6584,34 +6667,61 @@ async def process_shift_end_reminders_once():
                 (now_utc.isoformat(), shift["id"]),
             )
             await db.commit(); sent += 1
+            _notification_wakeup.set()
     return sent
 
 
+def _auto_close_wait_seconds(rows, now_utc=None):
+    """Ближайшее напоминание/закрытие или редкая страховочная проверка."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    deadlines = []
+    for raw in rows or []:
+        shift = dict(raw)
+        deadline = _parse_datetime(shift.get("auto_close_at"))
+        if not deadline:
+            continue
+        deadline_utc = deadline.astimezone(timezone.utc)
+        deadlines.append(deadline_utc)
+        if not shift.get("end_reminder_sent_at"):
+            deadlines.append(deadline_utc - timedelta(minutes=30))
+    if not deadlines:
+        return 900.0
+    seconds = min((value - now_utc).total_seconds() for value in deadlines)
+    return max(1.0, min(900.0, seconds))
+
+
 async def auto_close_worker():
-    """Раз в 30 сек закрывает активные смены, у которых наступил дедлайн."""
+    """Спит до ближайшего дедлайна; событие будит его при изменении смены."""
     while True:
+        _auto_close_wakeup.clear()
+        rows = []
+        now_utc = datetime.now(timezone.utc)
+        wait_seconds = 900.0
         try:
-            await process_shift_end_reminders_once()
-            now_utc = datetime.now(timezone.utc)
             async with db_connect() as db:
                 db.row_factory = aiosqlite.Row
                 rows = await (await db.execute(
                     "SELECT * FROM shifts WHERE is_active = 1 AND auto_close_at IS NOT NULL"
                 )).fetchall()
+            await process_shift_end_reminders_once(rows=rows, now_utc=now_utc)
             for row in rows:
                 deadline = _parse_datetime(row["auto_close_at"])
                 if deadline and now_utc >= deadline.astimezone(timezone.utc):
                     await _auto_close_shift(dict(row))
+            wait_seconds = _auto_close_wait_seconds(rows, now_utc)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error(f"Авто-закрытие смен не сработало: {exc}")
-        await asyncio.sleep(30)
+            wait_seconds = 30.0
+        await _wait_worker(_auto_close_wakeup, wait_seconds)
 
 
 async def scheduled_report_status_worker():
     """Снимает пометку «ожидает начала» без долгих ненадёжных таймеров."""
     while True:
+        _scheduled_report_wakeup.clear()
+        wait_seconds = 900.0
         try:
             async with db_connect() as db:
                 db.row_factory = aiosqlite.Row
@@ -6621,18 +6731,28 @@ async def scheduled_report_status_worker():
                 )).fetchall()
             active_ids = {row["id"] for row in rows}
             _started_report_updates.intersection_update(active_ids)
+            now_by_city = {}
             for row in rows:
                 city = get_city(row["city_id"])
                 start_at = _parse_datetime(row["start_at"])
-                if (city and start_at and row["id"] not in _started_report_updates
-                        and datetime.now(_city_tz(city)) >= start_at):
+                if not city or not start_at or row["id"] in _started_report_updates:
+                    continue
+                now = now_by_city.setdefault(city["id"], datetime.now(_city_tz(city)))
+                if now >= start_at:
                     if await safe_flush_report_update(row["id"]):
                         _started_report_updates.add(row["id"])
+                    else:
+                        wait_seconds = min(wait_seconds, 15.0)
+                else:
+                    wait_seconds = min(
+                        wait_seconds, max(1.0, (start_at - now).total_seconds())
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error(f"Не удалось обновить статус отложенной смены: {exc}")
-        await asyncio.sleep(15)
+            wait_seconds = min(wait_seconds, 60.0)
+        await _wait_worker(_scheduled_report_wakeup, wait_seconds)
 
 
 # ============================================================================
@@ -7001,6 +7121,7 @@ async def approve_manual_report(report_id, start_time, end_time, expected_update
             (shift_id, pay_type, pay_amount, datetime.now(_city_tz(city)).isoformat(), report_id)
         )
         await db.commit()
+    _wake_closed_shift()
     try:
         await freeze_earned(shift_id)
     except Exception as exc:
@@ -10618,15 +10739,34 @@ async def deliver_crm_notifications_once(limit=50):
     return delivered
 
 
+async def _next_crm_notification_wait_seconds(now_utc=None):
+    """Ждёт ближайший retry; при пустом outbox проверяется лишь раз в 15 минут."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    async with db_connect() as db:
+        row = await (await db.execute(
+            "SELECT MIN(COALESCE(next_attempt_at,created_at)) "
+            "FROM crm_notification_outbox WHERE status IN ('pending','retry')"
+        )).fetchone()
+    next_at = _parse_datetime(row[0]) if row and row[0] else None
+    if not next_at:
+        return 900.0
+    return max(1.0, min(900.0, (next_at.astimezone(timezone.utc) - now_utc).total_seconds()))
+
+
 async def crm_notification_worker():
     while True:
+        _notification_wakeup.clear()
+        wait_seconds = 60.0
         try:
-            await deliver_crm_notifications_once()
+            delivered = await deliver_crm_notifications_once()
+            wait_seconds = (
+                1.0 if delivered >= 50 else await _next_crm_notification_wait_seconds()
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Ошибка фоновой доставки CRM-уведомлений")
-        await asyncio.sleep(15)
+        await _wait_worker(_notification_wakeup, wait_seconds)
 
 
 async def cleanup_task_messages_once(limit=200):
@@ -10736,13 +10876,18 @@ async def sync_closed_shift_tasks_once(limit=100):
 
 async def crm_shift_task_sync_worker():
     while True:
+        _shift_task_sync_wakeup.clear()
+        wait_seconds = 3600.0
         try:
-            await sync_closed_shift_tasks_once()
+            processed = await sync_closed_shift_tasks_once()
+            if processed >= 100:
+                wait_seconds = 1.0
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Ошибка автозавершения CRM-заданий по сменам")
-        await asyncio.sleep(30)
+            wait_seconds = 60.0
+        await _wait_worker(_shift_task_sync_wakeup, wait_seconds)
 
 
 def _planned_shift_times(plan, city):
@@ -10769,6 +10914,7 @@ async def process_planned_shifts_once():
             "SELECT p.*,u.full_name,u.role FROM crm_planned_shifts p "
             "JOIN users u ON u.user_id=p.user_id AND u.city_id=p.city_id "
             "WHERE p.status='scheduled' AND p.auto_enabled=1 AND p.user_id IS NOT NULL "
+            "AND p.auto_closed_at IS NULL "
             "AND p.work_date>=date('now','-1 day') AND p.work_date<=date('now','+2 day') "
             "ORDER BY p.work_date,p.start_time,p.id"
         )).fetchall()
@@ -10798,7 +10944,7 @@ async def process_planned_shifts_once():
                         "UPDATE crm_planned_shifts SET reminder_sent_at=? WHERE id=?",
                         (now.isoformat(), plan["id"]),
                     )
-                await db.commit()
+                await _commit_and_wake(db, _notification_wakeup)
         actual_shift_id = plan.get("actual_shift_id")
         if actual_shift_id:
             shift = await get_shift_by_id(actual_shift_id)
@@ -10825,7 +10971,7 @@ async def process_planned_shifts_once():
                         db, plan["city_id"], plan["user_id"], "shift_auto_missed", plan["id"],
                         {"work_date": plan["work_date"], "start_time": plan["start_time"]},
                     )
-                await db.commit()
+                await _commit_and_wake(db, _notification_wakeup)
             continue
         active = await get_active_shift(plan["user_id"])
         if active and active.get("city_id") != plan["city_id"]:
@@ -10834,7 +10980,7 @@ async def process_planned_shifts_once():
                     db, plan["city_id"], plan["user_id"], "shift_auto_conflict", plan["id"],
                     {"work_date": plan["work_date"], "start_time": plan["start_time"]},
                 )
-                await db.commit()
+                await _commit_and_wake(db, _notification_wakeup)
             continue
         try:
             shift_id = active["id"] if active else await start_shift(
@@ -10878,21 +11024,61 @@ async def process_planned_shifts_once():
                     {"shift_id": shift_id, "start_time": fresh_plan["start_time"],
                      "end_time": fresh_plan["end_time"], "district": fresh_district},
                 )
-            await db.commit()
+            await _commit_and_wake(
+                db, _notification_wakeup, _auto_close_wakeup
+            )
         if not active:
             await safe_flush_report_update(shift_id)
             logger.info("CRM автоматически открыла смену %s по плану %s", shift_id, plan["id"])
 
 
+async def _next_planned_shift_wait_seconds(now_utc=None):
+    """Возвращает время до ближайшего reminder/start/end плановой смены."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT city_id,work_date,start_time,end_time,reminder_sent_at,"
+            "actual_shift_id,auto_closed_at FROM crm_planned_shifts "
+            "WHERE status='scheduled' AND auto_enabled=1 AND user_id IS NOT NULL "
+            "AND auto_closed_at IS NULL "
+            "AND work_date>=date('now','-1 day') ORDER BY work_date,start_time,id LIMIT 500"
+        )).fetchall()
+    deadlines = []
+    for raw in rows:
+        plan = dict(raw)
+        city = get_city(plan["city_id"])
+        if not city:
+            continue
+        start_at, end_at = _planned_shift_times(plan, city)
+        if not start_at or not end_at:
+            continue
+        start_utc = start_at.astimezone(timezone.utc)
+        end_utc = end_at.astimezone(timezone.utc)
+        if not plan.get("reminder_sent_at") and start_utc > now_utc:
+            deadlines.append(start_utc - timedelta(minutes=30))
+        if not plan.get("actual_shift_id") and start_utc > now_utc:
+            deadlines.append(start_utc)
+        if not plan.get("auto_closed_at") and end_utc > now_utc:
+            deadlines.append(end_utc)
+    if not deadlines:
+        return 3600.0
+    seconds = min((value - now_utc).total_seconds() for value in deadlines)
+    return max(1.0, min(3600.0, seconds))
+
+
 async def crm_planned_shift_worker():
     while True:
+        _planned_shift_wakeup.clear()
+        wait_seconds = 60.0
         try:
             await process_planned_shifts_once()
+            wait_seconds = await _next_planned_shift_wait_seconds()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Ошибка автоматизации плановых смен")
-        await asyncio.sleep(15)
+        await _wait_worker(_planned_shift_wakeup, wait_seconds)
 
 
 async def api_crm_task_upload(request):
@@ -11392,19 +11578,37 @@ async def health_watchdog():
             logger.warning("Сторож состояния: %s", exc)
 
 
+def start_background_workers():
+    """Запускает все долгоживущие workers и возвращает их для штатной остановки."""
+    workers = (
+        ("kpi", kpi_background_worker),
+        ("scheduled-report", scheduled_report_status_worker),
+        ("auto-close", auto_close_worker),
+        ("health", health_watchdog),
+        ("planned-shift", crm_planned_shift_worker),
+        ("notification", crm_notification_worker),
+        ("shift-task-sync", crm_shift_task_sync_worker),
+        ("todo-cleanup", todo_cleanup_worker),
+    )
+    return [
+        asyncio.create_task(worker(), name=f"bibibike:{name}")
+        for name, worker in workers
+    ]
+
+
+async def stop_background_workers(tasks):
+    """Отменяет и дожидается каждого worker, не оставляя фоновых задач."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def main():
+    _reset_worker_events()
     await init_db()
     await cleanup_crm_uploads()
     await rebuild_monthly_aggregates()
     await start_api_server()   # === НОВОЕ: поднимаем API рядом с ботом ===
-    kpi_task = asyncio.create_task(kpi_background_worker())
-    scheduled_report_task = asyncio.create_task(scheduled_report_status_worker())
-    auto_close_task = asyncio.create_task(auto_close_worker())
-    asyncio.create_task(health_watchdog())
-    crm_planned_shift_task = asyncio.create_task(crm_planned_shift_worker())
-    crm_notification_task = asyncio.create_task(crm_notification_worker())
-    crm_shift_sync_task = asyncio.create_task(crm_shift_task_sync_worker())
-    todo_cleanup_task = asyncio.create_task(todo_cleanup_worker())
     dp = Dispatcher()
     dp.include_router(private_router)
     dp.include_router(cmd_router)
@@ -11451,22 +11655,11 @@ async def main():
 
     logger.info("=" * 50)
 
+    background_tasks = start_background_workers()
     try:
         await dp.start_polling(bot)
     finally:
-        kpi_task.cancel()
-        scheduled_report_task.cancel()
-        auto_close_task.cancel()
-        crm_planned_shift_task.cancel()
-        crm_notification_task.cancel()
-        crm_shift_sync_task.cancel()
-        todo_cleanup_task.cancel()
-        try:
-            await asyncio.gather(kpi_task, scheduled_report_task, auto_close_task,
-                                 crm_planned_shift_task, crm_notification_task,
-                                 crm_shift_sync_task, todo_cleanup_task)
-        except asyncio.CancelledError:
-            pass
+        await stop_background_workers(background_tasks)
 
 if __name__ == "__main__":
     try:

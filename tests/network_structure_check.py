@@ -4,6 +4,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +60,11 @@ async def main():
         owner = await bot.api_crm_network_structure(Request(900001))
         owner_data = json.loads(owner.text)
         assert owner_data["can_manage"] is True
+        missing_user = await bot.api_crm_admin_upsert(Request(900001, {
+            "username": "unknown_person", "role": "city_viewer",
+            "city_ids": [owner_data["cities"][0]["id"]],
+        }))
+        assert missing_user.status == 404
         cities = owner_data["cities"]
         krasnodar = next(city for city in cities if city["city_key"] == "krasnodar")
         krasnodar["name"] = "Краснодар CRM"
@@ -69,11 +76,35 @@ async def main():
         assert bot.TASK_CHAT_ROUTES[(-1003431950710, 1)]["authors"] == (
             "Aleksandroll", "KuBerCaMypAu"
         )
+        async with bot.db_connect() as db:
+            await db.execute(
+                "INSERT INTO users (user_id,full_name,role,city_id,telegram_username) VALUES (?,?,?,?,?)",
+                (900003, "Новый старший", "Скаут", krasnodar["id"], "new_manager"),
+            )
+            await db.commit()
         admin_saved = await bot.api_crm_admin_upsert(Request(900001, {
-            "user_id": 900003, "role": "city_viewer", "city_ids": [krasnodar["id"]],
+            "username": "@new_manager", "role": "city_manager", "city_ids": [krasnodar["id"]],
             "is_active": True,
         }))
         assert admin_saved.status == 200, admin_saved.text
+        admin_payload = json.loads(admin_saved.text)
+        assert admin_payload["admin"]["user_id"] == 900003
+        assert admin_payload["admin"]["telegram_username"] == "new_manager"
+        assert admin_payload["notification_queued"] is True
+        async with bot.db_connect() as db:
+            notice = await (await db.execute(
+                "SELECT kind,payload_json FROM crm_notification_outbox WHERE user_id=?",
+                (900003,),
+            )).fetchone()
+        assert notice[0] == "admin_access_updated"
+        notice_text = bot._crm_notification_text(notice[0], json.loads(notice[1]))
+        assert "СТАРШ" in notice_text.upper() and "Краснодар CRM" in notice_text
+        with patch.object(
+            bot.bot, "send_message", AsyncMock(return_value=SimpleNamespace(message_id=501))
+        ) as send_message:
+            assert await bot.deliver_crm_notifications_once() == 1
+            assert send_message.await_args.args[0] == 900003
+            assert "BIBIBIKE CRM" in send_message.await_args.args[1]
 
         # A restart must keep CRM-owned configuration instead of restoring code/env.
         await bot.init_db()

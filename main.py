@@ -247,7 +247,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-22 · задачи из чата и CRM-панель структуры сети"
+BUILD_VERSION = "2026-08-22 · CRM-доступ по username с уведомлением в ЛС"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -10743,6 +10743,30 @@ def _crm_notification_text(kind, payload):
         if payload.get("reason"):
             result += f"\n\n💬 {payload.get('reason')}"
         return result
+    if kind == "admin_access_updated":
+        if not payload.get("is_active", True):
+            return (
+                "🔒 ДОСТУП К CRM ОТКЛЮЧЁН\n\n"
+                "Ваш административный доступ к BibiBike CRM был отключён владельцем сети."
+            )
+        role_labels = {
+            "city_viewer": "Наблюдатель — только просмотр",
+            "city_manager": "Старший / администратор города",
+            "network_admin": "Администратор сети",
+        }
+        lines = [
+            "🔑 ВАМ ОТКРЫТ ДОСТУП К BIBIBIKE CRM", "",
+            f"👤 Роль: {role_labels.get(payload.get('role'), payload.get('role') or 'Администратор')}",
+        ]
+        cities = [str(value) for value in payload.get("cities") or [] if value]
+        if cities:
+            lines.append(f"🏙 Города: {', '.join(cities)}")
+        elif payload.get("role") == "network_admin":
+            lines.append("🏙 Доступ: все города сети")
+        if payload.get("role_scope"):
+            lines.append(f"🧭 Сотрудники роли: {payload['role_scope']}")
+        lines.extend(["", "Откройте приложение и перейдите в CRM."])
+        return "\n".join(lines)
     if kind == "planned_shift":
         is_extra = payload.get("work_kind") == "extra"
         lines = ["💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА", "",
@@ -11602,6 +11626,7 @@ async def api_crm_network_structure(request):
     admins = []
     for row in admin_rows:
         item = dict(row); item["city_ids"] = permissions.get(item["user_id"], [])
+        item["is_owner"] = item["user_id"] == CRM_OWNER_USER_ID
         admins.append(item)
     return web.json_response({
         "ok": True,
@@ -11775,7 +11800,8 @@ async def api_crm_admins(request):
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            "SELECT * FROM admin_accounts ORDER BY role,user_id"
+            "SELECT a.*,u.full_name,u.telegram_username FROM admin_accounts a "
+            "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.role,a.user_id"
         )).fetchall()
         items = []
         for row in rows:
@@ -11784,6 +11810,7 @@ async def api_crm_admins(request):
                 (row["user_id"],),
             )).fetchall()
             item = dict(row); item["city_ids"] = [value[0] for value in permissions]
+            item["is_owner"] = item["user_id"] == CRM_OWNER_USER_ID
             items.append(item)
     return web.json_response({"items": items})
 
@@ -11798,8 +11825,41 @@ async def api_crm_admin_upsert(request):
         )
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
-    try: user_id = int(body.get("user_id")); city_ids = [int(value) for value in body.get("city_ids", [])]
-    except (TypeError, ValueError): return web.json_response({"error": "fields"}, status=400)
+    username = str(body.get("username") or "").strip().lstrip("@")
+    try:
+        city_ids = [int(value) for value in body.get("city_ids", [])]
+    except (TypeError, ValueError):
+        return web.json_response({"error": "fields", "message": "Проверьте выбранные города."}, status=400)
+    if username:
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            return web.json_response(
+                {"error": "username", "message": "Укажите корректный Telegram username."}, status=400
+            )
+        async with db_connect() as lookup_db:
+            lookup_db.row_factory = aiosqlite.Row
+            matches = await (await lookup_db.execute(
+                "SELECT user_id,full_name,telegram_username,city_id FROM users "
+                "WHERE LOWER(telegram_username)=LOWER(?) ORDER BY user_id", (username,),
+            )).fetchall()
+        if not matches:
+            return web.json_response({
+                "error": "username_not_found",
+                "message": f"@{username} не найден. Попросите человека открыть Mini App или написать боту.",
+            }, status=404)
+        if len(matches) > 1:
+            return web.json_response({
+                "error": "username_conflict",
+                "message": f"В базе несколько профилей @{username}. Сначала уточните профиль сотрудника.",
+            }, status=409)
+        user_id = int(matches[0]["user_id"])
+    else:
+        # Совместимость старых API-клиентов; новый интерфейс использует username.
+        try:
+            user_id = int(body.get("user_id"))
+        except (TypeError, ValueError):
+            return web.json_response({
+                "error": "username", "message": "Укажите Telegram username человека."
+            }, status=400)
     role = body.get("role"); role_scope = str(body.get("role_scope") or "").strip() or None
     is_active = 1 if body.get("is_active", True) else 0
     if role not in {"city_viewer", "city_manager", "network_admin"} or user_id <= 0:
@@ -11819,8 +11879,17 @@ async def api_crm_admin_upsert(request):
     now_iso = datetime.now(timezone.utc).isoformat()
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
+        target_user = await (await db.execute(
+            "SELECT user_id,full_name,telegram_username,city_id FROM users WHERE user_id=?",
+            (user_id,),
+        )).fetchone()
         before_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
         before = dict(before_row) if before_row else None
+        before_permissions = await (await db.execute(
+            "SELECT city_id FROM admin_city_permissions WHERE user_id=? ORDER BY city_id", (user_id,)
+        )).fetchall()
+        if before is not None:
+            before["city_ids"] = [item[0] for item in before_permissions]
         await db.execute(
             "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,created_at,updated_at) "
             "VALUES (?,?,?,?,1,?,?) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,"
@@ -11835,9 +11904,36 @@ async def api_crm_admin_upsert(request):
         )
         after_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
         after = dict(after_row); after["city_ids"] = sorted(set(city_ids))
+        after["full_name"] = target_user["full_name"] if target_user else None
+        after["telegram_username"] = target_user["telegram_username"] if target_user else username or None
+        after["is_owner"] = user_id == CRM_OWNER_USER_ID
+        before_signature = None if before is None else (
+            before.get("role"), before.get("role_scope"), int(before.get("is_active", 1)),
+            tuple(before.get("city_ids") or []),
+        )
+        after_signature = (role, role_scope, is_active, tuple(after["city_ids"]))
+        notification_queued = bool(target_user and before_signature != after_signature)
+        if notification_queued:
+            city_names = [get_city(city_id)["name"] for city_id in after["city_ids"] if get_city(city_id)]
+            notification_city_id = (
+                after["city_ids"][0] if after["city_ids"]
+                else target_user["city_id"] if get_city(target_user["city_id"])
+                else get_default_city()["id"]
+            )
+            await _enqueue_crm_notification(
+                db, notification_city_id, user_id, "admin_access_updated",
+                int(after.get("session_version") or 1),
+                {"role": role, "role_scope": role_scope, "is_active": bool(is_active),
+                 "cities": city_names, "assigned_by": context["telegram_user"]["id"]},
+            )
         await _crm_audit(db, context, "admin.upsert", "admin_account", user_id, None,
-                         before=before, after=after); await db.commit()
-    return web.json_response({"ok": True, "admin": after})
+                         before=before, after=after)
+        if notification_queued:
+            await _commit_and_wake(db, _notification_wakeup)
+        else:
+            await db.commit()
+    return web.json_response({"ok": True, "admin": after,
+                              "notification_queued": notification_queued})
 
 
 async def api_shift_comment(request):

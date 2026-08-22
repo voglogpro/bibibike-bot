@@ -152,13 +152,16 @@ KHIMKI_CHARGERS_GROUP_ID      = -1004390770669
 KHIMKI_CHARGERS_TOPIC_BATTERY = 4
 KHIMKI_CHARGERS_TOPIC_REPORTS = 3
 
-# Выделенные Telegram-темы, где сообщение с ведущим «/» и @тегами
-# превращается в общую To-Do задачу. Роль ограничивает получателей темы;
-# None означает, что можно назначать скаутам, водителям и чарджерам города.
+# Выделенные Telegram-темы, где сообщение старшего/админа с @тегами
+# превращается в общую To-Do задачу. Старый формат «/ @username» тоже
+# поддерживается. Роль ограничивает получателей темы; None означает, что
+# разрешённую автору роль определяют его CRM-права.
 TASK_CHAT_ROUTES = {
-    (GROUP_ID, 1): {"city_key": DEFAULT_CITY_KEY, "role": None},
-    (KHIMKI_SCOUTS_GROUP_ID, 101): {"city_key": "khimki", "role": "Скаут"},
-    (KHIMKI_DRIVERS_GROUP_ID, 2212): {"city_key": "khimki", "role": "Водитель"},
+    (GROUP_ID, 1): {
+        "city_key": DEFAULT_CITY_KEY,
+        "role": None,
+        "authors": ("KuBerCaMypAu", "Aleksandroll"),
+    },
 }
 
 # Дополнительные рабочие темы, которые бот слушает сверх основных.
@@ -243,7 +246,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-14 · задачи из чатов, история и напоминание о конце смены"
+BUILD_VERSION = "2026-08-22 · задачи старшего из Telegram в ЛС и Mini App"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4712,10 +4715,42 @@ def _task_chat_route(message):
 
 def _task_message_starts_task(message):
     text = str(message.text or message.caption or "").strip()
-    if not text.startswith("/"):
-        return False
     usernames, user_ids = _task_text_mentions(message, text)
-    return bool(usernames or user_ids)
+    if not (usernames or user_ids):
+        return False
+    explicit = bool(
+        text.startswith("/")
+        or re.match(r"^(?:задача|задание)\s*[:—-]", text, re.IGNORECASE)
+    )
+    if explicit:
+        return True
+    # Естественный формат без команды безопасно включается только вместе с
+    # фотографией. Обычный вопрос «@username, ты сегодня работаешь?» не задача.
+    if not (message.photo or message.media_group_id):
+        return False
+    body = re.sub(r"@([A-Za-z0-9_]{5,32})", "", text).strip(" —-,\t")
+    if not body or body.rstrip().endswith("?"):
+        return False
+    return len(re.findall(r"[\wА-Яа-яЁё]+", body)) >= 2
+
+
+def _task_strip_explicit_marker(text):
+    value = str(text or "").strip()
+    if value.startswith("/"):
+        return value[1:].lstrip()
+    return re.sub(
+        r"^(?:задача|задание)\s*[:—-]\s*", "", value,
+        count=1, flags=re.IGNORECASE,
+    )
+
+
+def _task_requires_photo(text):
+    """Распознаёт привычную просьбу старшего приложить фото результата."""
+    return bool(re.search(
+        r"\bфото\s*отч[её]т\w*\b|\bсделать\s+фото\b|"
+        r"\bфото\s+(?:места|результата|после|до)\b",
+        str(text or ""), re.IGNORECASE,
+    ))
 
 
 class TaskChatFilter(BaseFilter):
@@ -4728,6 +4763,13 @@ class TaskChatFilter(BaseFilter):
         # сообщения оставляем существующему рабочему парсеру.
         if message.media_group_id or _task_message_starts_task(message):
             return {"task_route": route}
+        # Фото руководителя, которое не является задачей, тихо поглощаем в
+        # выделенной теме: бот не должен отвечать в рабочем чате без @username.
+        if message.photo:
+            city = await _task_chat_city(route)
+            sender = getattr(message, "from_user", None)
+            if sender and city and await _task_chat_authorized(sender.id, city):
+                return {"task_route": route}
         return False
 
 
@@ -4736,6 +4778,15 @@ async def _task_chat_city(route):
         if _city_key(city) == route["city_key"]:
             return city
     return None
+
+
+async def _task_chat_authorized(user_id, city):
+    account = await _admin_account(user_id)
+    if not account or account.get("role") not in CRM_ADMIN_WRITE_ROLES:
+        return False
+    if account["role"] == "network_admin":
+        return True
+    return int(city["id"]) in {int(value) for value in account.get("city_ids") or []}
 
 
 def _task_text_mentions(message, text):
@@ -4755,13 +4806,33 @@ async def _create_task_from_chat(messages, route, raw_text):
     if not sender or not city:
         return
     creator = await get_user(sender.id)
-    if not creator or int(creator.get("city_id") or 0) != int(city["id"]):
-        await source.reply("Не удалось создать задачу: сначала откройте Mini App и выберите свой город.")
+    if not creator:
+        await source.reply("Не удалось создать задачу: сначала откройте Mini App.")
         return
-    text = str(raw_text or "").strip()
-    if not text.startswith("/"):
+    account = await _admin_account(sender.id)
+    if not account or account.get("role") not in CRM_ADMIN_WRITE_ROLES:
+        await source.reply("Создавать задачи из этого чата может только старший скаут или администратор.")
         return
-    text = text[1:].lstrip()
+    allowed_city_ids = (sorted(CITIES_BY_ID) if account["role"] == "network_admin"
+                        else account.get("city_ids") or [])
+    if int(city["id"]) not in {int(value) for value in allowed_city_ids}:
+        await source.reply("У вас нет доступа ставить задачи сотрудникам этого города.")
+        return
+    role = route.get("role")
+    role_scope = str(account.get("role_scope") or "").strip() or None
+    if role and role_scope and role.casefold() != role_scope.casefold():
+        await source.reply(f"Ваш доступ ограничен ролью «{role_scope}».")
+        return
+    allowed_authors = {
+        str(value).lstrip("@").casefold() for value in route.get("authors") or [] if value
+    }
+    sender_username = str(getattr(sender, "username", None) or "").casefold()
+    if allowed_authors and sender_username not in allowed_authors:
+        await source.reply(
+            "В этой теме бот принимает задачи только от назначенных старших скаутов."
+        )
+        return
+    text = _task_strip_explicit_marker(raw_text)
     usernames = set()
     mentioned_ids = set()
     for item in messages:
@@ -4793,12 +4864,14 @@ async def _create_task_from_chat(messages, route, raw_text):
         return
     by_id = {int(row["user_id"]): dict(row) for row in targets
              if _employee_todo_name_is_valid(row["full_name"])}
-    role = route.get("role")
-    if role:
+    target_role = role or role_scope
+    if target_role:
         role_targets = {uid: row for uid, row in by_id.items()
-                        if str(row.get("role") or "").casefold() == role.casefold()}
+                        if str(row.get("role") or "").casefold() == target_role.casefold()}
         if len(role_targets) != len(by_id):
-            await source.reply(f"В этой теме можно ставить задачи только сотрудникам роли «{role}».")
+            await source.reply(
+                f"В этой теме можно ставить задачи только сотрудникам роли «{target_role}»."
+            )
             return
         by_id = role_targets
     if not by_id:
@@ -4816,11 +4889,13 @@ async def _create_task_from_chat(messages, route, raw_text):
     title = clean.splitlines()[0][:200]
     description = clean[:10000]
     priority = "urgent" if re.search(r"\b(?:срочно|приоритет)\b", clean, re.I) else "normal"
+    requires_photo = _task_requires_photo(clean)
     work_date = _message_time_in_city(source, city).date().isoformat()
     album_id = str(getattr(source, "media_group_id", "") or "")
     request_id = f"task-chat:{source.chat.id}:{album_id or source.message_id}"
     request_shape = {
         "title": title, "description": description, "priority": priority,
+        "requires_photo": requires_photo,
         "due_date": work_date, "assignee_user_ids": sorted(by_id),
         "photo_message_ids": [int(item.message_id) for item in messages if item.photo],
     }
@@ -4863,9 +4938,9 @@ async def _create_task_from_chat(messages, route, raw_text):
                 "INSERT INTO crm_tasks (city_id,work_date,title,description,priority,status,created_by,"
                 "created_at,updated_by,updated_at,requires_photo,date_from,date_to,district,"
                 "completion_mode,client_request_id,client_request_hash,created_via) "
-                "VALUES (?,?,?,?,?,'draft',?,?,?,?,0,?,?,?,'manual',?,?,?)",
+                "VALUES (?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,'manual',?,?,?)",
                 (city["id"], work_date, title, description, priority, sender.id,
-                 now_iso, sender.id, now_iso, work_date, work_date, "",
+                 now_iso, sender.id, now_iso, int(requires_photo), work_date, work_date, "",
                  request_id, request_hash, "telegram_chat"),
             )
             task_id = cur.lastrowid
@@ -4917,9 +4992,14 @@ async def _flush_task_chat_album(key, generation):
     if entry["text"]:
         await _create_task_from_chat(entry["messages"], entry["route"], entry["text"])
         return
-    # Альбом без явного `/ @сотрудник` — не задача. Передаём каждую его
-    # часть прежнему рабочему парсеру, чтобы OCR и учёт действий не изменились.
     messages = sorted(entry["messages"], key=lambda item: item.message_id)
+    source = messages[0] if messages else None
+    city = await _task_chat_city(entry["route"])
+    sender = getattr(source, "from_user", None) if source else None
+    if source and city and sender and await _task_chat_authorized(sender.id, city):
+        return
+    # Альбом обычного сотрудника без @упоминания — не задача. Передаём каждую его
+    # часть прежнему рабочему парсеру, чтобы OCR и учёт действий не изменились.
     city = get_city_by_group(messages[0].chat.id) if messages else None
     if not city:
         return

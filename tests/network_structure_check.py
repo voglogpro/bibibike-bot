@@ -23,7 +23,7 @@ class Request:
 
 async def main():
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["DB_PATH"] = str(Path(tmp) / "network.sqlite3")
+        os.environ["DATA_DIR"] = tmp
         os.environ["BOT_TOKEN"] = "123:test"
         os.environ["ADMIN_PASSWORD"] = "test-password"
         os.environ["CRM_OWNER_USER_ID"] = "900001"

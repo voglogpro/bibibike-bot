@@ -156,13 +156,14 @@ KHIMKI_CHARGERS_TOPIC_REPORTS = 3
 # превращается в общую To-Do задачу. Старый формат «/ @username» тоже
 # поддерживается. Роль ограничивает получателей темы; None означает, что
 # разрешённую автору роль определяют его CRM-права.
-TASK_CHAT_ROUTES = {
+DEFAULT_TASK_CHAT_ROUTES = {
     (GROUP_ID, 1): {
         "city_key": DEFAULT_CITY_KEY,
         "role": None,
         "authors": ("KuBerCaMypAu", "Aleksandroll"),
     },
 }
+TASK_CHAT_ROUTES = dict(DEFAULT_TASK_CHAT_ROUTES)
 
 # Дополнительные рабочие темы, которые бот слушает сверх основных.
 # Тип парсера каждой темы выбирается отдельными таблицами ниже.
@@ -246,7 +247,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-22 · задачи старшего из Telegram в ЛС и Mini App"
+BUILD_VERSION = "2026-08-22 · задачи из чата и CRM-панель структуры сети"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -274,6 +275,19 @@ NETWORK_ADMIN_USER_IDS = {
     for value in os.getenv("NETWORK_ADMIN_USER_IDS", "").split(",")
     if value.strip().isdigit()
 }
+_crm_owner_raw = os.getenv("CRM_OWNER_USER_ID", "").strip()
+CRM_OWNER_USER_ID = (
+    int(_crm_owner_raw) if _crm_owner_raw.isdigit()
+    else next(iter(NETWORK_ADMIN_USER_IDS)) if len(NETWORK_ADMIN_USER_IDS) == 1
+    else 0
+)
+
+
+def _crm_can_manage_network(user_id):
+    try:
+        return bool(CRM_OWNER_USER_ID and int(user_id) == CRM_OWNER_USER_ID)
+    except (TypeError, ValueError):
+        return False
 CRM_MAX_RANGE_DAYS = max(1, int(os.getenv("CRM_MAX_RANGE_DAYS", "366")))
 CRM_UPLOAD_MAX_FILES = max(1, min(5, int(os.getenv("CRM_UPLOAD_MAX_FILES", "5"))))
 CRM_UPLOAD_MAX_BYTES = max(
@@ -610,6 +624,33 @@ async def refresh_cities_cache(db=None):
             await db.close()
 
 
+async def refresh_task_chat_routes(db=None):
+    """Refresh task ingestion routes after startup or an owner CRM change."""
+    own_connection = db is None
+    if own_connection:
+        db = await db_connect()
+    try:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT r.*,c.city_key FROM task_chat_routes r JOIN cities c ON c.id=r.city_id "
+            "WHERE r.is_active=1 AND c.is_active=1 ORDER BY r.sort_order,r.id"
+        )).fetchall()
+        TASK_CHAT_ROUTES.clear()
+        for row in rows:
+            authors = await (await db.execute(
+                "SELECT username FROM task_chat_route_authors WHERE route_id=? ORDER BY username",
+                (row["id"],),
+            )).fetchall()
+            TASK_CHAT_ROUTES[(row["chat_id"], row["topic_id"])] = {
+                "city_key": row["city_key"],
+                "role": row["role"],
+                "authors": tuple(item[0] for item in authors),
+            }
+    finally:
+        if own_connection:
+            await db.close()
+
+
 def _norm_role(role):
     return (role or "").strip().lower()
 
@@ -728,7 +769,8 @@ async def init_db():
                 topic_reports INTEGER NOT NULL,
                 timezone_offset INTEGER NOT NULL DEFAULT 3,
                 is_active INTEGER NOT NULL DEFAULT 1,
-                managed_by_config INTEGER NOT NULL DEFAULT 0
+                managed_by_config INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0
             )
         """)
         # Ролевые группы города: у одной роли — своя телеграм-группа со своими
@@ -1099,6 +1141,37 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS network_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS task_chat_routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                topic_id INTEGER NOT NULL DEFAULT 0,
+                role TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(chat_id, topic_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS task_chat_route_authors (
+                route_id INTEGER NOT NULL,
+                username TEXT COLLATE NOCASE NOT NULL,
+                PRIMARY KEY(route_id, username),
+                FOREIGN KEY(route_id) REFERENCES task_chat_routes(id) ON DELETE CASCADE
+            )
+        """)
+        try:
+            await db.execute("ALTER TABLE cities ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        except aiosqlite.OperationalError:
+            pass
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
@@ -1276,14 +1349,20 @@ async def init_db():
         )
         await db.commit()
 
-        # Города, которыми управляет CITIES_CONFIG_JSON, деактивируются при
+        network_owner_row = await (await db.execute(
+            "SELECT value FROM network_settings WHERE key='cities_source'"
+        )).fetchone()
+        configured_cities = [] if network_owner_row and network_owner_row[0] == "crm" else _configured_cities()
+        # До первого сохранения в CRM города синхронизируются с кодом/env. После
+        # него источником истины становится БД и перезапуск настройки не стирает.
         # удалении из конфига. Записи, добавленные админом напрямую в БД,
         # managed_by_config=0 и не затрагиваются.
-        await db.execute(
-            "UPDATE cities SET is_active = 0 WHERE managed_by_config = 1 "
-            "AND id NOT IN (SELECT DISTINCT city_id FROM shifts WHERE is_active = 1)"
-        )
-        for city in _configured_cities():
+        if configured_cities:
+            await db.execute(
+                "UPDATE cities SET is_active = 0 WHERE managed_by_config = 1 "
+                "AND id NOT IN (SELECT DISTINCT city_id FROM shifts WHERE is_active = 1)"
+            )
+        for city in configured_cities:
             moves_topic = city.get("topic_moves")
             moves_topic = int(moves_topic) if moves_topic is not None else None
             params = (city["key"], city["name"], int(city["group_id"]),
@@ -1317,7 +1396,7 @@ async def init_db():
                 )
         # Ролевые группы: пересобираем под текущий конфиг. Города без
         # role_groups (Краснодар и др.) не затрагиваются вообще.
-        for city in _configured_cities():
+        for city in configured_cities:
             role_groups = city.get("role_groups") or []
             row = await (await db.execute(
                 "SELECT id FROM cities WHERE city_key = ?", (city["key"],)
@@ -1345,6 +1424,27 @@ async def init_db():
                     logger.warning(f"Не удалось записать ролевую группу {rg.get('role')}: {exc}")
         await db.commit()
         await refresh_cities_cache(db)
+        route_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM task_chat_routes"
+        )).fetchone())[0]
+        if not route_count:
+            for (chat_id, topic_id), route in DEFAULT_TASK_CHAT_ROUTES.items():
+                city_row = await (await db.execute(
+                    "SELECT id FROM cities WHERE city_key=?", (route["city_key"],)
+                )).fetchone()
+                if not city_row:
+                    continue
+                cursor = await db.execute(
+                    "INSERT INTO task_chat_routes (city_id,chat_id,topic_id,role,is_active) "
+                    "VALUES (?,?,?,?,1)",
+                    (city_row[0], chat_id, topic_id, route.get("role")),
+                )
+                await db.executemany(
+                    "INSERT INTO task_chat_route_authors (route_id,username) VALUES (?,?)",
+                    [(cursor.lastrowid, username) for username in route.get("authors", ())],
+                )
+            await db.commit()
+        await refresh_task_chat_routes(db)
         default_city = get_default_city()
         if not default_city:
             raise RuntimeError("В таблице cities нет активного города")
@@ -1445,7 +1545,7 @@ async def init_db():
             "ON crm_tasks(created_by, client_request_id) WHERE client_request_id IS NOT NULL"
         )
         now_iso = datetime.now(timezone.utc).isoformat()
-        for admin_uid in NETWORK_ADMIN_USER_IDS:
+        for admin_uid in NETWORK_ADMIN_USER_IDS | ({CRM_OWNER_USER_ID} if CRM_OWNER_USER_ID else set()):
             await db.execute(
                 "INSERT INTO admin_accounts (user_id, role, is_active, session_version, "
                 "created_at, updated_at) VALUES (?, 'network_admin', 1, 1, ?, ?) "
@@ -4805,6 +4905,16 @@ async def _create_task_from_chat(messages, route, raw_text):
     city = await _task_chat_city(route)
     if not sender or not city:
         return
+    usernames = set()
+    mentioned_ids = set()
+    for item in messages:
+        item_text = str(item.text or item.caption or "")
+        item_usernames, item_ids = _task_text_mentions(item, item_text)
+        usernames.update(item_usernames); mentioned_ids.update(item_ids)
+    # В выделенной теме фото без адресата может быть обычным рабочим сообщением.
+    # Его молча пропускаем: никаких подсказок или ошибок в общий чат.
+    if not (usernames or mentioned_ids):
+        return
     creator = await get_user(sender.id)
     if not creator:
         await source.reply("Не удалось создать задачу: сначала откройте Mini App.")
@@ -4833,12 +4943,6 @@ async def _create_task_from_chat(messages, route, raw_text):
         )
         return
     text = _task_strip_explicit_marker(raw_text)
-    usernames = set()
-    mentioned_ids = set()
-    for item in messages:
-        item_text = str(item.text or item.caption or "")
-        item_usernames, item_ids = _task_text_mentions(item, item_text)
-        usernames.update(item_usernames); mentioned_ids.update(item_ids)
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         targets = []
@@ -7045,6 +7149,7 @@ async def api_admin_login(request):
         "expires_at": expires,
         "role": account["role"],
         "role_scope": account.get("role_scope"),
+        "can_manage_network": _crm_can_manage_network(uid),
         "calendar_presets": CRM_CALENDAR_PRESETS,
         "city": {"id": city["id"], "name": city["name"],
                  "districts": CITY_DISTRICTS.get(city["name"].casefold(), [])},
@@ -9592,6 +9697,7 @@ async def api_crm_context(request):
         "role": context["admin"]["role"],
         "role_scope": context["admin"].get("role_scope"),
         "can_write": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
+        "can_manage_network": _crm_can_manage_network(context["telegram_user"]["id"]),
         "calendar_presets": CRM_CALENDAR_PRESETS,
         "cities": [{
             "id": city_id,
@@ -11406,8 +11512,265 @@ async def cleanup_crm_uploads():
     if removed: logger.info("CRM uploads: удалено orphan/temp файлов: %s", removed)
 
 
+def _telegram_private_link(chat_id, topic_id=None):
+    value = str(abs(int(chat_id)))
+    if value.startswith("100"):
+        value = value[3:]
+    base = f"https://t.me/c/{value}"
+    return f"{base}/{int(topic_id)}" if topic_id is not None and int(topic_id) > 0 else base
+
+
+def _network_int(value, field, minimum=None, maximum=None):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Поле {field} должно быть числом.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"Поле {field} меньше допустимого значения.")
+    if maximum is not None and number > maximum:
+        raise ValueError(f"Поле {field} больше допустимого значения.")
+    return number
+
+
+def _network_chat_and_topic(item):
+    link = str(item.get("link") or "").strip()
+    chat_id = item.get("chat_id")
+    topic_id = item.get("topic_id", 0)
+    if link:
+        match = re.fullmatch(
+            r"(?:https?://)?(?:www\.)?t\.me/c/(\d+)(?:/(\d+))?/?(?:\?.*)?", link,
+            re.IGNORECASE,
+        )
+        if not match:
+            raise ValueError("Нужна приватная ссылка Telegram вида https://t.me/c/123456/1.")
+        chat_id = -int("100" + match.group(1))
+        if match.group(2):
+            topic_id = int(match.group(2))
+    chat_id = _network_int(chat_id, "chat_id")
+    topic_id = _network_int(topic_id, "topic_id", 0)
+    if chat_id >= 0:
+        raise ValueError("chat_id Telegram-группы должен быть отрицательным.")
+    return chat_id, topic_id
+
+
+async def api_crm_network_structure(request):
+    context, error = await _crm_admin(request)
+    if error is not None:
+        return error
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        city_rows = await (await db.execute(
+            "SELECT * FROM cities ORDER BY sort_order,name,id"
+        )).fetchall()
+        role_rows = await (await db.execute(
+            "SELECT * FROM city_role_groups ORDER BY city_id,role"
+        )).fetchall()
+        route_rows = await (await db.execute(
+            "SELECT * FROM task_chat_routes ORDER BY city_id,sort_order,id"
+        )).fetchall()
+        author_rows = await (await db.execute(
+            "SELECT route_id,username FROM task_chat_route_authors ORDER BY username"
+        )).fetchall()
+        admin_rows = await (await db.execute(
+            "SELECT a.*,u.full_name,u.telegram_username FROM admin_accounts a "
+            "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.role,a.user_id"
+        )).fetchall()
+        permission_rows = await (await db.execute(
+            "SELECT user_id,city_id FROM admin_city_permissions ORDER BY user_id,city_id"
+        )).fetchall()
+    roles_by_city = {}
+    for row in role_rows:
+        item = dict(row); item["link"] = _telegram_private_link(item["group_id"])
+        roles_by_city.setdefault(item["city_id"], []).append(item)
+    authors_by_route = {}
+    for row in author_rows:
+        authors_by_route.setdefault(row["route_id"], []).append(row["username"])
+    routes_by_city = {}
+    for row in route_rows:
+        item = dict(row); item["authors"] = authors_by_route.get(item["id"], [])
+        item["link"] = _telegram_private_link(item["chat_id"], item["topic_id"])
+        routes_by_city.setdefault(item["city_id"], []).append(item)
+    cities = []
+    for row in city_rows:
+        item = dict(row); item["link"] = _telegram_private_link(item["group_id"])
+        item["role_groups"] = roles_by_city.get(item["id"], [])
+        item["task_routes"] = routes_by_city.get(item["id"], [])
+        cities.append(item)
+    permissions = {}
+    for row in permission_rows:
+        permissions.setdefault(row["user_id"], []).append(row["city_id"])
+    admins = []
+    for row in admin_rows:
+        item = dict(row); item["city_ids"] = permissions.get(item["user_id"], [])
+        admins.append(item)
+    return web.json_response({
+        "ok": True,
+        "can_manage": _crm_can_manage_network(context["telegram_user"]["id"]),
+        "owner_configured": bool(CRM_OWNER_USER_ID),
+        "cities": cities,
+        "admins": admins,
+    })
+
+
+async def api_crm_network_structure_save(request):
+    context, error = await _crm_admin(request)
+    if error is not None:
+        return error
+    if not _crm_can_manage_network(context["telegram_user"]["id"]):
+        return web.json_response({
+            "error": "owner_only",
+            "message": "Структуру сети может менять только владелец CRM.",
+        }, status=403)
+    body = await _request_json_object(request)
+    if body is None or not isinstance(body.get("cities"), list) or not body["cities"]:
+        return web.json_response({"error": "cities", "message": "Добавьте хотя бы один город."}, status=400)
+    try:
+        normalized = []
+        keys = set(); groups = set(); route_keys = set()
+        for order, raw in enumerate(body["cities"]):
+            city_id = _network_int(raw["id"], "id", 1) if raw.get("id") else None
+            key = str(raw.get("city_key") or "").strip().lower()
+            name = str(raw.get("name") or "").strip()
+            if not re.fullmatch(r"[a-z0-9_-]{2,40}", key) or key in keys:
+                raise ValueError("Ключ города должен быть уникальным: латиница, цифры, _ или -.")
+            if not name:
+                raise ValueError("Название города не может быть пустым.")
+            keys.add(key)
+            group_id, _ = _network_chat_and_topic({"link": raw.get("link"), "chat_id": raw.get("group_id"), "topic_id": 0})
+            if group_id in groups:
+                raise ValueError("Одна Telegram-группа указана для двух городов или ролей.")
+            groups.add(group_id)
+            city = {
+                "id": city_id, "city_key": key, "name": name, "group_id": group_id,
+                "topic_tasks": _network_int(raw.get("topic_tasks", 0), "topic_tasks", -1),
+                "topic_npb": _network_int(raw.get("topic_npb", -1), "topic_npb", -1),
+                "topic_moves": None if raw.get("topic_moves") in (None, "") else _network_int(raw["topic_moves"], "topic_moves", -1),
+                "topic_reports": _network_int(raw.get("topic_reports", -1), "topic_reports", -1),
+                "timezone_offset": _network_int(raw.get("timezone_offset", 3), "timezone_offset", -12, 14),
+                "is_active": 1 if raw.get("is_active", True) else 0,
+                "sort_order": order, "role_groups": [], "task_routes": [],
+            }
+            for role_raw in raw.get("role_groups") or []:
+                role = str(role_raw.get("role") or "").strip()
+                role_chat, _ = _network_chat_and_topic({"link": role_raw.get("link"), "chat_id": role_raw.get("group_id"), "topic_id": 0})
+                if not role or (role_chat in groups and role_chat != group_id):
+                    raise ValueError("У каждой ролевой группы должны быть уникальные роль и ссылка.")
+                groups.add(role_chat)
+                city["role_groups"].append({
+                    "role": role, "group_id": role_chat,
+                    "topic_tasks": _network_int(role_raw.get("topic_tasks", 0), "topic_tasks", -1),
+                    "topic_npb": _network_int(role_raw.get("topic_npb", -1), "topic_npb", -1),
+                    "topic_moves": None if role_raw.get("topic_moves") in (None, "") else _network_int(role_raw["topic_moves"], "topic_moves", -1),
+                    "topic_reports": _network_int(role_raw.get("topic_reports", -1), "topic_reports", -1),
+                })
+            for route_raw in raw.get("task_routes") or []:
+                chat_id, topic_id = _network_chat_and_topic(route_raw)
+                if (chat_id, topic_id) in route_keys:
+                    raise ValueError("Один чат и тема задач указаны дважды.")
+                route_keys.add((chat_id, topic_id))
+                authors = []
+                for value in route_raw.get("authors") or []:
+                    username = str(value).strip().lstrip("@")
+                    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+                        raise ValueError(f"Некорректный username: {value}")
+                    if username.casefold() not in {item.casefold() for item in authors}:
+                        authors.append(username)
+                if route_raw.get("is_active", True) and not authors:
+                    raise ValueError("Для активного чата задач укажите хотя бы одного @username старшего.")
+                city["task_routes"].append({
+                    "chat_id": chat_id, "topic_id": topic_id,
+                    "role": str(route_raw.get("role") or "").strip() or None,
+                    "is_active": 1 if route_raw.get("is_active", True) else 0,
+                    "authors": authors,
+                })
+            normalized.append(city)
+    except (KeyError, TypeError, ValueError) as exc:
+        return web.json_response({"error": "validation", "message": str(exc)}, status=400)
+
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            existing = await (await db.execute("SELECT * FROM cities ORDER BY id")).fetchall()
+            existing_ids = {row["id"] for row in existing}
+            submitted_ids = {city["id"] for city in normalized if city["id"]}
+            if not submitted_ids.issubset(existing_ids):
+                raise ValueError("Один из городов уже удалён. Обновите экран.")
+            active_shift_rows = await (await db.execute(
+                "SELECT DISTINCT city_id FROM shifts WHERE is_active=1"
+            )).fetchall()
+            active_shift_cities = {row[0] for row in active_shift_rows}
+            if any(city["id"] in active_shift_cities and not city["is_active"] for city in normalized):
+                raise ValueError("Нельзя отключить город, пока в нём есть активная смена.")
+            before = {"cities": [dict(row) for row in existing]}
+            # Временные уникальные ID позволяют безопасно поменять группы двух
+            # городов местами внутри одной транзакции.
+            for city_id in submitted_ids:
+                await db.execute("UPDATE cities SET group_id=? WHERE id=?", (-9000000000000 - city_id, city_id))
+            if submitted_ids:
+                placeholders = ",".join("?" for _ in submitted_ids)
+                await db.execute(
+                    f"DELETE FROM city_role_groups WHERE city_id IN ({placeholders})",
+                    sorted(submitted_ids),
+                )
+            id_map = {}
+            for city in normalized:
+                values = (city["city_key"], city["name"], city["group_id"], city["topic_tasks"],
+                          city["topic_npb"], city["topic_moves"], city["topic_reports"],
+                          city["timezone_offset"], city["is_active"], city["sort_order"])
+                if city["id"]:
+                    await db.execute(
+                        "UPDATE cities SET city_key=?,name=?,group_id=?,topic_tasks=?,topic_npb=?,"
+                        "topic_moves=?,topic_reports=?,timezone_offset=?,is_active=?,sort_order=?,"
+                        "managed_by_config=0 WHERE id=?", (*values, city["id"]),
+                    )
+                    city_id = city["id"]
+                else:
+                    cursor = await db.execute(
+                        "INSERT INTO cities (city_key,name,group_id,topic_tasks,topic_npb,topic_moves,"
+                        "topic_reports,timezone_offset,is_active,managed_by_config,sort_order) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,0,?)", values,
+                    )
+                    city_id = cursor.lastrowid
+                id_map[city["city_key"]] = city_id
+                await db.execute("DELETE FROM city_role_groups WHERE city_id=?", (city_id,))
+                await db.executemany(
+                    "INSERT INTO city_role_groups (city_id,role,group_id,topic_tasks,topic_npb,topic_moves,topic_reports) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    [(city_id, item["role"], item["group_id"], item["topic_tasks"], item["topic_npb"], item["topic_moves"], item["topic_reports"])
+                     for item in city["role_groups"]],
+                )
+            await db.execute("DELETE FROM task_chat_route_authors")
+            await db.execute("DELETE FROM task_chat_routes")
+            for city in normalized:
+                for route_order, route in enumerate(city["task_routes"]):
+                    cursor = await db.execute(
+                        "INSERT INTO task_chat_routes (city_id,chat_id,topic_id,role,is_active,sort_order) VALUES (?,?,?,?,?,?)",
+                        (id_map[city["city_key"]], route["chat_id"], route["topic_id"], route["role"], route["is_active"], route_order),
+                    )
+                    await db.executemany(
+                        "INSERT INTO task_chat_route_authors (route_id,username) VALUES (?,?)",
+                        [(cursor.lastrowid, username) for username in route["authors"]],
+                    )
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.execute(
+                "INSERT INTO network_settings (key,value,updated_at) VALUES ('cities_source','crm',?) "
+                "ON CONFLICT(key) DO UPDATE SET value='crm',updated_at=excluded.updated_at", (now_iso,),
+            )
+            await _crm_audit(db, context, "network.structure.update", "network", "structure", None,
+                             before=before, after={"cities": normalized})
+            await db.commit()
+        except (aiosqlite.IntegrityError, ValueError) as exc:
+            await db.rollback()
+            return web.json_response({"error": "conflict", "message": str(exc)}, status=409)
+    await refresh_cities_cache()
+    await refresh_task_chat_routes()
+    return await api_crm_network_structure(request)
+
+
 async def api_crm_admins(request):
-    context, error = await _crm_admin(request, network=True)
+    context, error = await _crm_admin(request)
     if error is not None: return error
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
@@ -11426,8 +11789,13 @@ async def api_crm_admins(request):
 
 
 async def api_crm_admin_upsert(request):
-    context, error = await _crm_admin(request, write=True, network=True)
+    context, error = await _crm_admin(request)
     if error is not None: return error
+    if not _crm_can_manage_network(context["telegram_user"]["id"]):
+        return web.json_response(
+            {"error": "owner_only", "message": "Права CRM может менять только владелец."},
+            status=403,
+        )
     body = await _request_json_object(request)
     if body is None: return web.json_response({"error": "json"}, status=400)
     try: user_id = int(body.get("user_id")); city_ids = [int(value) for value in body.get("city_ids", [])]
@@ -11436,6 +11804,10 @@ async def api_crm_admin_upsert(request):
     is_active = 1 if body.get("is_active", True) else 0
     if role not in {"city_viewer", "city_manager", "network_admin"} or user_id <= 0:
         return web.json_response({"error": "role"}, status=400)
+    if user_id == CRM_OWNER_USER_ID and (role != "network_admin" or not is_active):
+        return web.json_response(
+            {"error": "owner", "message": "Нельзя отключить или понизить владельца CRM."}, status=400
+        )
     if role != "network_admin" and (not city_ids or any(city_id not in CITIES_BY_ID for city_id in city_ids)):
         return web.json_response({"error": "city_ids"}, status=400)
     if role == "network_admin": role_scope = None; city_ids = []
@@ -11591,6 +11963,8 @@ async def start_api_server():
         )
         app.router.add_get("/api/admin/crm/admins", api_crm_admins)
         app.router.add_post("/api/admin/crm/admins", api_crm_admin_upsert)
+        app.router.add_get("/api/admin/crm/network-structure", api_crm_network_structure)
+        app.router.add_put("/api/admin/crm/network-structure", api_crm_network_structure_save)
         app.router.add_get("/api/crm/task-directory", api_employee_task_directory)
         app.router.add_post("/api/crm/tasks", api_employee_task_create)
         app.router.add_get("/api/crm/tasks/mine", api_employee_tasks_mine)

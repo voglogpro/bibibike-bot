@@ -249,7 +249,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-23 · задачи из General-раздела и свободный формат «Задача»"
+BUILD_VERSION = "2026-08-23 · задачи в личку автору и адресные уведомления о графике"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -5057,6 +5057,23 @@ def _task_text_mentions(message, text):
     return usernames, user_ids
 
 
+async def _task_chat_notify_author(sender, text):
+    """Отвечает автору задачи в личку, а не в рабочий чат.
+
+    В рабочей теме бот не пишет ничего: ни подтверждений, ни ошибок — чат
+    остаётся чистым. Если автор ни разу не открывал бота, Telegram запретит
+    писать первым; тогда просто пишем причину в лог.
+    """
+    if not sender:
+        return
+    try:
+        await bot.send_message(sender.id, text)
+    except Exception as exc:
+        logger.warning(
+            "Не удалось ответить автору задачи в ЛС (uid=%s): %s", sender.id, exc,
+        )
+
+
 async def _create_task_from_chat(messages, route, raw_text):
     source = messages[0]
     sender = getattr(source, "from_user", None)
@@ -5079,28 +5096,28 @@ async def _create_task_from_chat(messages, route, raw_text):
         return
     creator = await get_user(sender.id)
     if not creator:
-        await source.reply("Не удалось создать задачу: сначала откройте Mini App.")
+        await _task_chat_notify_author(sender, "Не удалось создать задачу: сначала откройте Mini App.")
         return
     account = await _admin_account(sender.id)
     if not account or account.get("role") not in CRM_ADMIN_WRITE_ROLES:
-        await source.reply("Создавать задачи из этого чата может только старший скаут или администратор.")
+        await _task_chat_notify_author(sender, "Создавать задачи из этого чата может только старший скаут или администратор.")
         return
     allowed_city_ids = (sorted(CITIES_BY_ID) if account["role"] == "network_admin"
                         else account.get("city_ids") or [])
     if int(city["id"]) not in {int(value) for value in allowed_city_ids}:
-        await source.reply("У вас нет доступа ставить задачи сотрудникам этого города.")
+        await _task_chat_notify_author(sender, "У вас нет доступа ставить задачи сотрудникам этого города.")
         return
     role = route.get("role")
     role_scope = str(account.get("role_scope") or "").strip() or None
     if role and role_scope and role.casefold() != role_scope.casefold():
-        await source.reply(f"Ваш доступ ограничен ролью «{role_scope}».")
+        await _task_chat_notify_author(sender, f"Ваш доступ ограничен ролью «{role_scope}».")
         return
     allowed_authors = {
         str(value).lstrip("@").casefold() for value in route.get("authors") or [] if value
     }
     sender_username = str(getattr(sender, "username", None) or "").casefold()
     if allowed_authors and sender_username not in allowed_authors:
-        await source.reply(
+        await _task_chat_notify_author(sender, 
             "В этой теме бот принимает задачи только от назначенных старших скаутов."
         )
         return
@@ -5123,7 +5140,7 @@ async def _create_task_from_chat(messages, route, raw_text):
     resolved_usernames = {str(row["telegram_username"] or "").casefold() for row in targets}
     resolved_ids = {int(row["user_id"]) for row in targets}
     if (usernames - resolved_usernames) or (mentioned_ids - resolved_ids):
-        await source.reply(
+        await _task_chat_notify_author(sender, 
             "Не все отмеченные сотрудники найдены. Попросите их открыть Mini App "
             "или написать боту один раз, затем отправьте задачу заново."
         )
@@ -5135,13 +5152,13 @@ async def _create_task_from_chat(messages, route, raw_text):
         role_targets = {uid: row for uid, row in by_id.items()
                         if str(row.get("role") or "").casefold() == target_role.casefold()}
         if len(role_targets) != len(by_id):
-            await source.reply(
+            await _task_chat_notify_author(sender, 
                 f"В этой теме можно ставить задачи только сотрудникам роли «{target_role}»."
             )
             return
         by_id = role_targets
     if not by_id:
-        await source.reply(
+        await _task_chat_notify_author(sender, 
             "Не нашёл отмеченных сотрудников в этом городе и роли. "
             "Попросите их открыть Mini App или написать боту один раз."
         )
@@ -5195,9 +5212,9 @@ async def _create_task_from_chat(messages, route, raw_text):
             if existing:
                 await db.rollback()
                 if existing["client_request_hash"] == request_hash:
-                    await source.reply(f"Задача #{existing['id']} уже была отправлена.")
+                    await _task_chat_notify_author(sender, f"Задача #{existing['id']} уже была отправлена.")
                     return
-                await source.reply("Не удалось повторить задачу: содержимое сообщения изменилось.")
+                await _task_chat_notify_author(sender, "Не удалось повторить задачу: содержимое сообщения изменилось.")
                 return
             now_iso = datetime.now(timezone.utc).isoformat()
             cur = await db.execute(
@@ -5231,10 +5248,13 @@ async def _create_task_from_chat(messages, route, raw_text):
             await _commit_and_wake(db, _notification_wakeup)
         names = ", ".join(row["full_name"] for row in by_id.values())
         photo_text = f" · фото: {len(downloaded)}" if downloaded else ""
-        await source.reply(f"✅ Задача #{task_id} отправлена: {names}{photo_text}")
+        await _task_chat_notify_author(
+            sender,
+            f"✅ Задача #{task_id} отправлена в личные сообщения: {names}{photo_text}",
+        )
     except Exception:
         logger.exception("Не удалось создать задачу из рабочего чата")
-        await source.reply("Не удалось создать задачу. Попробуйте ещё раз.")
+        await _task_chat_notify_author(sender, "Не удалось создать задачу. Попробуйте ещё раз.")
     finally:
         # После успешной транзакции файлы уже принадлежат задаче. При ошибке до
         # INSERT удаляем только сироты; существующие записи определяем по БД.
@@ -10055,7 +10075,8 @@ async def api_crm_calendar_changes(request):
                 counts["cancelled"] += 1
                 plan_id = int(current["id"])
                 notifications.setdefault(item["user_id"], []).append({
-                    "action": "cancel", "work_date": item["work_date"]})
+                    "action": "cancel", "work_date": item["work_date"],
+                    "plan_id": plan_id, "changes": ["cancelled"]})
             else:
                 if item["action"] == "set_custom":
                     start = item["value"]["start_time"]
@@ -10093,9 +10114,21 @@ async def api_crm_calendar_changes(request):
                     )
                     counts["updated"] += 1
                     plan_id = int(current["id"])
+                    changed = []
+                    if (_valid_time(current["start_time"]) != _valid_time(start)
+                            or _valid_time(current["end_time"]) != _valid_time(end)):
+                        changed.append("time")
+                    if (current["district"] or "") != district:
+                        changed.append("district")
+                    if (current["work_kind"] or "regular") != work_kind:
+                        changed.append("work_kind")
+                    if str(current["status"]) == "cancelled":
+                        changed = ["created"]
                     notifications.setdefault(item["user_id"], []).append({
                         "action": "set", "work_date": item["work_date"],
-                        "start_time": start, "end_time": end, "district": district})
+                        "start_time": start, "end_time": end, "district": district,
+                        "work_kind": work_kind, "plan_id": plan_id,
+                        "changes": changed or ["time"]})
                 else:
                     created = await db.execute(
                         "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,"
@@ -10108,13 +10141,31 @@ async def api_crm_calendar_changes(request):
                     counts["created"] += 1
                     notifications.setdefault(item["user_id"], []).append({
                         "action": "set", "work_date": item["work_date"],
-                        "start_time": start, "end_time": end, "district": district})
+                        "start_time": start, "end_time": end, "district": district,
+                        "work_kind": work_kind, "plan_id": plan_id,
+                        "changes": ["created"]})
             result_items.append({
                 "client_id": item["client_id"], "status": item["action"],
                 "plan_id": plan_id, "updated_at": result_updated_at,
             })
 
+        # Одна правка одной смены — это обычное изменение графика, и сотруднику
+        # понятнее адресное сообщение, чем список. Массовое сохранение по-прежнему
+        # уходит одной сводкой, иначе человек получит десяток уведомлений подряд.
         for user_id, entries in notifications.items():
+            if len(entries) == 1 and entries[0].get("plan_id"):
+                entry = entries[0]
+                await _enqueue_plan_change(
+                    db, city["id"], user_id, entry["plan_id"],
+                    entry.get("changes") or ["created"],
+                    {"work_date": entry.get("work_date"),
+                     "start_time": entry.get("start_time"),
+                     "end_time": entry.get("end_time"),
+                     "district": entry.get("district") or "",
+                     "work_kind": entry.get("work_kind") or "regular",
+                     "status": "cancelled" if entry.get("action") == "cancel" else "scheduled"},
+                )
+                continue
             await _enqueue_crm_notification(
                 db, city["id"], user_id, "calendar_schedule_updated", commit_id,
                 {"commit_id": commit_id, "entries": entries},
@@ -10213,8 +10264,39 @@ async def api_crm_planned_shift_update(request):
             await db.execute("UPDATE shifts SET district=? WHERE id=?", (district, actual["id"]))
             refresh_shift_id = actual["id"]
         updated = await (await db.execute("SELECT * FROM crm_planned_shifts WHERE id=?", (plan_id,))).fetchone()
+        # Сообщаем сотруднику только о том, что реально изменилось: полный
+        # график ему не нужен, нужна суть правки.
+        changes = []
+        if str(updated["status"]) == "cancelled" and str(current["status"]) != "cancelled":
+            changes.append("cancelled")
+        elif str(updated["status"]) == "scheduled":
+            if str(current["status"]) == "cancelled":
+                changes.append("created")
+            if str(current["work_date"] or "") != str(updated["work_date"] or ""):
+                changes.append("work_date")
+            # Сравниваем нормализованное время: "09:00" и "9:00" — одно и то же,
+            # иначе сотрудник получит уведомление о правке, которой не было.
+            if (_valid_time(current["start_time"]) != _valid_time(updated["start_time"])
+                    or _valid_time(current["end_time"]) != _valid_time(updated["end_time"])):
+                changes.append("time")
+            if str(current["district"] or "") != str(updated["district"] or ""):
+                changes.append("district")
+            if str(current["work_kind"] or "regular") != str(updated["work_kind"] or "regular"):
+                changes.append("work_kind")
+        # Сотрудника могли заменить: старый узнаёт об отмене, новый — о назначении.
+        if current["user_id"] and updated["user_id"] != current["user_id"]:
+            await _enqueue_plan_change(
+                db, current["city_id"], current["user_id"], plan_id, ["cancelled"],
+                {**dict(current), "status": "cancelled"},
+            )
+            changes = ["created"]
+        if changes:
+            await _enqueue_plan_change(
+                db, current["city_id"], updated["user_id"], plan_id, changes, dict(updated),
+            )
         await _crm_audit(db, context, "planned_shift.update", "planned_shift", plan_id,
-                         current["city_id"], before=dict(current), after=dict(updated)); await db.commit()
+                         current["city_id"], before=dict(current), after=dict(updated))
+        await _commit_and_wake(db, _notification_wakeup)
     if refresh_shift_id:
         await safe_flush_report_update(refresh_shift_id)
     return web.json_response({"ok": True, "plan": dict(updated)})
@@ -10297,6 +10379,78 @@ async def _enqueue_crm_notification(db, city_id, user_id, kind, entity_id, paylo
         "(city_id,user_id,kind,entity_id,payload_json,status,attempt_count,next_attempt_at,created_at) "
         "VALUES (?,?,?,?,?,'pending',0,?,?)",
         (city_id, user_id, kind, entity_id,
+         json.dumps(payload, ensure_ascii=False, default=str), now_iso, now_iso),
+    )
+
+
+# Окно склейки правок одной смены. Руководитель часто дооформляет карточку
+# в несколько сохранений (сначала время, потом район) — сотруднику должно
+# прийти одно итоговое сообщение, а не серия.
+CRM_PLAN_CHANGE_MERGE_SEC = 120
+
+
+async def _enqueue_plan_change(db, city_id, user_id, plan_id, changes, plan):
+    """Копит правки одной плановой смены в одном ещё не отправленном сообщении.
+
+    Если по этой же смене уже есть pending-уведомление моложе окна склейки —
+    дополняем его: список изменённых полей объединяется, актуальные значения
+    берутся из последней правки. Иначе создаём новое.
+    """
+    if not user_id or not changes:
+        return
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    payload = {
+        "plan_id": plan_id,
+        "work_date": plan.get("work_date"),
+        "start_time": plan.get("start_time"),
+        "end_time": plan.get("end_time"),
+        "district": plan.get("district") or "",
+        "work_kind": plan.get("work_kind") or "regular",
+        "status": plan.get("status") or "scheduled",
+        "changes": sorted(set(changes)),
+    }
+    # UNIQUE(user_id, kind, entity_id) допускает только одну строку на смену,
+    # поэтому запись переиспользуется: свежую pending дополняем, отправленную
+    # возвращаем в очередь с новым содержимым.
+    existing = await (await db.execute(
+        "SELECT id,payload_json,created_at,status FROM crm_notification_outbox "
+        "WHERE user_id=? AND kind='shift_plan_changed' AND entity_id=? LIMIT 1",
+        (user_id, plan_id),
+    )).fetchone()
+    if existing:
+        created = _parse_datetime(existing["created_at"])
+        merge = (existing["status"] == "pending" and created
+                 and (now - created).total_seconds() <= CRM_PLAN_CHANGE_MERGE_SEC)
+        if merge:
+            try:
+                previous = json.loads(existing["payload_json"] or "{}")
+            except (TypeError, ValueError):
+                previous = {}
+            payload["changes"] = sorted(
+                set(payload["changes"]) | set(previous.get("changes") or [])
+            )
+            # Смену только что назначили и тут же поправили — для сотрудника
+            # это по-прежнему назначение, а не изменение.
+            if "created" in payload["changes"]:
+                payload["changes"] = ["created"]
+            await db.execute(
+                "UPDATE crm_notification_outbox SET payload_json=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False, default=str), existing["id"]),
+            )
+            return
+        await db.execute(
+            "UPDATE crm_notification_outbox SET payload_json=?,status='pending',attempt_count=0,"
+            "next_attempt_at=?,created_at=?,sent_at=NULL,last_error=NULL WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False, default=str), now_iso, now_iso,
+             existing["id"]),
+        )
+        return
+    await db.execute(
+        "INSERT INTO crm_notification_outbox "
+        "(city_id,user_id,kind,entity_id,payload_json,status,attempt_count,next_attempt_at,created_at) "
+        "VALUES (?,?,'shift_plan_changed',?,?,'pending',0,?,?)",
+        (city_id, user_id, plan_id,
          json.dumps(payload, ensure_ascii=False, default=str), now_iso, now_iso),
     )
 
@@ -11331,6 +11485,42 @@ def _crm_notification_text(kind, payload):
         lines.extend(["", "⏰ Перед рабочей сменой придёт отдельное напоминание.",
                       "📱 Полный график доступен в разделе «Мой график»."])
         return "\n".join(lines)
+    if kind == "shift_plan_changed":
+        changes = list(payload.get("changes") or [])
+        date_label = _crm_human_date(payload.get("work_date"))
+        shift_time = f"{payload.get('start_time', '—')}–{payload.get('end_time', '—')}"
+        is_extra = payload.get("work_kind") == "extra"
+        if payload.get("status") == "cancelled":
+            return "\n".join([
+                "❌ СМЕНА ОТМЕНЕНА", "",
+                f"📅 Дата: {date_label}",
+                "", "Выходить на эту смену не нужно.",
+                "📱 Актуальный график — в разделе «Мой график».",
+            ])
+        if "created" in changes:
+            header = "💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА"
+        else:
+            # Заголовок называет главное изменение: сотрудник должен понять суть
+            # из первой строки, не вчитываясь в детали.
+            titles = {
+                "district": "📍 ИЗМЕНЁН РАЙОН",
+                "time": "🕒 ИЗМЕНЕНО ВРЕМЯ СМЕНЫ",
+                "work_date": "📅 ПЕРЕНЕСЕНА СМЕНА",
+                "work_kind": "🔄 ИЗМЕНЁН ТИП СМЕНЫ",
+            }
+            named = [titles[key] for key in ("work_date", "time", "district", "work_kind")
+                     if key in changes and key in titles]
+            header = named[0] if len(named) == 1 else "🔄 СМЕНА ИЗМЕНЕНА"
+        lines = [header, "", f"📅 Дата: {date_label}", f"🕒 Время: {shift_time}"]
+        if district:
+            lines.append(f"📍 Район: {district}")
+        if is_extra:
+            lines.append("💼 Тип: подработка")
+        if details:
+            lines.extend(["", "📝 Комментарий руководителя:", details])
+        lines.extend(["", "⏰ Перед сменой придёт напоминание.",
+                      "📱 Полный график — в разделе «Мой график»."])
+        return "\n".join(lines)
     if kind == "shift_reminder":
         lines = ["⏰ ДО НАЧАЛА СМЕНЫ 30 МИНУТ", "",
                  f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
@@ -11409,7 +11599,8 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
-        if row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder", "shift_auto_started"}:
+        if row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
+                           "shift_auto_started", "shift_plan_changed"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"

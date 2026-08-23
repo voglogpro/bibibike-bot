@@ -173,8 +173,12 @@ async def run():
         106, ids["ordinary"], -1003431950710,
         text="/ @first_worker Проверить парковку", sender_username="ordinary_worker",
     )
-    await app._create_task_from_chat([denied], route, denied.text)
-    assert "старший скаут" in denied.reply.await_args.args[0]
+    # Ответ уходит автору в личку, в рабочем чате бот молчит.
+    with patch.object(app.bot, "send_message", AsyncMock()) as denied_dm:
+        await app._create_task_from_chat([denied], route, denied.text)
+    denied.reply.assert_not_awaited()
+    assert "старший скаут" in denied_dm.await_args.args[1]
+    assert denied_dm.await_args.args[0] == ids["ordinary"]
     assert await scalar("SELECT COUNT(*) FROM crm_tasks WHERE created_via='telegram_chat'") == 3
 
     # Даже CRM-руководитель не принимается в тестовой теме, если его нет в allowlist.
@@ -182,8 +186,10 @@ async def run():
         107, ids["author"], -1003431950710,
         text="/ @first_worker Проверить парковку", sender_username="another_manager",
     )
-    await app._create_task_from_chat([blocked_author], route, blocked_author.text)
-    assert "назначенных старших" in blocked_author.reply.await_args.args[0]
+    with patch.object(app.bot, "send_message", AsyncMock()) as blocked_dm:
+        await app._create_task_from_chat([blocked_author], route, blocked_author.text)
+    blocked_author.reply.assert_not_awaited()
+    assert "назначенных старших" in blocked_dm.await_args.args[1]
     assert await scalar("SELECT COUNT(*) FROM crm_tasks WHERE created_via='telegram_chat'") == 3
 
     # Все фото одной задачи доставляются одним альбомом, а ID сообщений

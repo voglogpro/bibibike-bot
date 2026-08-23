@@ -249,7 +249,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-23 · задачи в личку автору и адресные уведомления о графике"
+BUILD_VERSION = "2026-08-23 · отмена задачи чистит личные сообщения, увольнение в CRM"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -10845,8 +10845,27 @@ async def api_crm_task_update(request):
              context["telegram_user"]["id"], now_iso, task_id),
         )
         updated = await (await db.execute("SELECT * FROM crm_tasks WHERE id=?", (task_id,))).fetchone()
+        # Отмена из CRM ведёт себя так же, как отмена сотрудником: исполнители
+        # получают уведомление, а карточка задачи убирается из их личных сообщений.
+        cancelled_now = (row["status"] != "cancelled" and merged["status"] == "cancelled")
+        if cancelled_now:
+            event_id = await _crm_task_event(
+                db, task_id, context["telegram_user"]["id"], "task.cancelled.crm", {},
+            )
+            recipients = await (await db.execute(
+                "SELECT user_id FROM crm_task_assignees WHERE task_id=?", (task_id,),
+            )).fetchall()
+            for recipient in recipients:
+                if int(recipient[0]) != int(context["telegram_user"]["id"]):
+                    await _enqueue_crm_notification(
+                        db, row["city_id"], recipient[0], "task_cancelled", event_id,
+                        {"task_id": task_id, "title": updated["title"]},
+                    )
         await _crm_audit(db, context, "task.update", "task", task_id, row["city_id"],
-                         before=dict(row), after=dict(updated)); await db.commit()
+                         before=dict(row), after=dict(updated))
+        await _commit_and_wake(db, _notification_wakeup)
+    if cancelled_now:
+        await _delete_task_messages(task_id)
     return web.json_response({"ok": True, "task": dict(updated)})
 
 
@@ -11331,7 +11350,10 @@ async def api_employee_task_cancel(request):
                     db, task["city_id"], recipient[0], "task_cancelled", event_id,
                     {"task_id": task_id, "title": task["title"], "reason": reason},
                 )
-        await db.commit()
+        await _commit_and_wake(db, _notification_wakeup)
+    # Карточку отменённой задачи убираем из ЛС: фото и текст задания больше
+    # не актуальны, вместо них придёт короткое уведомление об отмене.
+    await _delete_task_messages(task_id)
     return web.json_response({"ok": True, "already_cancelled": False,
                               "updated_at": now_iso})
 
@@ -11706,6 +11728,55 @@ async def crm_notification_worker():
         except Exception:
             logger.exception("Ошибка фоновой доставки CRM-уведомлений")
         await _wait_worker(_notification_wakeup, wait_seconds)
+
+
+async def _delete_task_messages(task_id, user_ids=None):
+    """Убирает из личных сообщений карточку задачи вместе с фотографиями.
+
+    Вызывается при отмене задачи: держать в ЛС фото и текст того, что делать
+    уже не нужно, — только путать сотрудника. Записи о задаче в CRM остаются.
+    Ограничение Telegram: чужое сообщение бот удаляет только 48 часов, поэтому
+    неудача здесь не должна ломать саму отмену.
+    """
+    kinds = ("task_assigned", "task_submitted", "task_blocked", "task_reviewed")
+    params = [int(task_id), *kinds]
+    user_filter = ""
+    if user_ids:
+        user_filter = " AND m.user_id IN (" + ",".join("?" for _ in user_ids) + ")"
+        params.extend(int(value) for value in user_ids)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT m.id,m.user_id,m.message_id FROM crm_notification_messages m "
+            "JOIN crm_notification_outbox o ON o.id=m.outbox_id "
+            "WHERE m.deleted_at IS NULL AND o.entity_id=? "
+            "AND o.kind IN (?,?,?,?)" + user_filter + " ORDER BY m.id",
+            params,
+        )).fetchall()
+    removed = 0
+    for row in rows:
+        try:
+            await bot.delete_message(row["user_id"], row["message_id"])
+        except TelegramBadRequest:
+            # Сообщение уже удалено или старше 48 часов — помечаем обработанным.
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Не удалось удалить сообщение задачи %s у %s: %s",
+                task_id, row["user_id"], exc,
+            )
+            continue
+        async with db_connect() as db:
+            await db.execute(
+                "UPDATE crm_notification_messages SET deleted_at=? "
+                "WHERE id=? AND deleted_at IS NULL",
+                (datetime.now(timezone.utc).isoformat(), row["id"]),
+            )
+            await db.commit()
+        removed += 1
+    if removed:
+        logger.info("Задача %s: убрано сообщений из ЛС: %s", task_id, removed)
+    return removed
 
 
 async def cleanup_task_messages_once(limit=200):

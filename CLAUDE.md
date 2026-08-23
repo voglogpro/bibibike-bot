@@ -106,6 +106,7 @@ python tests\crm_backend_check.py
 python tests\crm_automation_check.py
 python tests\crm_ui_check.py
 python tests\schedule_notify_check.py
+python tests	ask_cleanup_check.py
 ```
 
 Полный список — в `README.md`, раздел «Проверки перед релизом».

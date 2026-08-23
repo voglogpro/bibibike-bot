@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+data/
+tests/
+*.zip
+*.png

@@ -249,7 +249,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-22 · карта Краснодара и безопасный архив сотрудников"
+BUILD_VERSION = "2026-08-23 · задачи из General-раздела и свободный формат «Задача»"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -4946,7 +4946,16 @@ _task_chat_albums = {}
 
 
 def _task_chat_route(message):
-    thread_id = GENERAL_TOPIC if message.message_thread_id is None else message.message_thread_id
+    # Telegram присылает сообщения General-раздела форума с message_thread_id=None,
+    # хотя сам раздел имеет номер 1. Маршрут мог быть записан и как GENERAL_TOPIC (0),
+    # и как 1 — проверяем оба ключа, иначе задача из General молча теряется.
+    thread_id = message.message_thread_id
+    if thread_id is None:
+        for candidate in (GENERAL_TOPIC, 1):
+            route = TASK_CHAT_ROUTES.get((message.chat.id, candidate))
+            if route:
+                return route
+        return None
     return TASK_CHAT_ROUTES.get((message.chat.id, thread_id))
 
 
@@ -4957,7 +4966,10 @@ def _task_message_starts_task(message):
         return False
     explicit = bool(
         text.startswith("/")
-        or re.match(r"^(?:задача|задание)\s*[:—-]", text, re.IGNORECASE)
+        # Знак после слова необязателен: старший пишет и «Задача: @user …»,
+        # и просто «Задача @user …». Слово должно стоять в начале сообщения,
+        # а адресат проверен выше, поэтому ложных срабатываний не будет.
+        or re.match(r"^(?:задача|задание)\b\s*[:—,-]?\s*", text, re.IGNORECASE)
     )
     if explicit:
         return True
@@ -4976,7 +4988,7 @@ def _task_strip_explicit_marker(text):
     if value.startswith("/"):
         return value[1:].lstrip()
     return re.sub(
-        r"^(?:задача|задание)\s*[:—-]\s*", "", value,
+        r"^(?:задача|задание)\b\s*[:—,-]?\s*", "", value,
         count=1, flags=re.IGNORECASE,
     )
 
@@ -5000,6 +5012,15 @@ class TaskChatFilter(BaseFilter):
         # сообщения оставляем существующему рабочему парсеру.
         if message.media_group_id or _task_message_starts_task(message):
             return {"task_route": route}
+        # Тема задач найдена, но текст не опознан как задача. Пишем причину в лог:
+        # без этой строки старший видит только молчание бота и не знает, что менять.
+        if re.search(r"@[A-Za-z0-9_]{5,32}", str(message.text or message.caption or "")):
+            logger.info(
+                "ЗАДАЧА ПРОПУЩЕНА: chat=%s тема=%s msg=%s — есть @упоминание, но формат "
+                "не распознан. Нужны фото либо явный маркер «/ @user текст» или "
+                "«Задача: @user текст», не вопрос и минимум два слова после тегов.",
+                message.chat.id, message.message_thread_id, message.message_id,
+            )
         # Фото руководителя, которое не является задачей, тихо поглощаем в
         # выделенной теме: бот не должен отвечать в рабочем чате без @username.
         if message.photo:
@@ -5051,6 +5072,10 @@ async def _create_task_from_chat(messages, route, raw_text):
     # В выделенной теме фото без адресата может быть обычным рабочим сообщением.
     # Его молча пропускаем: никаких подсказок или ошибок в общий чат.
     if not (usernames or mentioned_ids):
+        logger.info(
+            "ЗАДАЧА ПРОПУЩЕНА: chat=%s msg=%s — в сообщении нет @упоминания исполнителя.",
+            source.chat.id, source.message_id,
+        )
         return
     creator = await get_user(sender.id)
     if not creator:

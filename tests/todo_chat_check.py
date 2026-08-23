@@ -207,6 +207,43 @@ async def run():
     assert await scalar(
         "SELECT COUNT(*) FROM crm_notification_messages WHERE deleted_at IS NOT NULL"
     ) == 4
+    # Регрессия: General-раздел форума приходит как message_thread_id=None,
+    # хотя сам раздел имеет номер 1 и маршрут записан как topic_id=1.
+    # Раньше ключ (chat_id, 0) не находился и задача молча терялась.
+    general = Message(9101, ids["author"], -1003431950710,
+                     text="Задача: @first_worker проверить стойку")
+    general.message_thread_id = None
+    assert app._task_chat_route(general) is not None, (
+        "General-раздел (message_thread_id=None) должен находить маршрут задач"
+    )
+    threaded = Message(9102, ids["author"], -1003431950710,
+                     text="Задача: @first_worker проверить стойку")
+    threaded.message_thread_id = 1
+    assert app._task_chat_route(threaded) is not None
+    foreign = Message(9103, ids["author"], -1003431950710,
+                     text="Задача: @first_worker проверить стойку")
+    foreign.message_thread_id = 999
+    assert app._task_chat_route(foreign) is None, "Чужая тема не должна принимать задачи"
+
+    # Явный маркер работает и без знака после слова: старший пишет
+    # «Задача @user …» так же часто, как «Задача: @user …».
+    for marker_text in ("Задача: @first_worker починить стойку",
+                        "Задача @first_worker починить стойку",
+                        "Задача, @first_worker починить стойку",
+                        "задание @first_worker починить стойку",
+                        "Задача - @first_worker починить стойку"):
+        marker = Message(9200, ids["author"], -1003431950710, text=marker_text)
+        assert app._task_message_starts_task(marker), marker_text
+        assert not app._task_strip_explicit_marker(marker_text).lower().startswith(
+            ("задача", "задание")
+        ), marker_text
+    # Похожие слова и обычные вопросы задачей не становятся.
+    for plain_text in ("Задачи на сегодня @first_worker посмотри",
+                       "Задачник @first_worker",
+                       "@first_worker ты сегодня работаешь?"):
+        plain = Message(9201, ids["author"], -1003431950710, text=plain_text)
+        assert not app._task_message_starts_task(plain), plain_text
+
     print("PASS TODO chat: natural senior message, Mini App, DM, photos and permissions")
 
 

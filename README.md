@@ -138,9 +138,10 @@ CRM_OWNER_USER_ID=<ваш единственный Telegram ID>
 
 1. Подключите репозиторий и ветку `main`.
 2. Команду запуска задаёт `Dockerfile` (`CMD ["python", "main.py"]`).
-   Файл нужен обязательно: без него автоопределение BotHost находит
-   `tests/crm_ui_check.js`, считает проект Node.js и запускает тест вместо
-   бота — контейнер печатает `PASS CRM UI ...` и сразу завершается.
+   В репозитории не должно появляться `.js`-файлов и `package.json`:
+   автоопределение BotHost по ним считает проект Node.js и собирает образ
+   с запуском JS вместо бота — контейнер печатает `PASS CRM UI ...` и сразу
+   завершается. Проверка CRM UI поэтому написана на Python.
 3. Добавьте переменные окружения из раздела выше.
 4. Настройте постоянное хранилище для `/app/data`.
 5. Укажите порт веб-приложения `3000`, если BotHost не передаёт собственный `PORT`.
@@ -203,7 +204,7 @@ python tests\regression_check.py
 python tests\crm_backend_check.py
 python tests\crm_automation_check.py
 python tests\map_archive_check.py
-node tests\crm_ui_check.js
+python tests\crm_ui_check.py
 git diff --check
 ```
 

@@ -23,6 +23,8 @@ NETWORK_ADMIN = 980003
 NO_CITY_MANAGER = 980004
 VIEWER = 980005
 DRIVER_MANAGER = 980006
+OTHER_CITY_MANAGER = 980007
+OTHER_CITY_EMPLOYEE = 980008
 
 
 class Request:
@@ -57,6 +59,7 @@ def admin_context(user_id, city, role="city_manager", role_scope="Скаут"):
 async def run():
     await bot.init_db()
     city = bot.get_default_city()
+    other_city = next(item for item in bot.CITIES_BY_ID.values() if item["id"] != city["id"])
     tz = bot._city_tz(city)
     start_at = datetime(2026, 8, 24, 9, 0, tzinfo=tz)
     now_iso = start_at.isoformat()
@@ -72,6 +75,10 @@ async def run():
                 (NO_CITY_MANAGER, "Чужой Город", "Скаут", city["id"], "no_city"),
                 (VIEWER, "Наблюдатель", "Скаут", city["id"], "viewer"),
                 (DRIVER_MANAGER, "Старший Водителей", "Водитель", city["id"], "driver_manager"),
+                (OTHER_CITY_MANAGER, "Старший Другого Города", "Скаут", other_city["id"],
+                 "other_city_manager"),
+                (OTHER_CITY_EMPLOYEE, "Скаут Другого Города", "Скаут", other_city["id"],
+                 "other_city_employee"),
             ],
         )
         accounts = [
@@ -80,6 +87,7 @@ async def run():
             (NO_CITY_MANAGER, "city_manager", "Скаут"),
             (VIEWER, "city_viewer", "Скаут"),
             (DRIVER_MANAGER, "city_manager", "Водитель"),
+            (OTHER_CITY_MANAGER, "city_manager", "Скаут"),
         ]
         await db.executemany(
             "INSERT INTO admin_accounts (user_id,role,role_scope,is_active,session_version,"
@@ -89,7 +97,7 @@ async def run():
         await db.executemany(
             "INSERT INTO admin_city_permissions (user_id,city_id) VALUES (?,?)",
             [(SCOUT_MANAGER, city["id"]), (VIEWER, city["id"]),
-             (DRIVER_MANAGER, city["id"])],
+             (DRIVER_MANAGER, city["id"]), (OTHER_CITY_MANAGER, other_city["id"])],
         )
         # The network administrator opts out only from lunch-start alerts.
         await db.execute(
@@ -168,7 +176,68 @@ async def run():
     })
     assert "Дата завершения: 24.08.2026" in report, report
 
-    print("PASS lifecycle notify: scopes, preferences, dedupe, report completion date")
+    # An event from a second city reaches only that city's manager. Even a
+    # network administrator receives lifecycle alerts only for their profile city.
+    other_start = datetime(2026, 8, 24, 10, 0, tzinfo=bot._city_tz(other_city))
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,start_at,created_at,"
+            "is_active,on_lunch,city_id,district,source) VALUES (?,?,?,?,?,?,1,0,?,?,?)",
+            (OTHER_CITY_EMPLOYEE, "Скаут Другого Города", "Скаут", "10:00",
+             other_start.isoformat(), other_start.isoformat(), other_city["id"],
+             "Тестовый", "mini_app"),
+        )
+        other_shift_id = cursor.lastrowid
+        other_shift = {
+            "id": other_shift_id,
+            "city_id": other_city["id"],
+            "user_id": OTHER_CITY_EMPLOYEE,
+            "full_name": "Скаут Другого Города",
+            "role": "Скаут",
+            "start_time": "10:00",
+            "end_time": "",
+            "district": "Тестовый",
+        }
+        queued = await bot._enqueue_admin_lifecycle_notifications(
+            db, other_shift, "lunch_ended", other_start,
+        )
+        await db.commit()
+    assert queued == 1, queued
+    other_city_recipients = await rows(
+        "SELECT user_id FROM crm_notification_outbox "
+        "WHERE kind='admin_lunch_ended' AND city_id=? ORDER BY user_id",
+        (other_city["id"],),
+    )
+    assert [row["user_id"] for row in other_city_recipients] == [OTHER_CITY_MANAGER], \
+        other_city_recipients
+
+    # Delivery rechecks the city scope. This suppresses a wrong notification
+    # which may already have been queued by an older deployed version.
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        await db.execute(
+            "UPDATE crm_notification_outbox SET status='sent',sent_at=? "
+            "WHERE status IN ('pending','retry')",
+            (datetime.now().astimezone().isoformat(),),
+        )
+        await db.execute(
+            "INSERT INTO crm_notification_outbox "
+            "(city_id,user_id,kind,entity_id,payload_json,status,created_at) "
+            "VALUES (?,?,?,?,?,'pending',?)",
+            (city["id"], OTHER_CITY_MANAGER, "admin_shift_ended", 999999,
+             json.dumps({"role": "Скаут"}), now_iso),
+        )
+        await db.commit()
+    with patch.object(bot.bot, "send_message", AsyncMock()) as send_message:
+        delivered = await bot.deliver_crm_notifications_once()
+    assert delivered == 0
+    send_message.assert_not_awaited()
+    stale = await rows(
+        "SELECT status,last_error FROM crm_notification_outbox "
+        "WHERE kind='admin_shift_ended' AND entity_id=999999"
+    )
+    assert stale == [{"status": "failed", "last_error": "city_scope_mismatch"}], stale
+
+    print("PASS lifecycle notify: city scopes, preferences, dedupe, report completion date")
 
 
 if __name__ == "__main__":

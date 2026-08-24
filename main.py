@@ -249,7 +249,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-24 · уведомления руководителей о сменах и обеде"
+BUILD_VERSION = "2026-08-24 · уведомления руководителей только своего города"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -10700,14 +10700,16 @@ async def _enqueue_admin_lifecycle_notifications(db, shift, event_type, event_at
     db.row_factory = aiosqlite.Row
     recipients = await (await db.execute(
         "SELECT DISTINCT a.user_id FROM admin_accounts a "
+        "LEFT JOIN users admin_user ON admin_user.user_id=a.user_id "
         "LEFT JOIN admin_city_permissions cp ON cp.user_id=a.user_id AND cp.city_id=? "
         "LEFT JOIN admin_notification_settings ns ON ns.user_id=a.user_id "
         "WHERE a.is_active=1 AND a.role IN ('city_manager','network_admin') "
-        "AND (a.role='network_admin' OR cp.user_id IS NOT NULL) "
+        "AND ((a.role='city_manager' AND cp.user_id IS NOT NULL) "
+        "OR (a.role='network_admin' AND admin_user.city_id=?)) "
         "AND (a.role_scope IS NULL OR TRIM(a.role_scope)='' "
         "OR LOWER(a.role_scope)=LOWER(?)) "
         f"AND COALESCE(ns.{setting_column},1)=1 AND a.user_id<>?",
-        (city_id, shift.get("role") or "", employee_user_id),
+        (city_id, city_id, shift.get("role") or "", employee_user_id),
     )).fetchall()
     profile = await (await db.execute(
         "SELECT telegram_username FROM users WHERE user_id=?", (employee_user_id,)
@@ -12026,6 +12028,37 @@ async def deliver_crm_notifications_once(limit=50):
     delivered = 0
     for row in rows:
         payload = json.loads(row["payload_json"] or "{}")
+        if row["kind"] in {
+            "admin_shift_ended", "admin_lunch_started", "admin_lunch_ended",
+        }:
+            async with db_connect() as scope_db:
+                allowed = await (await scope_db.execute(
+                    "SELECT 1 FROM admin_accounts a "
+                    "LEFT JOIN users admin_user ON admin_user.user_id=a.user_id "
+                    "WHERE a.user_id=? AND a.is_active=1 "
+                    "AND a.role IN ('city_manager','network_admin') "
+                    "AND ((a.role='city_manager' AND EXISTS ("
+                    "SELECT 1 FROM admin_city_permissions cp "
+                    "WHERE cp.user_id=a.user_id AND cp.city_id=?)) "
+                    "OR (a.role='network_admin' AND admin_user.city_id=?)) "
+                    "AND (a.role_scope IS NULL OR TRIM(a.role_scope)='' "
+                    "OR LOWER(a.role_scope)=LOWER(?)) LIMIT 1",
+                    (row["user_id"], row["city_id"], row["city_id"],
+                     payload.get("role") or ""),
+                )).fetchone()
+                if not allowed:
+                    await scope_db.execute(
+                        "UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+                        "last_error='city_scope_mismatch' "
+                        "WHERE id=? AND status IN ('pending','retry')",
+                        (row["id"],),
+                    )
+                    await scope_db.commit()
+                    logger.info(
+                        "CRM outbox: уведомление %s отменено — uid=%s не руководит городом %s",
+                        row["id"], row["user_id"], row["city_id"],
+                    )
+                    continue
         text = _crm_notification_text(row["kind"], payload)
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"

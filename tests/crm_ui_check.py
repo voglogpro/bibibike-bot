@@ -26,6 +26,7 @@ REQUIRED = (
     'if(state.route==="map"&&route!=="map")destroyMap()',
     "/statistics-visibility",
     'data-calendar-guide',
+    'calendar-guide-modal',
     'id="extendShiftModal"',
     '/extend`,{method:\'PATCH\'',
 )

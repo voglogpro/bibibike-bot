@@ -8264,6 +8264,7 @@ def _crm_shift_item(shift, city, stats, now=None):
         "role": shift.get("role") or "", "status": status,
         "date": local_date, "start_time": shift.get("start_time"),
         "end_time": shift.get("end_time"), "start_at": shift.get("start_at"),
+        "auto_close_at": shift.get("auto_close_at"),
         "end_at": shift.get("end_at"), "worked_minutes": worked,
         "district": shift.get("district") or "", "comment": shift.get("comment") or "",
         "source": shift.get("source") or "bot", "on_lunch": bool(shift.get("on_lunch")),
@@ -9186,6 +9187,162 @@ async def api_crm_shift_close(request):
     })
 
 
+async def api_crm_shift_extend(request):
+    """Продлевает автоматическое окончание уже начатой смены из CRM."""
+    context, error = await _crm_admin(request, write=True)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response(
+            {"error": "json", "message": "Ожидается JSON-объект."}, status=400
+        )
+    city, error = _crm_city(context, body=body)
+    if error is not None:
+        return error
+    try:
+        shift_id = int(request.match_info["shift_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "shift_id"}, status=400)
+    end_time = _valid_time(body.get("end_time"))
+    if not end_time:
+        return web.json_response(
+            {"error": "end_time", "message": "Укажите новое окончание в формате ЧЧ:ММ."},
+            status=400,
+        )
+    end_hour, end_minute = end_time.split(":", 1)
+    end_time = f"{int(end_hour):02d}:{end_minute}"
+
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA busy_timeout=15000")
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT s.*,u.full_name,u.telegram_username FROM shifts s "
+            "LEFT JOIN users u ON u.user_id=s.user_id AND u.city_id=s.city_id WHERE s.id=?",
+            (shift_id,),
+        )).fetchone()
+        shift = dict(row) if row else None
+        role_scope = _crm_scope_role(context)
+        if (not shift or shift.get("city_id") != city["id"] or
+                (role_scope and (shift.get("role") or "").casefold() != role_scope.casefold())):
+            await db.rollback()
+            return web.json_response(
+                {"error": "not_found", "message": "Смена не найдена в доступном городе."},
+                status=404,
+            )
+        if not shift.get("is_active"):
+            await db.rollback()
+            return web.json_response(
+                {"error": "already_closed", "message": "Эта смена уже завершена."}, status=409
+            )
+
+        tz = _city_tz(city)
+        now = datetime.now(tz)
+        start_at = _parse_datetime(shift.get("start_at"))
+        if not start_at and shift.get("start_time"):
+            start_at = _resolve_start_at(shift["start_time"], city, now)
+        if not start_at:
+            await db.rollback()
+            return web.json_response(
+                {"error": "start_at", "message": "У смены не найдено время начала."}, status=409
+            )
+        start_at = start_at.astimezone(tz)
+        if start_at > now + timedelta(minutes=2):
+            await db.rollback()
+            return web.json_response(
+                {"error": "not_started", "message": "Продлить можно только уже начатую смену."},
+                status=409,
+            )
+        hour, minute = map(int, end_time.split(":"))
+        target_end = datetime.combine(
+            start_at.date(), datetime.min.time(), tzinfo=tz
+        ).replace(hour=hour, minute=minute)
+        if target_end <= start_at:
+            target_end += timedelta(days=1)
+        duration = target_end - start_at
+        if duration > timedelta(hours=18):
+            await db.rollback()
+            return web.json_response(
+                {"error": "duration", "message": "Общая продолжительность смены не может превышать 18 часов."},
+                status=400,
+            )
+        if target_end <= now:
+            await db.rollback()
+            return web.json_response(
+                {"error": "end_time", "message": "Новое окончание должно быть позже текущего времени."},
+                status=400,
+            )
+
+        plan_row = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE actual_shift_id=? AND city_id=? "
+            "AND status='scheduled' ORDER BY id DESC LIMIT 1",
+            (shift_id, city["id"]),
+        )).fetchone()
+        plan = dict(plan_row) if plan_row else None
+        old_deadline = _parse_datetime(shift.get("auto_close_at"))
+        if not old_deadline and plan:
+            _, old_deadline = _planned_shift_times(plan, city)
+        if old_deadline:
+            old_deadline = old_deadline.astimezone(tz)
+            if target_end <= old_deadline:
+                await db.rollback()
+                return web.json_response(
+                    {"error": "extension", "message": "Новое окончание должно быть позже текущего."},
+                    status=409,
+                )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE shifts SET auto_close_at=?,end_reminder_sent_at=NULL WHERE id=? AND is_active=1",
+            (target_end.isoformat(), shift_id),
+        )
+        if plan:
+            await db.execute(
+                "UPDATE crm_planned_shifts SET end_time=?,updated_by=?,updated_at=? WHERE id=?",
+                (end_time, context["telegram_user"]["id"], now_iso, plan["id"]),
+            )
+        await db.execute(
+            "DELETE FROM crm_notification_outbox WHERE user_id=? "
+            "AND kind='shift_end_reminder' AND entity_id=?",
+            (shift["user_id"], shift_id),
+        )
+        after_row = await (await db.execute("SELECT * FROM shifts WHERE id=?", (shift_id,))).fetchone()
+        audit_id = await _crm_audit(
+            db, context, "shift.extend", "shift", shift_id, city["id"],
+            before=shift, after=dict(after_row) if after_row else None,
+        )
+        await _enqueue_crm_notification(
+            db, city["id"], shift["user_id"], "shift_extended_by_admin", audit_id,
+            {
+                "shift_id": shift_id,
+                "work_date": start_at.date().isoformat(),
+                "start_time": shift.get("start_time"),
+                "old_end_time": old_deadline.strftime("%H:%M") if old_deadline else None,
+                "end_time": end_time,
+                "district": shift.get("district") or "",
+                "admin_name": (context.get("user") or {}).get("full_name") or "Руководитель",
+            },
+        )
+        await db.commit()
+
+    _auto_close_wakeup.set()
+    _planned_shift_wakeup.set()
+    _notification_wakeup.set()
+    logger.info(
+        "Смена %s продлена через CRM администратором %s до %s",
+        shift_id, context["telegram_user"]["id"], target_end.isoformat(),
+    )
+    return web.json_response({
+        "ok": True,
+        "shift_id": shift_id,
+        "end_time": end_time,
+        "auto_close_at": target_end.isoformat(),
+        "duration_minutes": int(duration.total_seconds() // 60),
+        "planned_shift_updated": bool(plan),
+    })
+
+
 async def api_crm_trends(request):
     context, error = await _crm_admin(request)
     if error is not None: return error
@@ -9533,7 +9690,7 @@ async def api_crm_data_quality(request):
 
 async def _crm_audit(db, context, operation, entity_type, entity_id, city_id,
                      before=None, after=None):
-    await db.execute(
+    cursor = await db.execute(
         "INSERT INTO admin_audit_log (admin_user_id, city_id, operation, entity_type, "
         "entity_id, before_json, after_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (context["telegram_user"]["id"], city_id, operation, entity_type, str(entity_id),
@@ -9541,6 +9698,7 @@ async def _crm_audit(db, context, operation, entity_type, entity_id, city_id,
          json.dumps(after, ensure_ascii=False, default=str) if after is not None else None,
          datetime.now(timezone.utc).isoformat()),
     )
+    return cursor.lastrowid
 
 
 def _crm_segment_from_time(value):
@@ -11799,6 +11957,18 @@ def _crm_notification_text(kind, payload):
         lines.extend(["", "Если хотите поработать дольше — измените окончание смены в приложении.",
                       "Проверьте, что все действия и результаты задач отправлены."])
         return "\n".join(lines)
+    if kind == "shift_extended_by_admin":
+        lines = [
+            "🕒 Смена продлена руководителем", "",
+            f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
+            f"🕒 Новое окончание: {payload.get('end_time') or '—'}",
+        ]
+        if payload.get("old_end_time"):
+            lines.append(f"Было запланировано: {payload.get('old_end_time')}")
+        if district:
+            lines.append(f"📍 Район: {district}")
+        lines.extend(["", "Что дальше", "Продолжайте работу как обычно — бот закроет смену в новое время."])
+        return "\n".join(lines)
     if kind == "shift_auto_started":
         lines = ["🟢 Смена открыта автоматически", "",
                  f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
@@ -11863,7 +12033,7 @@ async def deliver_crm_notifications_once(limit=50):
         if row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
             button_text = "🗂 Открыть CRM"
         elif row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
-                             "shift_auto_started", "shift_plan_changed"}:
+                             "shift_auto_started", "shift_plan_changed", "shift_extended_by_admin"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
@@ -13096,6 +13266,7 @@ async def start_api_server():
         app.router.add_patch("/api/admin/crm/calendar-roster", api_crm_calendar_roster_update)
         app.router.add_get("/api/admin/crm/shifts", api_crm_shifts)
         app.router.add_post("/api/admin/crm/shifts/{shift_id}/close", api_crm_shift_close)
+        app.router.add_patch("/api/admin/crm/shifts/{shift_id}/extend", api_crm_shift_extend)
         app.router.add_get("/api/admin/crm/trends", api_crm_trends)
         app.router.add_get("/api/admin/crm/activity", api_crm_activity)
         app.router.add_get("/api/admin/crm/operational-signals", api_crm_operational_signals)

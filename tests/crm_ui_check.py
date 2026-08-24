@@ -19,12 +19,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRM_PATH = os.path.join(ROOT, "crm.html")
 
 # Строки, без которых CRM ломается молча: маршрут карты, её очистка при уходе
-# с экрана и управление архивом сотрудника.
+# с экрана, управление архивом, подсказка календаря и продление смены.
 REQUIRED = (
     'data-route="map"',
     'id="page-map"',
     'if(state.route==="map"&&route!=="map")destroyMap()',
     "/statistics-visibility",
+    'data-calendar-guide',
+    'id="extendShiftModal"',
+    '/extend`,{method:\'PATCH\'',
 )
 
 
@@ -65,7 +68,7 @@ def main():
                 sys.stderr.write(result.stderr)
                 raise SystemExit("CRM UI: ошибка синтаксиса JavaScript в crm.html")
 
-    print("PASS CRM UI: JavaScript syntax, map route cleanup and archive controls")
+    print("PASS CRM UI: syntax, map fallback, calendar guide and shift extension")
 
 
 if __name__ == "__main__":

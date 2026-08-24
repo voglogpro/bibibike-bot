@@ -110,6 +110,7 @@ async def run():
              (910002, "Водитель Один", "Водитель", city["id"]),
              (910004, "Скаут Для Закрытия", "Скаут", city["id"]),
              (910006, "Календарный Тест", "Скаут", city["id"]),
+             (910008, "Скаут Для Продления", "Скаут", city["id"]),
              (920004, "Сотрудник Другого Города", "Скаут", other_city["id"])],
         )
         await db.execute(
@@ -139,6 +140,35 @@ async def run():
              active_start.isoformat(), city["id"], active_start.isoformat(), None),
         )
         active_shift_id = cur.lastrowid
+        extension_start = (datetime.now(bot._city_tz(city)) - timedelta(hours=2)).replace(
+            second=0, microsecond=0
+        )
+        extension_old_end = extension_start + timedelta(hours=8)
+        extension_new_end = extension_start + timedelta(hours=10)
+        cur = await db.execute(
+            "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,is_active,created_at,"
+            "city_id,start_at,end_at,source,auto_close_at,end_reminder_sent_at) "
+            "VALUES (?,?,?,?,?,1,?,?,?,?, 'crm_auto',?,?)",
+            (910008, "Скаут Для Продления", "Скаут", extension_start.strftime("%H:%M"), None,
+             extension_start.isoformat(), city["id"], extension_start.isoformat(), None,
+             extension_old_end.isoformat(), now_iso),
+        )
+        extension_shift_id = cur.lastrowid
+        cur = await db.execute(
+            "INSERT INTO crm_planned_shifts (city_id,work_date,start_time,end_time,user_id,role,"
+            "district,note,work_kind,status,created_by,created_at,updated_by,updated_at,actual_shift_id) "
+            "VALUES (?,?,?,?,?,NULL,?,'','regular','scheduled',?,?,?,?,?)",
+            (city["id"], extension_start.date().isoformat(), extension_start.strftime("%H:%M"),
+             extension_old_end.strftime("%H:%M"), 910008, "Центр", 900002, now_iso,
+             900002, now_iso, extension_shift_id),
+        )
+        extension_plan_id = cur.lastrowid
+        await db.execute(
+            "INSERT INTO crm_notification_outbox (city_id,user_id,kind,entity_id,payload_json,status,"
+            "attempt_count,next_attempt_at,created_at) VALUES (?,?, 'shift_end_reminder',?, '{}',"
+            "'sent',0,?,?)",
+            (city["id"], 910008, extension_shift_id, now_iso, now_iso),
+        )
         other_start = datetime.now(bot._city_tz(other_city)) - timedelta(hours=3)
         cur = await db.execute(
             "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,is_active,created_at,"
@@ -152,6 +182,45 @@ async def run():
     base_counts = await counts()
     network_token, _ = bot._issue_admin_token(900001, 1)
     scout_token, _ = bot._issue_admin_token(900002, 1)
+
+    # Активную смену можно только продлить: обновляются дедлайн, календарь и уведомление.
+    extended = await bot.api_crm_shift_extend(Request(
+        900002, body={"city_id": city["id"], "end_time": extension_new_end.strftime("%H:%M")},
+        match={"shift_id": str(extension_shift_id)}, admin_token=scout_token, method="PATCH",
+    ))
+    assert extended.status == 200, extended.text
+    assert payload(extended)["planned_shift_updated"] is True
+    repeated = await bot.api_crm_shift_extend(Request(
+        900002, body={"city_id": city["id"], "end_time": extension_new_end.strftime("%H:%M")},
+        match={"shift_id": str(extension_shift_id)}, admin_token=scout_token, method="PATCH",
+    ))
+    assert repeated.status == 409
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        extended_row = await (await db.execute(
+            "SELECT auto_close_at,end_reminder_sent_at FROM shifts WHERE id=?", (extension_shift_id,)
+        )).fetchone()
+        plan_end = (await (await db.execute(
+            "SELECT end_time FROM crm_planned_shifts WHERE id=?", (extension_plan_id,)
+        )).fetchone())[0]
+        reminder_count = (await (await db.execute(
+            "SELECT COUNT(*) FROM crm_notification_outbox WHERE user_id=? "
+            "AND kind='shift_end_reminder' AND entity_id=?", (910008, extension_shift_id)
+        )).fetchone())[0]
+        extension_notice = await (await db.execute(
+            "SELECT payload_json FROM crm_notification_outbox WHERE user_id=? "
+            "AND kind='shift_extended_by_admin'", (910008,)
+        )).fetchone()
+        extension_audit = (await (await db.execute(
+            "SELECT COUNT(*) FROM admin_audit_log WHERE operation='shift.extend' AND entity_id=?",
+            (str(extension_shift_id),),
+        )).fetchone())[0]
+    assert datetime.fromisoformat(extended_row[0]) == extension_new_end
+    assert extended_row[1] is None and plan_end == extension_new_end.strftime("%H:%M")
+    assert reminder_count == 0 and extension_notice and extension_audit == 1
+    extension_text = bot._crm_notification_text(
+        "shift_extended_by_admin", json.loads(extension_notice[0])
+    )
+    assert "Смена продлена" in extension_text and extension_new_end.strftime("%H:%M") in extension_text
 
     # Руководитель может закрыть только активную смену доступного города и роли.
     no_confirm = await bot.api_crm_shift_close(Request(

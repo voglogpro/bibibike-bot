@@ -249,7 +249,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-23 · отмена задачи чистит личные сообщения, увольнение в CRM"
+BUILD_VERSION = "2026-08-24 · уведомления руководителей о сменах и обеде"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -933,6 +933,28 @@ async def init_db():
                 user_id INTEGER NOT NULL,
                 city_id INTEGER NOT NULL,
                 PRIMARY KEY (user_id, city_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_notification_settings (
+                user_id INTEGER PRIMARY KEY,
+                notify_shift_end INTEGER NOT NULL DEFAULT 1,
+                notify_lunch_start INTEGER NOT NULL DEFAULT 1,
+                notify_lunch_end INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_lifecycle_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shift_id INTEGER NOT NULL,
+                city_id INTEGER NOT NULL,
+                employee_user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN ('shift_ended', 'lunch_started', 'lunch_ended')
+                ),
+                event_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         await db.execute("""
@@ -2401,7 +2423,8 @@ async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_overri
         if cursor.rowcount != 1:
             await db.rollback()
             return None
-        await db.commit()
+        await _safe_enqueue_admin_lifecycle_notifications(db, shift, "shift_ended", end_at)
+        await _commit_and_wake(db, _notification_wakeup)
         sid = shift["id"]
     _wake_closed_shift()
     # === НОВОЕ: заморозить заработок закрытой смены ===
@@ -3859,6 +3882,13 @@ def build_report_text(shift, stats):
     report += "\n"
 
     if closed:
+        report_city = get_city(shift.get("city_id")) or get_default_city()
+        completed_at = _parse_datetime(shift.get("end_at"))
+        if completed_at:
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=_city_tz(report_city))
+            completed_date = completed_at.astimezone(_city_tz(report_city)).strftime("%d.%m.%Y")
+            report += f"Дата завершения: {completed_date}\n"
         report += f"Закончил: {html.escape(shift['end_time'])}\n"
         report += f"Отработано: {_duration_shift(shift)}\n"
 
@@ -6640,17 +6670,31 @@ async def api_shift_lunch(request):
             status=409,
         )
 
+    desired = 1 if active else 0
+    event_at = datetime.now(_city_tz(get_city(shift.get("city_id")) or get_default_city()))
     async with db_connect() as db:
         cursor = await db.execute(
-            "UPDATE shifts SET on_lunch = ? WHERE id = ? AND is_active = 1",
-            (1 if active else 0, shift["id"]),
+            "UPDATE shifts SET on_lunch = ? WHERE id = ? AND is_active = 1 "
+            "AND COALESCE(on_lunch,0) <> ?",
+            (desired, shift["id"], desired),
         )
         if cursor.rowcount != 1:
+            fresh = await (await db.execute(
+                "SELECT is_active,on_lunch FROM shifts WHERE id=?", (shift["id"],)
+            )).fetchone()
             await db.rollback()
+            if fresh and fresh[0] and int(fresh[1] or 0) == desired:
+                return web.json_response({
+                    "ok": True, "on_lunch": active, "report_updated": True,
+                    "unchanged": True,
+                })
             return web.json_response(
                 {"error": "not_active", "message": "Смена уже закрыта."}, status=409
             )
-        await db.commit()
+        await _safe_enqueue_admin_lifecycle_notifications(
+            db, shift, "lunch_started" if active else "lunch_ended", event_at,
+        )
+        await _commit_and_wake(db, _notification_wakeup)
 
     report_ok = await safe_flush_report_update(shift["id"])
     logger.info(
@@ -7005,9 +7049,11 @@ async def _auto_close_shift(shift):
             "WHERE id = ? AND is_active = 1",
             (end_time, deadline.isoformat(), shift["id"])
         )
-        await db.commit()
         if cur.rowcount != 1:
+            await db.rollback()
             return
+        await _safe_enqueue_admin_lifecycle_notifications(db, shift, "shift_ended", deadline)
+        await _commit_and_wake(db, _notification_wakeup)
     _wake_closed_shift()
     await freeze_earned(shift["id"])
     await safe_flush_report_update(shift["id"])
@@ -10324,6 +10370,80 @@ async def api_crm_context(request):
     })
 
 
+ADMIN_NOTIFICATION_SETTING_FIELDS = (
+    "notify_shift_end", "notify_lunch_start", "notify_lunch_end",
+)
+
+
+async def _admin_notification_settings(user_id):
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT notify_shift_end,notify_lunch_start,notify_lunch_end,updated_at "
+            "FROM admin_notification_settings WHERE user_id=?", (int(user_id),)
+        )).fetchone()
+    if not row:
+        return {
+            "notify_shift_end": True,
+            "notify_lunch_start": True,
+            "notify_lunch_end": True,
+            "updated_at": None,
+        }
+    return {
+        "notify_shift_end": bool(row["notify_shift_end"]),
+        "notify_lunch_start": bool(row["notify_lunch_start"]),
+        "notify_lunch_end": bool(row["notify_lunch_end"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+async def api_crm_notification_settings(request):
+    """Reads or changes only the signed-in administrator's bot alerts."""
+    context, error = await _crm_admin(request)
+    if error is not None:
+        return error
+    user_id = context["telegram_user"]["id"]
+    if request.method == "GET":
+        settings = await _admin_notification_settings(user_id)
+        return web.json_response({
+            "ok": True,
+            "eligible": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
+            "settings": settings,
+        })
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response(
+            {"error": "json", "message": "Ожидается JSON-объект."}, status=400
+        )
+    provided = {field: body[field] for field in ADMIN_NOTIFICATION_SETTING_FIELDS if field in body}
+    if not provided or any(not isinstance(value, bool) for value in provided.values()):
+        return web.json_response(
+            {"error": "settings", "message": "Передайте переключатели true или false."},
+            status=400,
+        )
+    before = await _admin_notification_settings(user_id)
+    after = {**before, **provided}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    after["updated_at"] = now_iso
+    async with db_connect() as db:
+        await db.execute(
+            "INSERT INTO admin_notification_settings "
+            "(user_id,notify_shift_end,notify_lunch_start,notify_lunch_end,updated_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+            "notify_shift_end=excluded.notify_shift_end,"
+            "notify_lunch_start=excluded.notify_lunch_start,"
+            "notify_lunch_end=excluded.notify_lunch_end,updated_at=excluded.updated_at",
+            (user_id, int(after["notify_shift_end"]), int(after["notify_lunch_start"]),
+             int(after["notify_lunch_end"]), now_iso),
+        )
+        await _crm_audit(
+            db, context, "notification_settings.update", "admin_account", user_id, None,
+            before=before, after=after,
+        )
+        await db.commit()
+    return web.json_response({"ok": True, "settings": after})
+
+
 async def _crm_target_users(db, city_id, target_type, user_id=None, role=None, role_scope=None):
     db.row_factory = aiosqlite.Row
     if target_type == "user":
@@ -10381,6 +10501,100 @@ async def _enqueue_crm_notification(db, city_id, user_id, kind, entity_id, paylo
         (city_id, user_id, kind, entity_id,
          json.dumps(payload, ensure_ascii=False, default=str), now_iso, now_iso),
     )
+
+
+ADMIN_LIFECYCLE_NOTIFICATION_COLUMNS = {
+    "shift_ended": "notify_shift_end",
+    "lunch_started": "notify_lunch_start",
+    "lunch_ended": "notify_lunch_end",
+}
+
+
+async def _enqueue_admin_lifecycle_notifications(db, shift, event_type, event_at):
+    """Queues one lifecycle event for matching city managers and senior scouts.
+
+    The event and every outbox row live in the caller's transaction. A Telegram
+    outage therefore cannot roll back the employee action, and retries remain
+    idempotent for every recipient.
+    """
+    setting_column = ADMIN_LIFECYCLE_NOTIFICATION_COLUMNS.get(event_type)
+    if not setting_column:
+        raise ValueError(f"Unknown admin lifecycle event: {event_type}")
+    shift = dict(shift)
+    city_id = int(shift["city_id"])
+    employee_user_id = int(shift["user_id"])
+    city = get_city(city_id) or get_default_city()
+    parsed_event_at = _parse_datetime(event_at) if not isinstance(event_at, datetime) else event_at
+    if parsed_event_at is None:
+        parsed_event_at = datetime.now(_city_tz(city))
+    elif parsed_event_at.tzinfo is None:
+        parsed_event_at = parsed_event_at.replace(tzinfo=_city_tz(city))
+    local_event_at = parsed_event_at.astimezone(_city_tz(city))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_cursor = await db.execute(
+        "INSERT INTO admin_lifecycle_events "
+        "(shift_id,city_id,employee_user_id,event_type,event_at,created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (shift["id"], city_id, employee_user_id, event_type,
+         local_event_at.isoformat(), now_iso),
+    )
+    event_id = event_cursor.lastrowid
+    db.row_factory = aiosqlite.Row
+    recipients = await (await db.execute(
+        "SELECT DISTINCT a.user_id FROM admin_accounts a "
+        "LEFT JOIN admin_city_permissions cp ON cp.user_id=a.user_id AND cp.city_id=? "
+        "LEFT JOIN admin_notification_settings ns ON ns.user_id=a.user_id "
+        "WHERE a.is_active=1 AND a.role IN ('city_manager','network_admin') "
+        "AND (a.role='network_admin' OR cp.user_id IS NOT NULL) "
+        "AND (a.role_scope IS NULL OR TRIM(a.role_scope)='' "
+        "OR LOWER(a.role_scope)=LOWER(?)) "
+        f"AND COALESCE(ns.{setting_column},1)=1 AND a.user_id<>?",
+        (city_id, shift.get("role") or "", employee_user_id),
+    )).fetchall()
+    profile = await (await db.execute(
+        "SELECT telegram_username FROM users WHERE user_id=?", (employee_user_id,)
+    )).fetchone()
+    payload = {
+        "event_id": event_id,
+        "shift_id": shift["id"],
+        "employee_user_id": employee_user_id,
+        "employee_name": shift.get("full_name") or f"Сотрудник #{employee_user_id}",
+        "employee_username": profile["telegram_username"] if profile else "",
+        "role": shift.get("role") or "",
+        "city_name": city.get("name") or "Город",
+        "district": shift.get("district") or "",
+        "event_date": local_event_at.strftime("%d.%m.%Y"),
+        "event_time": local_event_at.strftime("%H:%M"),
+        "start_time": shift.get("start_time") or "",
+        "end_time": (local_event_at.strftime("%H:%M") if event_type == "shift_ended"
+                     else shift.get("end_time") or ""),
+    }
+    kind = f"admin_{event_type}"
+    for recipient in recipients:
+        await _enqueue_crm_notification(
+            db, city_id, recipient["user_id"], kind, event_id, payload,
+        )
+    return len(recipients)
+
+
+async def _safe_enqueue_admin_lifecycle_notifications(db, shift, event_type, event_at):
+    """Keeps lifecycle alerts best-effort without risking the shift action itself."""
+    savepoint = "admin_lifecycle_notification"
+    await db.execute(f"SAVEPOINT {savepoint}")
+    try:
+        queued = await _enqueue_admin_lifecycle_notifications(
+            db, shift, event_type, event_at,
+        )
+    except Exception:
+        await db.execute(f"ROLLBACK TO {savepoint}")
+        await db.execute(f"RELEASE {savepoint}")
+        logger.exception(
+            "Не удалось поставить уведомление руководителям: событие=%s смена=%s",
+            event_type, dict(shift).get("id"),
+        )
+        return 0
+    await db.execute(f"RELEASE {savepoint}")
+    return queued
 
 
 # Окно склейки правок одной смены. Руководитель часто дооформляет карточку
@@ -11481,6 +11695,30 @@ def _crm_notification_text(kind, payload):
             lines.append(f"🧭 Сотрудники роли: {payload['role_scope']}")
         lines.extend(["", "Откройте приложение и перейдите в CRM."])
         return "\n".join(lines)
+    if kind in {"admin_shift_ended", "admin_lunch_started", "admin_lunch_ended"}:
+        headings = {
+            "admin_shift_ended": "🔴 СОТРУДНИК ЗАВЕРШИЛ СМЕНУ",
+            "admin_lunch_started": "🍽 СОТРУДНИК ВЫШЕЛ НА ОБЕД",
+            "admin_lunch_ended": "🟢 СОТРУДНИК ЗАКОНЧИЛ ОБЕД",
+        }
+        name = str(payload.get("employee_name") or "Сотрудник")
+        username = str(payload.get("employee_username") or "").strip().lstrip("@")
+        role = str(payload.get("role") or "").strip()
+        person = name + (f" (@{username})" if username else "")
+        lines = [
+            headings[kind], "",
+            f"👤 {person}" + (f" · {role}" if role else ""),
+            f"🏙 {payload.get('city_name') or 'Город'}",
+            f"📅 {payload.get('event_date') or '—'} · {payload.get('event_time') or '—'}",
+        ]
+        if district:
+            lines.append(f"📍 Район: {district}")
+        if kind == "admin_shift_ended":
+            lines.append(
+                f"🕒 Смена: {payload.get('start_time') or '—'}–{payload.get('end_time') or '—'}"
+            )
+        lines.extend(["", "Подробности доступны в CRM."])
+        return "\n".join(lines)
     if kind == "planned_shift":
         is_extra = payload.get("work_kind") == "extra"
         lines = ["💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА", "",
@@ -11621,8 +11859,10 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
-        if row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
-                           "shift_auto_started", "shift_plan_changed"}:
+        if row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
+            button_text = "🗂 Открыть CRM"
+        elif row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
+                             "shift_auto_started", "shift_plan_changed"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
@@ -12832,6 +13072,12 @@ async def start_api_server():
         # CRM: маршруты с фиксированными суффиксами регистрируются раньше
         # динамических /{task_id}, чтобы aiohttp не принял имя за ID.
         app.router.add_get("/api/admin/crm/context", api_crm_context)
+        app.router.add_get(
+            "/api/admin/crm/notification-settings", api_crm_notification_settings
+        )
+        app.router.add_patch(
+            "/api/admin/crm/notification-settings", api_crm_notification_settings
+        )
         app.router.add_get("/api/admin/crm/overview", api_crm_overview)
         app.router.add_get("/api/admin/crm/employees", api_crm_employees)
         app.router.add_get("/api/admin/crm/payroll", api_crm_payroll)

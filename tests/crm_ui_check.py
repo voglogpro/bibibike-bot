@@ -29,6 +29,10 @@ REQUIRED = (
     'calendar-guide-modal',
     'id="extendShiftModal"',
     '/extend`,{method:\'PATCH\'',
+    'data-map-tool="zone-edit"',
+    'text/map-employee',
+    '/annotations`,{method:\'POST\'',
+    'renderMapVertexHandles',
 )
 
 
@@ -69,7 +73,7 @@ def main():
                 sys.stderr.write(result.stderr)
                 raise SystemExit("CRM UI: ошибка синтаксиса JavaScript в crm.html")
 
-    print("PASS CRM UI: syntax, map fallback, calendar guide and shift extension")
+    print("PASS CRM UI: syntax, editable map, drag roster, calendar guide and shift extension")
 
 
 if __name__ == "__main__":

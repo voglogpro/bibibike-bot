@@ -45,7 +45,7 @@ import shutil
 import aiosqlite
 from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qsl
-from aiohttp import web
+from aiohttp import web, ClientSession, ClientTimeout
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import BaseFilter, Command
 from aiogram.types import (
@@ -90,6 +90,10 @@ DEFAULT_CITY_NAME = "Краснодар"
 CITIES_CONFIG_JSON = os.getenv("CITIES_CONFIG_JSON", "").strip()
 MAPTILER_API_KEY = os.getenv("MAPTILER_API_KEY", "").strip()
 BIKE_PROVIDER_API_URL = os.getenv("BIKE_PROVIDER_API_URL", "").strip()
+BIKE_PROVIDER_API_TOKEN = os.getenv("BIKE_PROVIDER_API_TOKEN", "").strip()
+BIKE_PROVIDER_REFRESH_SEC = max(5, min(
+    300, int(os.getenv("BIKE_PROVIDER_REFRESH_SEC", "15"))
+))
 
 # ============================================================
 # ГОРОДА TELEGRAM
@@ -249,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-24 · уведомления руководителей только своего города"
+BUILD_VERSION = "2026-08-24 · операционная карта районов и задач"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1223,6 +1227,26 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_map_annotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                work_date TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('marker', 'arrow')),
+                geometry_json TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT '#ff5d66',
+                assigned_user_id INTEGER,
+                task_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (
+                    status IN ('active', 'done', 'cancelled')
+                ),
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_by INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS network_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -1679,6 +1703,10 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_map_directives_city_date_status "
             "ON crm_map_bike_directives(city_id, work_date, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_map_annotations_city_date_status "
+            "ON crm_map_annotations(city_id, work_date, status, id)"
         )
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_creator_request "
@@ -8619,6 +8647,168 @@ def _crm_map_supported(city):
     return _city_key(city) == DEFAULT_CITY_KEY
 
 
+def _crm_map_polygon(raw_geometry):
+    """Validate and normalize one editable GeoJSON polygon."""
+    if isinstance(raw_geometry, str):
+        try:
+            raw_geometry = json.loads(raw_geometry)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(raw_geometry, dict) or raw_geometry.get("type") != "Polygon":
+        return None
+    coordinates = raw_geometry.get("coordinates")
+    if not isinstance(coordinates, list) or not coordinates or not isinstance(coordinates[0], list):
+        return None
+    points = []
+    for raw_point in coordinates[0][:251]:
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+            return None
+        try:
+            lng, lat = float(raw_point[0]), float(raw_point[1])
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90):
+            return None
+        point = [round(lng, 7), round(lat, 7)]
+        if not points or point != points[-1]:
+            points.append(point)
+    if len(points) > 1 and points[0] == points[-1]:
+        points.pop()
+    if len(points) < 3 or len({tuple(point) for point in points}) < 3 or len(points) > 250:
+        return None
+    points.append(list(points[0]))
+    return {"type": "Polygon", "coordinates": [points]}
+
+
+def _crm_map_annotation_geometry(kind, raw_geometry):
+    if isinstance(raw_geometry, str):
+        try:
+            raw_geometry = json.loads(raw_geometry)
+        except (TypeError, ValueError):
+            return None
+    expected = "Point" if kind == "marker" else "LineString"
+    if not isinstance(raw_geometry, dict) or raw_geometry.get("type") != expected:
+        return None
+    coordinates = raw_geometry.get("coordinates")
+    raw_points = [coordinates] if kind == "marker" else coordinates
+    if not isinstance(raw_points, list) or len(raw_points) != (1 if kind == "marker" else 2):
+        return None
+    points = []
+    for raw_point in raw_points:
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+            return None
+        try:
+            lng, lat = float(raw_point[0]), float(raw_point[1])
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90):
+            return None
+        points.append([round(lng, 7), round(lat, 7)])
+    return {"type": expected, "coordinates": points[0] if kind == "marker" else points}
+
+
+def _crm_bike_feature(raw, index):
+    if not isinstance(raw, dict):
+        return None
+    geometry = raw.get("geometry") if isinstance(raw.get("geometry"), dict) else None
+    coordinates = geometry.get("coordinates") if geometry and geometry.get("type") == "Point" else None
+    properties = dict(raw.get("properties") or {}) if isinstance(raw.get("properties"), dict) else dict(raw)
+    if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+        lng = properties.get("lng", properties.get("lon", properties.get("longitude")))
+        lat = properties.get("lat", properties.get("latitude"))
+        position = properties.get("position")
+        if (lng is None or lat is None) and isinstance(position, dict):
+            lng = position.get("lng", position.get("lon", position.get("longitude")))
+            lat = position.get("lat", position.get("latitude"))
+        coordinates = [lng, lat]
+    try:
+        lng, lat = float(coordinates[0]), float(coordinates[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90):
+        return None
+    external_id = (
+        properties.get("bike_external_id") or properties.get("bike_id")
+        or properties.get("external_id") or properties.get("code")
+        or properties.get("id") or raw.get("id") or index
+    )
+    properties.update({"bike_external_id": str(external_id)})
+    return {
+        "type": "Feature", "id": str(external_id),
+        "geometry": {"type": "Point", "coordinates": [lng, lat]},
+        "properties": properties,
+    }
+
+
+def _crm_bike_collection(raw):
+    if isinstance(raw, dict) and raw.get("type") == "FeatureCollection":
+        items = raw.get("features") or []
+    elif isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict):
+        items = raw.get("bikes", raw.get("items", raw.get("data", [])))
+        if isinstance(items, dict) and items.get("type") == "FeatureCollection":
+            items = items.get("features") or []
+        elif isinstance(items, dict):
+            items = items.get("items", items.get("bikes", []))
+    else:
+        items = []
+    features = [feature for index, item in enumerate(items if isinstance(items, list) else [])
+                if (feature := _crm_bike_feature(item, index))]
+    return {"type": "FeatureCollection", "features": features}
+
+
+_crm_bike_cache = {}
+_crm_bike_locks = {}
+
+
+async def _crm_live_bikes(city):
+    empty = {"type": "FeatureCollection", "features": []}
+    if not BIKE_PROVIDER_API_URL:
+        return empty, {"configured": False, "status": "awaiting_api",
+                       "refresh_seconds": BIKE_PROVIDER_REFRESH_SEC}
+    city_id = int(city["id"])
+    cached = _crm_bike_cache.get(city_id)
+    if cached and time.monotonic() - cached["loaded"] < BIKE_PROVIDER_REFRESH_SEC:
+        return cached["collection"], dict(cached["provider"], cached=True)
+    lock = _crm_bike_locks.setdefault(city_id, asyncio.Lock())
+    async with lock:
+        cached = _crm_bike_cache.get(city_id)
+        if cached and time.monotonic() - cached["loaded"] < BIKE_PROVIDER_REFRESH_SEC:
+            return cached["collection"], dict(cached["provider"], cached=True)
+        url = BIKE_PROVIDER_API_URL.replace("{city_id}", str(city_id)).replace(
+            "{city_key}", _city_key(city)
+        )
+        headers = ({"Authorization": f"Bearer {BIKE_PROVIDER_API_TOKEN}"}
+                   if BIKE_PROVIDER_API_TOKEN else {})
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=8)) as session:
+                async with session.get(url, headers=headers) as response:
+                    response.raise_for_status()
+                    raw = await response.json(content_type=None)
+            collection = _crm_bike_collection(raw)
+            provider = {
+                "configured": True, "status": "live",
+                "refresh_seconds": BIKE_PROVIDER_REFRESH_SEC,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "count": len(collection["features"]),
+            }
+            _crm_bike_cache[city_id] = {
+                "loaded": time.monotonic(), "collection": collection, "provider": provider,
+            }
+            return collection, provider
+        except Exception as exc:
+            logger.warning("API байков недоступен для города %s: %s", city_id, exc)
+            if cached:
+                return cached["collection"], dict(
+                    cached["provider"], status="stale", error=str(exc)[:300], cached=True,
+                )
+            return empty, {
+                "configured": True, "status": "error", "error": str(exc)[:300],
+                "refresh_seconds": BIKE_PROVIDER_REFRESH_SEC,
+            }
+
+
 async def api_crm_map(request):
     context, error = await _crm_admin(request)
     if error is not None: return error
@@ -8639,14 +8829,20 @@ async def api_crm_map(request):
             "ORDER BY sort_order,name", (city["id"],)
         )).fetchall()
         employee_sql = (
-            "SELECT user_id,full_name,role,telegram_username FROM users WHERE city_id=? "
-            "AND COALESCE(statistics_visible,1)=1"
+            "SELECT u.user_id,u.full_name,u.role,u.telegram_username,p.id AS plan_id,"
+            "p.start_time,p.end_time,p.district,p.work_kind "
+            "FROM users u JOIN crm_planned_shifts p ON p.id=("
+            "SELECT candidate.id FROM crm_planned_shifts candidate "
+            "WHERE candidate.city_id=u.city_id AND candidate.user_id=u.user_id "
+            "AND candidate.work_date=? AND candidate.status='scheduled' "
+            "AND candidate.auto_closed_at IS NULL ORDER BY candidate.start_time,candidate.id LIMIT 1) "
+            "WHERE u.city_id=? AND COALESCE(u.statistics_visible,1)=1"
         )
-        employee_params = [city["id"]]
+        employee_params = [work_date.isoformat(), city["id"]]
         if role_scope:
-            employee_sql += " AND LOWER(role)=LOWER(?)"
+            employee_sql += " AND LOWER(u.role)=LOWER(?)"
             employee_params.append(role_scope)
-        employee_sql += " ORDER BY full_name COLLATE NOCASE"
+        employee_sql += " ORDER BY u.full_name COLLATE NOCASE"
         employees = await (await db.execute(employee_sql, employee_params)).fetchall()
         assignment_sql = (
             "SELECT a.*,u.full_name,u.role,t.title AS task_title "
@@ -8695,6 +8891,13 @@ async def api_crm_map(request):
             "SELECT * FROM crm_map_bike_directives WHERE city_id=? AND work_date=? "
             "AND status='active' ORDER BY id", (city["id"], work_date.isoformat())
         )).fetchall()
+        annotations = await (await db.execute(
+            "SELECT a.*,u.full_name AS assigned_name,u.role AS assigned_role "
+            "FROM crm_map_annotations a LEFT JOIN users u ON u.user_id=a.assigned_user_id "
+            "AND u.city_id=a.city_id WHERE a.city_id=? AND a.work_date=? "
+            "AND a.status='active' ORDER BY a.id",
+            (city["id"], work_date.isoformat()),
+        )).fetchall()
     features = []
     for row in zones:
         try:
@@ -8705,6 +8908,18 @@ async def api_crm_map(request):
             "type": "Feature", "id": int(row["id"]), "geometry": geometry,
             "properties": {"id": int(row["id"]), "name": row["name"], "color": row["color"]},
         })
+    annotation_items = []
+    for row in annotations:
+        item = dict(row)
+        if role_scope and item.get("assigned_user_id") and \
+                (item.get("assigned_role") or "").casefold() != role_scope.casefold():
+            continue
+        try:
+            item["geometry"] = json.loads(item.pop("geometry_json"))
+        except (TypeError, ValueError):
+            continue
+        annotation_items.append(item)
+    bikes, bike_provider = await _crm_live_bikes(city)
     return web.json_response({
         "city": {"id": city["id"], "name": city["name"]},
         "date": work_date.isoformat(), "supported": True,
@@ -8717,12 +8932,102 @@ async def api_crm_map(request):
         "employees": [dict(row) for row in employees],
         "tasks": [dict(row) for row in tasks],
         "assignments": [dict(row) for row in assignments],
-        "bikes": {"type": "FeatureCollection", "features": []},
-        "bike_provider": {
-            "configured": bool(BIKE_PROVIDER_API_URL),
-            "status": "ready_for_connection" if BIKE_PROVIDER_API_URL else "awaiting_api",
-        },
+        "bikes": bikes,
+        "bike_provider": bike_provider,
         "directives": [dict(row) for row in directives],
+        "annotations": annotation_items,
+    })
+
+
+async def api_crm_map_zone_create(request):
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error is not None: return error
+    if not _crm_map_supported(city):
+        return web.json_response({"error": "map_unavailable"}, status=409)
+    name = " ".join(str(body.get("name") or "").split())[:100]
+    color = str(body.get("color") or "#31cf42").strip().lower()
+    geometry = _crm_map_polygon(body.get("geometry"))
+    if not name or not geometry or not re.fullmatch(r"#[0-9a-f]{6}", color):
+        return web.json_response({
+            "error": "zone", "message": "Укажите название, цвет и минимум три точки зоны.",
+        }, status=400)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    admin_uid = context["telegram_user"]["id"]
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        sort_order = (await (await db.execute(
+            "SELECT COALESCE(MAX(sort_order),0)+1 FROM crm_map_zones WHERE city_id=?",
+            (city["id"],),
+        )).fetchone())[0]
+        cursor = await db.execute(
+            "INSERT INTO crm_map_zones "
+            "(city_id,name,color,geometry_json,is_active,sort_order,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,1,?,?,?,?,?)",
+            (city["id"], name, color, json.dumps(geometry, ensure_ascii=False), sort_order,
+             admin_uid, now_iso, admin_uid, now_iso),
+        )
+        row = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE id=?", (cursor.lastrowid,)
+        )).fetchone()
+        await _crm_audit(db, context, "map.zone.create", "map_zone", row["id"],
+                         city["id"], after=dict(row))
+        await db.commit()
+    return web.json_response({
+        "ok": True,
+        "zone": {"type": "Feature", "id": row["id"], "geometry": geometry,
+                 "properties": {"id": row["id"], "name": name, "color": color}},
+    }, status=201)
+
+
+async def api_crm_map_zone_update(request):
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error is not None: return error
+    try:
+        zone_id = int(request.match_info["zone_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "zone_id"}, status=400)
+    name = " ".join(str(body.get("name") or "").split())[:100]
+    color = str(body.get("color") or "#31cf42").strip().lower()
+    geometry = _crm_map_polygon(body.get("geometry"))
+    if not name or not geometry or not re.fullmatch(r"#[0-9a-f]{6}", color):
+        return web.json_response({
+            "error": "zone", "message": "Зона должна содержать название и минимум три точки.",
+        }, status=400)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    admin_uid = context["telegram_user"]["id"]
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        current = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE id=? AND city_id=? AND is_active=1",
+            (zone_id, city["id"]),
+        )).fetchone()
+        if not current:
+            await db.rollback()
+            return web.json_response({"error": "not_found"}, status=404)
+        await db.execute(
+            "UPDATE crm_map_zones SET name=?,color=?,geometry_json=?,updated_by=?,updated_at=? "
+            "WHERE id=?",
+            (name, color, json.dumps(geometry, ensure_ascii=False), admin_uid, now_iso, zone_id),
+        )
+        updated = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE id=?", (zone_id,)
+        )).fetchone()
+        await _crm_audit(db, context, "map.zone.update", "map_zone", zone_id,
+                         city["id"], before=dict(current), after=dict(updated))
+        await db.commit()
+    return web.json_response({
+        "ok": True,
+        "zone": {"type": "Feature", "id": zone_id, "geometry": geometry,
+                 "properties": {"id": zone_id, "name": name, "color": color}},
     })
 
 
@@ -8745,6 +9050,7 @@ async def api_crm_map_assignment_create(request):
     if not work_date:
         return web.json_response({"error": "date"}, status=400)
     note = str(body.get("note") or "").strip()[:2000]
+    refresh_shift_ids = []
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
@@ -8760,6 +9066,17 @@ async def api_crm_map_assignment_create(request):
                 (user["role"] or "").casefold() != _crm_scope_role(context).casefold()):
             await db.rollback()
             return web.json_response({"error": "scope", "message": "Зона или сотрудник недоступны."}, status=404)
+        plans = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE city_id=? AND work_date=? AND user_id=? "
+            "AND status='scheduled' AND auto_closed_at IS NULL ORDER BY start_time,id",
+            (city["id"], work_date.isoformat(), user_id),
+        )).fetchall()
+        if not plans:
+            await db.rollback()
+            return web.json_response({
+                "error": "schedule_required",
+                "message": "Сначала поставьте сотруднику смену в календаре на выбранную дату.",
+            }, status=409)
         if task_id is not None:
             task = await (await db.execute(
                 "SELECT id FROM crm_tasks WHERE id=? AND city_id=? AND status='published' "
@@ -8788,11 +9105,17 @@ async def api_crm_map_assignment_create(request):
                     status=400,
                 )
         current = await (await db.execute(
-            "SELECT * FROM crm_map_assignments WHERE zone_id=? AND work_date=? AND user_id=?",
-            (zone_id, work_date.isoformat(), user_id),
+            "SELECT * FROM crm_map_assignments WHERE city_id=? AND work_date=? AND user_id=? "
+            "ORDER BY id LIMIT 1",
+            (city["id"], work_date.isoformat(), user_id),
         )).fetchone()
         now_iso = datetime.now(timezone.utc).isoformat()
         admin_uid = context["telegram_user"]["id"]
+        await db.execute(
+            "DELETE FROM crm_map_assignments WHERE city_id=? AND work_date=? AND user_id=? "
+            "AND zone_id<>?",
+            (city["id"], work_date.isoformat(), user_id, zone_id),
+        )
         await db.execute(
             "INSERT INTO crm_map_assignments "
             "(city_id,zone_id,work_date,user_id,task_id,note,created_by,created_at,updated_by,updated_at) "
@@ -8802,6 +9125,28 @@ async def api_crm_map_assignment_create(request):
             (city["id"], zone_id, work_date.isoformat(), user_id, task_id, note,
              admin_uid, now_iso, admin_uid, now_iso),
         )
+        for plan in plans:
+            old_district = plan["district"] or ""
+            if old_district == zone["name"]:
+                continue
+            await db.execute(
+                "UPDATE crm_planned_shifts SET district=?,updated_by=?,updated_at=? WHERE id=?",
+                (zone["name"], admin_uid, now_iso, plan["id"]),
+            )
+            if plan["actual_shift_id"]:
+                actual_update = await db.execute(
+                    "UPDATE shifts SET district=? WHERE id=? AND user_id=? AND city_id=? "
+                    "AND is_active=1",
+                    (zone["name"], plan["actual_shift_id"], user_id, city["id"]),
+                )
+                if actual_update.rowcount:
+                    refresh_shift_ids.append(int(plan["actual_shift_id"]))
+            updated_plan = dict(plan)
+            updated_plan.update({"district": zone["name"], "updated_by": admin_uid,
+                                 "updated_at": now_iso})
+            await _enqueue_plan_change(
+                db, city["id"], user_id, plan["id"], ["district"], updated_plan,
+            )
         saved = await (await db.execute(
             "SELECT a.*,u.full_name,u.role,t.title AS task_title FROM crm_map_assignments a "
             "JOIN users u ON u.user_id=a.user_id AND u.city_id=a.city_id "
@@ -8813,7 +9158,9 @@ async def api_crm_map_assignment_create(request):
             db, context, "map.assignment.upsert", "map_assignment", saved["id"], city["id"],
             before=dict(current) if current else None, after=dict(saved),
         )
-        await db.commit()
+        await _commit_and_wake(db, _notification_wakeup)
+    for shift_id in set(refresh_shift_ids):
+        await safe_flush_report_update(shift_id)
     return web.json_response({"ok": True, "assignment": dict(saved)}, status=201 if not current else 200)
 
 
@@ -8824,12 +9171,14 @@ async def api_crm_map_assignment_delete(request):
         assignment_id = int(request.match_info["assignment_id"])
     except (KeyError, TypeError, ValueError):
         return web.json_response({"error": "assignment_id"}, status=400)
+    refresh_shift_ids = []
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
         current = await (await db.execute(
-            "SELECT a.*,u.role FROM crm_map_assignments a LEFT JOIN users u ON u.user_id=a.user_id "
-            "AND u.city_id=a.city_id "
+            "SELECT a.*,u.role,z.name AS zone_name FROM crm_map_assignments a "
+            "LEFT JOIN users u ON u.user_id=a.user_id AND u.city_id=a.city_id "
+            "LEFT JOIN crm_map_zones z ON z.id=a.zone_id AND z.city_id=a.city_id "
             "WHERE a.id=?", (assignment_id,),
         )).fetchone()
         if (not current or current["city_id"] not in context["allowed_city_ids"] or
@@ -8838,12 +9187,162 @@ async def api_crm_map_assignment_delete(request):
             await db.rollback()
             return web.json_response({"error": "not_found"}, status=404)
         await db.execute("DELETE FROM crm_map_assignments WHERE id=?", (assignment_id,))
+        plans = await (await db.execute(
+            "SELECT * FROM crm_planned_shifts WHERE city_id=? AND work_date=? AND user_id=? "
+            "AND status='scheduled' AND auto_closed_at IS NULL AND COALESCE(district,'')=?",
+            (current["city_id"], current["work_date"], current["user_id"],
+             current["zone_name"] or ""),
+        )).fetchall()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        admin_uid = context["telegram_user"]["id"]
+        for plan in plans:
+            await db.execute(
+                "UPDATE crm_planned_shifts SET district='',updated_by=?,updated_at=? WHERE id=?",
+                (admin_uid, now_iso, plan["id"]),
+            )
+            if plan["actual_shift_id"]:
+                actual_update = await db.execute(
+                    "UPDATE shifts SET district='' WHERE id=? AND user_id=? AND city_id=? "
+                    "AND is_active=1",
+                    (plan["actual_shift_id"], current["user_id"], current["city_id"]),
+                )
+                if actual_update.rowcount:
+                    refresh_shift_ids.append(int(plan["actual_shift_id"]))
+            updated_plan = dict(plan)
+            updated_plan.update({"district": "", "updated_by": admin_uid,
+                                 "updated_at": now_iso})
+            await _enqueue_plan_change(
+                db, current["city_id"], current["user_id"], plan["id"],
+                ["district"], updated_plan,
+            )
         await _crm_audit(
             db, context, "map.assignment.delete", "map_assignment", assignment_id,
             current["city_id"], before=dict(current), after=None,
         )
-        await db.commit()
+        await _commit_and_wake(db, _notification_wakeup)
+    for shift_id in set(refresh_shift_ids):
+        await safe_flush_report_update(shift_id)
     return web.json_response({"ok": True, "assignment_id": assignment_id})
+
+
+async def api_crm_map_annotation_create(request):
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    body = await _request_json_object(request)
+    if body is None: return web.json_response({"error": "json"}, status=400)
+    city, error = _crm_city(context, body=body)
+    if error is not None: return error
+    if not _crm_map_supported(city):
+        return web.json_response({"error": "map_unavailable"}, status=409)
+    work_date = _crm_date(body.get("date") or body.get("work_date"))
+    kind = str(body.get("kind") or "").strip().lower()
+    geometry = _crm_map_annotation_geometry(kind, body.get("geometry"))
+    color = str(body.get("color") or ("#ff5d66" if kind == "marker" else "#ffb32c")).lower()
+    note = " ".join(str(body.get("note") or "").split())[:500]
+    try:
+        assigned_user_id = (int(body["assigned_user_id"])
+                            if body.get("assigned_user_id") not in (None, "") else None)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "assigned_user_id"}, status=400)
+    if not work_date or kind not in {"marker", "arrow"} or not geometry \
+            or not re.fullmatch(r"#[0-9a-f]{6}", color):
+        return web.json_response({
+            "error": "annotation", "message": "Не удалось прочитать точку или стрелку.",
+        }, status=400)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    admin_uid = context["telegram_user"]["id"]
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        task_id = None
+        if assigned_user_id is not None:
+            employee = await (await db.execute(
+                "SELECT u.user_id,u.role FROM users u WHERE u.user_id=? AND u.city_id=? "
+                "AND COALESCE(u.statistics_visible,1)=1 AND EXISTS ("
+                "SELECT 1 FROM crm_planned_shifts p WHERE p.user_id=u.user_id "
+                "AND p.city_id=u.city_id AND p.work_date=? AND p.status='scheduled' "
+                "AND p.auto_closed_at IS NULL)",
+                (assigned_user_id, city["id"], work_date.isoformat()),
+            )).fetchone()
+            if not employee or (_crm_scope_role(context) and
+                    (employee["role"] or "").casefold() != _crm_scope_role(context).casefold()):
+                return web.json_response({
+                    "error": "employee", "message": "Сотрудник недоступен на выбранную дату.",
+                }, status=404)
+            assignment = await (await db.execute(
+                "SELECT z.name FROM crm_map_assignments a JOIN crm_map_zones z ON z.id=a.zone_id "
+                "AND z.city_id=a.city_id WHERE a.city_id=? AND a.work_date=? AND a.user_id=? "
+                "ORDER BY a.id LIMIT 1",
+                (city["id"], work_date.isoformat(), assigned_user_id),
+            )).fetchone()
+            task_title = (
+                ("Маркер на карте: " if kind == "marker" else "Направление на карте: ")
+                + (note or "задача руководителя")
+            )[:200]
+            task_description = note
+            task_cursor = await db.execute(
+                "INSERT INTO crm_tasks "
+                "(city_id,work_date,title,description,priority,status,created_by,created_at,"
+                "updated_by,updated_at,requires_photo,date_from,date_to,district,completion_mode,"
+                "created_via) VALUES (?,?,?,?,?,'draft',?,?,?,?,0,?,?,?,'manual','map')",
+                (city["id"], work_date.isoformat(), task_title, task_description, "normal",
+                 admin_uid, now_iso, admin_uid, now_iso, work_date.isoformat(),
+                 work_date.isoformat(), assignment["name"] if assignment else ""),
+            )
+            task_id = task_cursor.lastrowid
+            await db.execute(
+                "INSERT INTO crm_task_targets (task_id,target_type,user_id,role) "
+                "VALUES (?,'user',?,NULL)", (task_id, assigned_user_id),
+            )
+            await _crm_publish_task(db, task_id, city["id"], admin_uid)
+        cursor = await db.execute(
+            "INSERT INTO crm_map_annotations "
+            "(city_id,work_date,kind,geometry_json,note,color,assigned_user_id,task_id,status,"
+            "created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,'active',?,?,?,?)",
+            (city["id"], work_date.isoformat(), kind,
+             json.dumps(geometry, ensure_ascii=False), note, color, assigned_user_id, task_id,
+             admin_uid, now_iso, admin_uid, now_iso),
+        )
+        row = await (await db.execute(
+            "SELECT a.*,u.full_name AS assigned_name,u.role AS assigned_role "
+            "FROM crm_map_annotations a LEFT JOIN users u ON u.user_id=a.assigned_user_id "
+            "WHERE a.id=?", (cursor.lastrowid,),
+        )).fetchone()
+        await _crm_audit(db, context, "map.annotation.create", "map_annotation", row["id"],
+                         city["id"], after=dict(row))
+        await _commit_and_wake(db, _notification_wakeup)
+    item = dict(row)
+    item["geometry"] = geometry
+    item.pop("geometry_json", None)
+    return web.json_response({"ok": True, "annotation": item}, status=201)
+
+
+async def api_crm_map_annotation_delete(request):
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    try:
+        annotation_id = int(request.match_info["annotation_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "annotation_id"}, status=400)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        current = await (await db.execute(
+            "SELECT a.*,u.role AS assigned_role FROM crm_map_annotations a "
+            "LEFT JOIN users u ON u.user_id=a.assigned_user_id AND u.city_id=a.city_id "
+            "WHERE a.id=? AND a.status='active'", (annotation_id,),
+        )).fetchone()
+        if (not current or current["city_id"] not in context["allowed_city_ids"] or
+                (_crm_scope_role(context) and current["assigned_user_id"] and
+                 (current["assigned_role"] or "").casefold() != _crm_scope_role(context).casefold())):
+            return web.json_response({"error": "not_found"}, status=404)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_map_annotations SET status='cancelled',updated_by=?,updated_at=? WHERE id=?",
+            (context["telegram_user"]["id"], now_iso, annotation_id),
+        )
+        await _crm_audit(db, context, "map.annotation.delete", "map_annotation",
+                         annotation_id, current["city_id"], before=dict(current), after=None)
+        await db.commit()
+    return web.json_response({"ok": True, "annotation_id": annotation_id})
 
 
 def _crm_calendar_employee_is_eligible(full_name, role):
@@ -13286,9 +13785,15 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/employees", api_crm_employees)
         app.router.add_get("/api/admin/crm/payroll", api_crm_payroll)
         app.router.add_get("/api/admin/crm/map", api_crm_map)
+        app.router.add_post("/api/admin/crm/map/zones", api_crm_map_zone_create)
+        app.router.add_patch("/api/admin/crm/map/zones/{zone_id}", api_crm_map_zone_update)
         app.router.add_post("/api/admin/crm/map/assignments", api_crm_map_assignment_create)
         app.router.add_delete(
             "/api/admin/crm/map/assignments/{assignment_id}", api_crm_map_assignment_delete
+        )
+        app.router.add_post("/api/admin/crm/map/annotations", api_crm_map_annotation_create)
+        app.router.add_delete(
+            "/api/admin/crm/map/annotations/{annotation_id}", api_crm_map_annotation_delete
         )
         app.router.add_get("/api/admin/crm/employees/{user_id}", api_crm_employee)
         app.router.add_patch("/api/admin/crm/employees/{user_id}/settings", api_crm_employee_settings)

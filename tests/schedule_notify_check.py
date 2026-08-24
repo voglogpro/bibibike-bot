@@ -97,10 +97,10 @@ async def run():
     assert payload["changes"] == ["district"], payload
     assert rows[0]["user_id"] == WORKER_ID
     text = bot._crm_notification_text("shift_plan_changed", payload)
-    assert "ИЗМЕНЁН РАЙОН" in text, text
+    assert "Изменён район" in text, text
     assert "Фестивальный" in text, text
     # Полный график в сообщение не попадает.
-    assert "ГРАФИК ОБНОВЛЁН" not in text
+    assert "График обновлён" not in text
 
     # 2. Правка времени в том же окне склеивается с первой: одно сообщение.
     await update({"start_time": "10:00", "end_time": "19:00"})
@@ -109,7 +109,7 @@ async def run():
     payload = json.loads(rows[0]["payload_json"])
     assert payload["changes"] == ["district", "time"], payload
     text = bot._crm_notification_text("shift_plan_changed", payload)
-    assert "СМЕНА ИЗМЕНЕНА" in text, text
+    assert "Смена изменена" in text, text
     assert "10:00–19:00" in text, text
     assert "Фестивальный" in text, text
 
@@ -135,7 +135,7 @@ async def run():
     payload = json.loads(rows[-1]["payload_json"])
     assert "cancelled" in payload["changes"], payload
     text = bot._crm_notification_text("shift_plan_changed", payload)
-    assert "СМЕНА ОТМЕНЕНА" in text, text
+    assert "Смена отменена" in text, text
     assert "Выходить на эту смену не нужно" in text, text
 
     # 5. Правка без изменений не шлёт ничего.

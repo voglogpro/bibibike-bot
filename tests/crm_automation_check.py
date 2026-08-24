@@ -108,8 +108,8 @@ async def run():
         "work_date": reminder_start.date().isoformat(), "start_time": "09:00",
         "end_time": "19:00", "district": "ФМР", "description": "Стянуть байки по карте",
     })
-    assert "30 МИНУТ" in sample and "📍 Район: ФМР" in sample
-    assert "🚀 В 09:00" in sample and "🏁 В 19:00" in sample
+    assert "30 минут" in sample and "📍 Район: ФМР" in sample
+    assert "В 09:00" in sample and "В 19:00" in sample
 
     # Активная смена получает одно предупреждение за 30 минут. После продления
     # старый dedupe-ключ очищается, поэтому новое время тоже сможет напомнить.

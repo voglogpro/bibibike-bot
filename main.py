@@ -11639,21 +11639,21 @@ def _crm_notification_text(kind, payload):
         date_from = _crm_human_date(payload.get("date_from"))
         date_to = payload.get("date_to")
         dates = date_from if not date_to or date_to == payload.get("date_from") else f"{date_from} — {_crm_human_date(date_to)}"
-        lines = ["📋 НОВАЯ ЗАДАЧА", "", f"🎯 {payload.get('title') or 'Без названия'}", f"📅 Когда: {dates}"]
+        lines = ["📋 Новая задача", "", f"{payload.get('title') or 'Без названия'}", "", f"📅 {dates}"]
         lines.append(f"👤 Автор: {payload.get('creator_name') or 'Сотрудник'}")
-        if payload.get("due_time"): lines.append(f"🕒 Срок: до {payload.get('due_time')}")
-        if district: lines.append(f"📍 Район: {district}")
-        if details: lines.extend(["", "📝 Что нужно сделать:", details])
-        if payload.get("requires_photo"): lines.extend(["", "📸 Автор задачи ожидает фото результата."])
-        lines.extend(["", "Откройте раздел «Задачи», чтобы начать выполнение и отправить результат.",
-                      "Сообщение автоматически удалится через два дня, задача останется в истории."])
+        if payload.get("due_time"): lines.append(f"🕒 Выполнить до {payload.get('due_time')}")
+        if district: lines.append(f"📍 {district}")
+        if details: lines.extend(["", "Что нужно сделать", details])
+        if payload.get("requires_photo"): lines.extend(["", "📸 После выполнения приложите фотографию результата."])
+        lines.extend(["", "Следующий шаг", "Откройте «Задачи», начните выполнение и отправьте результат.",
+                      "Уведомление исчезнет через два дня, а задача останется в истории."])
         return "\n".join(lines)
     if kind == "task_submitted":
-        return (f"✅ ЗАДАЧА ГОТОВА К ПРОВЕРКЕ\n\n🎯 {payload.get('title') or 'Без названия'}\n"
+        return (f"✅ Задача готова к проверке\n\n{payload.get('title') or 'Без названия'}\n"
                 f"👤 Исполнитель: {payload.get('assignee_name') or 'Сотрудник'}\n\n"
                 "Откройте задачи, чтобы принять результат или вернуть его в работу.")
     if kind == "task_blocked":
-        result = (f"⚠️ ПРОБЛЕМА С ЗАДАЧЕЙ\n\n🎯 {payload.get('title') or 'Без названия'}\n"
+        result = (f"⚠️ Сотруднику нужна помощь\n\n{payload.get('title') or 'Без названия'}\n"
                   f"👤 Исполнитель: {payload.get('assignee_name') or 'Сотрудник'}")
         if payload.get("comment"):
             result += f"\n\n💬 {payload.get('comment')}"
@@ -11661,20 +11661,20 @@ def _crm_notification_text(kind, payload):
         return result
     if kind == "task_reviewed":
         accepted = payload.get("status") == "accepted"
-        text = "✅ РЕЗУЛЬТАТ ПРИНЯТ" if accepted else "↩️ ЗАДАЧА ВОЗВРАЩЕНА В РАБОТУ"
-        result = f"{text}\n\n🎯 {payload.get('title') or 'Без названия'}"
+        text = "✅ Результат принят" if accepted else "↩️ Задача возвращена в работу"
+        result = f"{text}\n\n{payload.get('title') or 'Без названия'}"
         if payload.get("comment"):
             result += f"\n\n💬 {payload.get('comment')}"
         return result
     if kind == "task_cancelled":
-        result = f"🚫 ЗАДАЧА ОТМЕНЕНА\n\n🎯 {payload.get('title') or 'Без названия'}"
+        result = f"🚫 Задача отменена\n\n{payload.get('title') or 'Без названия'}"
         if payload.get("reason"):
             result += f"\n\n💬 {payload.get('reason')}"
         return result
     if kind == "admin_access_updated":
         if not payload.get("is_active", True):
             return (
-                "🔒 ДОСТУП К CRM ОТКЛЮЧЁН\n\n"
+                "🔒 Доступ к CRM отключён\n\n"
                 "Ваш административный доступ к BibiBike CRM был отключён владельцем сети."
             )
         role_labels = {
@@ -11683,7 +11683,7 @@ def _crm_notification_text(kind, payload):
             "network_admin": "Администратор сети",
         }
         lines = [
-            "🔑 ВАМ ОТКРЫТ ДОСТУП К BIBIBIKE CRM", "",
+            "🔑 Вам открыт доступ к BibiBike CRM", "",
             f"👤 Роль: {role_labels.get(payload.get('role'), payload.get('role') or 'Администратор')}",
         ]
         cities = [str(value) for value in payload.get("cities") or [] if value]
@@ -11697,9 +11697,9 @@ def _crm_notification_text(kind, payload):
         return "\n".join(lines)
     if kind in {"admin_shift_ended", "admin_lunch_started", "admin_lunch_ended"}:
         headings = {
-            "admin_shift_ended": "🔴 СОТРУДНИК ЗАВЕРШИЛ СМЕНУ",
-            "admin_lunch_started": "🍽 СОТРУДНИК ВЫШЕЛ НА ОБЕД",
-            "admin_lunch_ended": "🟢 СОТРУДНИК ЗАКОНЧИЛ ОБЕД",
+            "admin_shift_ended": "🔴 Сотрудник завершил смену",
+            "admin_lunch_started": "🍽 Сотрудник вышел на обед",
+            "admin_lunch_ended": "🟢 Сотрудник закончил обед",
         }
         name = str(payload.get("employee_name") or "Сотрудник")
         username = str(payload.get("employee_username") or "").strip().lstrip("@")
@@ -11709,7 +11709,8 @@ def _crm_notification_text(kind, payload):
             headings[kind], "",
             f"👤 {person}" + (f" · {role}" if role else ""),
             f"🏙 {payload.get('city_name') or 'Город'}",
-            f"📅 {payload.get('event_date') or '—'} · {payload.get('event_time') or '—'}",
+            f"📅 {payload.get('event_date') or '—'}",
+            f"🕒 {payload.get('event_time') or '—'}",
         ]
         if district:
             lines.append(f"📍 Район: {district}")
@@ -11721,17 +11722,17 @@ def _crm_notification_text(kind, payload):
         return "\n".join(lines)
     if kind == "planned_shift":
         is_extra = payload.get("work_kind") == "extra"
-        lines = ["💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА", "",
+        lines = ["💼 Назначена подработка" if is_extra else "🗓 Назначена смена", "",
                  f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
                  f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
         if district: lines.append(f"📍 Район: {district}")
         if details: lines.extend(["", "📝 Комментарий руководителя:", details])
-        lines.extend(["", "🤖 Бот автоматически откроет смену в указанное время и закроет её по окончании.",
-                      "✅ Если вы откроете смену самостоятельно, вторая смена не появится."])
+        lines.extend(["", "Что произойдёт дальше", "Бот сам откроет смену в указанное время и закроет её по окончании.",
+                      "Если вы откроете смену раньше самостоятельно, дубликат не появится."])
         return "\n".join(lines)
     if kind == "calendar_schedule_updated":
         entries = list(payload.get("entries") or [])
-        lines = ["🗓 ГРАФИК ОБНОВЛЁН", ""]
+        lines = ["🗓 График обновлён", "", "Изменения"]
         for item in entries[:30]:
             date_label = _crm_human_date(item.get("work_date"))
             if item.get("action") == "cancel":
@@ -11742,8 +11743,8 @@ def _crm_notification_text(kind, payload):
                 lines.append(f"• {date_label} — {shift_time}{district_label}")
         if len(entries) > 30:
             lines.append(f"• Ещё изменений: {len(entries) - 30}")
-        lines.extend(["", "⏰ Перед рабочей сменой придёт отдельное напоминание.",
-                      "📱 Полный график доступен в разделе «Мой график»."])
+        lines.extend(["", "Что дальше", "За 30 минут до рабочей смены придёт отдельное напоминание.",
+                      "Полный календарь доступен в разделе «Мой график»."])
         return "\n".join(lines)
     if kind == "shift_plan_changed":
         changes = list(payload.get("changes") or [])
@@ -11752,25 +11753,25 @@ def _crm_notification_text(kind, payload):
         is_extra = payload.get("work_kind") == "extra"
         if payload.get("status") == "cancelled":
             return "\n".join([
-                "❌ СМЕНА ОТМЕНЕНА", "",
+                "❌ Смена отменена", "",
                 f"📅 Дата: {date_label}",
                 "", "Выходить на эту смену не нужно.",
                 "📱 Актуальный график — в разделе «Мой график».",
             ])
         if "created" in changes:
-            header = "💼 НАЗНАЧЕНА ПОДРАБОТКА" if is_extra else "🗓 НАЗНАЧЕНА СМЕНА"
+            header = "💼 Назначена подработка" if is_extra else "🗓 Назначена смена"
         else:
             # Заголовок называет главное изменение: сотрудник должен понять суть
             # из первой строки, не вчитываясь в детали.
             titles = {
-                "district": "📍 ИЗМЕНЁН РАЙОН",
-                "time": "🕒 ИЗМЕНЕНО ВРЕМЯ СМЕНЫ",
-                "work_date": "📅 ПЕРЕНЕСЕНА СМЕНА",
-                "work_kind": "🔄 ИЗМЕНЁН ТИП СМЕНЫ",
+                "district": "📍 Изменён район",
+                "time": "🕒 Изменено время смены",
+                "work_date": "📅 Смена перенесена",
+                "work_kind": "🔄 Изменён тип смены",
             }
             named = [titles[key] for key in ("work_date", "time", "district", "work_kind")
                      if key in changes and key in titles]
-            header = named[0] if len(named) == 1 else "🔄 СМЕНА ИЗМЕНЕНА"
+            header = named[0] if len(named) == 1 else "🔄 Смена изменена"
         lines = [header, "", f"📅 Дата: {date_label}", f"🕒 Время: {shift_time}"]
         if district:
             lines.append(f"📍 Район: {district}")
@@ -11778,39 +11779,39 @@ def _crm_notification_text(kind, payload):
             lines.append("💼 Тип: подработка")
         if details:
             lines.extend(["", "📝 Комментарий руководителя:", details])
-        lines.extend(["", "⏰ Перед сменой придёт напоминание.",
-                      "📱 Полный график — в разделе «Мой график»."])
+        lines.extend(["", "Что дальше", "Перед сменой придёт напоминание.",
+                      "Актуальный календарь — в разделе «Мой график»."])
         return "\n".join(lines)
     if kind == "shift_reminder":
-        lines = ["⏰ ДО НАЧАЛА СМЕНЫ 30 МИНУТ", "",
+        lines = ["⏰ До начала смены 30 минут", "",
                  f"📅 Дата: {_crm_human_date(payload.get('work_date'))}",
                  f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
         if district: lines.append(f"📍 Район: {district}")
         if details: lines.extend(["", "📝 Задача / комментарий:", details])
-        lines.extend(["", f"🚀 В {payload.get('start_time', 'назначенное время')} бот сам откроет вашу смену.",
-                      f"🏁 В {payload.get('end_time', 'конце смены')} бот автоматически её закроет.",
-                      "✅ Дополнительных действий сейчас не требуется."])
+        lines.extend(["", "Что дальше", f"В {payload.get('start_time', 'назначенное время')} бот сам откроет вашу смену.",
+                      f"В {payload.get('end_time', 'конце смены')} бот автоматически её закроет.",
+                      "Сейчас ничего дополнительно делать не нужно."])
         return "\n".join(lines)
     if kind == "shift_end_reminder":
-        lines = ["⏳ ДО КОНЦА СМЕНЫ 30 МИНУТ", "",
+        lines = ["⏳ До конца смены 30 минут", "",
                  f"🏁 Смена автоматически закроется в {payload.get('end_time', 'назначенное время')}."]
         if district: lines.append(f"📍 Район: {district}")
         lines.extend(["", "Если хотите поработать дольше — измените окончание смены в приложении.",
                       "Проверьте, что все действия и результаты задач отправлены."])
         return "\n".join(lines)
     if kind == "shift_auto_started":
-        lines = ["🟢 СМЕНА ОТКРЫТА АВТОМАТИЧЕСКИ", "",
+        lines = ["🟢 Смена открыта автоматически", "",
                  f"🕒 Время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}"]
         if district: lines.append(f"📍 Район: {district}")
         lines.extend(["", "📊 Отчёт смены уже активен — действия можно писать в рабочую тему как обычно.",
                       f"🏁 В {payload.get('end_time', 'конце смены')} смена закроется автоматически."])
         return "\n".join(lines)
     if kind == "shift_auto_conflict":
-        return ("⚠️ СМЕНА НЕ ОТКРЫТА\n\n"
+        return ("⚠️ Смена не открыта\n\n"
                 "У вас уже активна смена в другом городе, поэтому бот не стал создавать вторую.\n\n"
                 "🔧 Что сделать: закройте предыдущую смену и сообщите руководителю.")
     if kind == "shift_auto_missed":
-        return ("⚠️ ПЛАНОВАЯ СМЕНА НЕ ОТКРЫЛАСЬ\n\n"
+        return ("⚠️ Плановая смена не открылась\n\n"
                 f"📅 Дата: {_crm_human_date(payload.get('work_date'))}\n"
                 f"🕒 Начало: {payload.get('start_time', '—')}\n\n"
                 "Время плановой смены уже прошло. Бот не создаёт смену задним числом, чтобы не исказить часы и зарплату.\n"
@@ -11823,7 +11824,7 @@ def _crm_notification_text(kind, payload):
     conflicts = int(payload.get("conflicts") or 0)
     work_days = payload.get("work_days")
     rest_days = payload.get("rest_days")
-    lines = ["💼 ГРАФИК ПОДРАБОТОК ОБНОВЛЁН" if is_extra else "🗓 ГРАФИК ОБНОВЛЁН", "",
+    lines = ["💼 График подработок обновлён" if is_extra else "🗓 График обновлён", "",
              f"📆 Период: {_crm_human_date(payload.get('date_from'))} — {_crm_human_date(payload.get('date_to'))}",
              *([f"🔁 Схема: {work_days}/{rest_days}"] if work_days and rest_days else []),
              f"🕒 Запрошенное время: {payload.get('start_time', '—')}–{payload.get('end_time', '—')}",
@@ -11835,11 +11836,11 @@ def _crm_notification_text(kind, payload):
             f"⚠️ Существующие смены с другим временем, районом или типом: {conflicts}. "
             "Они сохранены без изменений — проверьте точное время в «Моём графике»."
         )
-    if dates: lines.extend(["", "📌 Все рабочие дни по выбранной схеме:", *[f"• {_crm_human_date(item)}" for item in dates]])
+    if dates: lines.extend(["", "Рабочие дни по выбранной схеме", *[f"• {_crm_human_date(item)}" for item in dates]])
     if district: lines.extend(["", f"📍 Район: {district}"])
     if details: lines.extend(["", "📝 Комментарий руководителя:", details])
-    lines.extend(["", "⏰ За 30 минут до каждой смены придёт отдельное напоминание.",
-                  "🤖 Каждая смена откроется и закроется автоматически."])
+    lines.extend(["", "Что дальше", "За 30 минут до каждой смены придёт отдельное напоминание.",
+                  "Каждая смена откроется и закроется автоматически."])
     return "\n".join(lines)
 
 

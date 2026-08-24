@@ -104,7 +104,7 @@ async def main():
         ) as send_message:
             assert await bot.deliver_crm_notifications_once() == 1
             assert send_message.await_args.args[0] == 900003
-            assert "BIBIBIKE CRM" in send_message.await_args.args[1]
+            assert "BibiBike CRM" in send_message.await_args.args[1]
 
         # A restart must keep CRM-owned configuration instead of restoring code/env.
         await bot.init_db()

@@ -158,7 +158,7 @@ async def run():
     assert [row["user_id"] for row in shift_ended] == [NETWORK_ADMIN], shift_ended
     payload = json.loads(shift_ended[0]["payload_json"])
     text = bot._crm_notification_text("admin_shift_ended", payload)
-    assert "СОТРУДНИК ЗАВЕРШИЛ СМЕНУ" in text
+    assert "Сотрудник завершил смену" in text
     assert "24.08.2026" in text and "09:00–18:15" in text, text
 
     closed_shift = await bot.get_shift_by_id(shift_id)

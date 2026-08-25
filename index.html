@@ -429,7 +429,7 @@
 
         <button class="shift-bibipass-promo hidden" id="shiftBibipassPromo">
           <span class="promo-cup">БП</span>
-          <span><b>BIBIPASS / маршрут сезона</b><small id="shiftBibipassPromoText">Баллы ведут по уровням · БибиБонусы — награда</small></span>
+          <span><b>BIBIPASS / маршрут сезона</b><small id="shiftBibipassPromoText">XP ведёт по уровням · БибиБонусы — награда</small></span>
           <span class="promo-arrow">›</span>
         </button>
 
@@ -620,7 +620,7 @@
           <h2>БибиПасс</h2>
           <p>Один маршрут — 20 уровней наград</p>
           <span class="pass-track"><i id="profileBibipassProgress"></i></span>
-          <span class="pass-meta">Баллы двигают прогресс · БибиБонусы выдаются за уровни</span>
+          <span class="pass-meta">XP двигает прогресс · БибиБонусы выдаются за уровни</span>
         </span>
         <span class="pass-open"><b id="profileBibipassLevel">Открыть</b><span>Перейти →</span></span>
       </button>
@@ -898,13 +898,13 @@
       <div class="bibipass-kicker">Новый конкурс для всей команды</div>
       <h2>Добро пожаловать в БибиПасс</h2>
       <div id="bibipassIntroTimer"></div>
-      <p>Скауты, водители и чарджеры всех городов получают баллы БибиПасса за привычные действия, проходят 20 растущих уровней и открывают БибиБонусы и подписки.</p>
-      <p><b>Баллы двигают по уровням. БибиБонусы — это отдельная награда и валюта для поездок.</b></p>
+      <p>Скауты, водители и чарджеры всех городов получают XP за привычные действия, проходят 20 растущих уровней и открывают БибиБонусы и подписки.</p>
+      <p><b>XP — опыт БибиПасса: он двигает по уровням. БибиБонусы — отдельная награда и валюта для поездок.</b></p>
       <ul>
-        <li>перемещение, привоз/вывоз с СЦ и замена АКБ — 1 балл;</li>
-        <li>поправленный байк — 0,5 балла;</li>
+        <li>перемещение, привоз/вывоз с СЦ и замена АКБ — 1 XP;</li>
+        <li>поправленный байк — 0,5 XP;</li>
         <li>в конкурс идут только рабочие действия с байками;</li>
-        <li>каждый следующий уровень требует больше баллов и даёт более ценную награду.</li>
+        <li>каждый следующий уровень требует больше XP и даёт более ценную награду.</li>
       </ul>
       <p>Канал объединяет сотрудников BibiBike из разных городов. Здесь можно общаться, получать общие новости и брать задания в выходной, чтобы заработать дополнительные Бибибонусы.</p>
       <div class="bibipass-actions"><button class="mini" id="bibipassIntroJoin">Подписаться</button><button class="save" id="bibipassIntroCheck">Проверить подписку</button></div>
@@ -1191,8 +1191,8 @@ function render(){
   $('shiftBibipassPromo').classList.toggle('hidden',!pass.enabled);
   $('profileBibipassOpen').classList.toggle('hidden',!pass.enabled);
   $('shiftBibipassPromoText').textContent=pass.status==='active'
-    ? 'Баллы уровня и награды · открой прогресс'
-    : pass.status==='ended'?'Посмотреть баллы, уровни и награды':'Старт 26 августа · БибиБонусы за уровни';
+    ? 'XP и награды · открой прогресс'
+    : pass.status==='ended'?'Посмотреть XP, уровни и награды':'Старт 26 августа · БибиБонусы за уровни';
   $('profileBibipassLevel').textContent=bibipassData&&bibipassData.progress
     ? `Ур. ${bibipassData.progress.level}`
     : pass.status==='upcoming'?'Скоро':pass.status==='ended'?'Итоги':'Открыть';
@@ -1307,12 +1307,8 @@ function openMySchedule(){
 function bibipassNumber(value){
   const number=Number(value||0);return Number.isInteger(number)?String(number):number.toFixed(1).replace('.',',');
 }
-function bibipassPointsText(value){
-  const number=Number(value||0),shown=bibipassNumber(number);
-  if(!Number.isInteger(number))return `${shown} балла`;
-  const mod100=Math.abs(number)%100,mod10=mod100%10;
-  const word=mod100>=11&&mod100<=14?'баллов':mod10===1?'балл':mod10>=2&&mod10<=4?'балла':'баллов';
-  return `${shown} ${word}`;
+function bibipassXpText(value){
+  return `${bibipassNumber(value)} XP`;
 }
 function bibipassSetClock(serverNow){
   const stamp=Date.parse(serverNow||'');if(Number.isFinite(stamp))bibipassClockOffsetMs=stamp-Date.now();
@@ -1351,7 +1347,7 @@ function renderBibipass(data){
   if(!data||!data.enabled){root.innerHTML='<div class="task-api-state">Конкурс сейчас выключен.</div>';return}
   const timer=bibipassCountdownMarkup(data.season);
   if(!data.member){
-    root.innerHTML=`${timer}<div class="bibipass-gate"><div class="pass-gate-mark">БП</div><small class="pass-gate-kicker">BIBIPASS / СЕЗОН 01</small><h3>${esc(data.season&&data.season.name||'БибиПасс')}</h3><p><b>20 уровней · 150 БибиБонусов · подписки на 1 и 3 месяца.</b></p><div class="pass-gate-rule"><b>Баллы ≠ БибиБонусы</b><span>Баллы двигают по уровням. БибиБонусы — награда и валюта для поездок.</span></div><p>Для участия подпишитесь на общий канал команды. Там сотрудники всех городов общаются, получают важные новости и находят задания на выходные с наградой в Бибибонусах.</p>${data.check_error?'<div class="task-api-error">Бот пока не смог проверить подписку. Проверьте, что он назначен администратором канала.</div>':''}<div class="bibipass-actions"><button class="mini" id="bibipassGateJoin">Открыть канал</button><button class="save" id="bibipassGateCheck">Проверить подписку</button></div></div>`;
+    root.innerHTML=`${timer}<div class="bibipass-gate"><div class="pass-gate-mark">БП</div><small class="pass-gate-kicker">BIBIPASS / СЕЗОН 01</small><h3>${esc(data.season&&data.season.name||'БибиПасс')}</h3><p><b>20 уровней · 150 БибиБонусов · подписки на 1 и 3 месяца.</b></p><div class="pass-gate-rule"><b>XP ≠ БибиБонусы</b><span>XP — опыт для прохождения уровней. БибиБонусы — награда и валюта для поездок.</span></div><p>Для участия подпишитесь на общий канал команды. Там сотрудники всех городов общаются, получают важные новости и находят задания на выходные с наградой в Бибибонусах.</p>${data.check_error?'<div class="task-api-error">Бот пока не смог проверить подписку. Проверьте, что он назначен администратором канала.</div>':''}<div class="bibipass-actions"><button class="mini" id="bibipassGateJoin">Открыть канал</button><button class="save" id="bibipassGateCheck">Проверить подписку</button></div></div>`;
     $('bibipassGateJoin').onclick=openBibipassChannel;$('bibipassGateCheck').onclick=()=>checkBibipassMembership($('bibipassGateCheck'));tickBibipassCountdowns();return;
   }
   const p=data.progress||{},actions=(data.rules&&data.rules.actions)||[],rewards=data.rewards||[],ranking=data.ranking||[];
@@ -1362,14 +1358,14 @@ function renderBibipass(data){
   const profileProgress=$('profileBibipassProgress');if(profileProgress)profileProgress.style.width=`${progressPercent.toFixed(2)}%`;
   const routeStops=Array.from({length:levelCount},(_,index)=>`<i class="${index<Number(p.level||0)?'done':''} ${index===Number(p.level||0)&&p.next_level?'current':''} ${index===9||index===19?'milestone':''}"></i>`).join('');
   const nextRewardLine=nextReward?`<div class="pass-next-reward ${nextReward.subscription_months?'milestone':''}"><small>Награда уровня ${String(nextReward.level).padStart(2,'0')}</small><b>${Number(nextReward.bibibonuses)||0} БибиБонусов</b>${nextReward.subscription_months?`<strong>+ подписка на ${nextReward.subscription_months} ${Number(nextReward.subscription_months)===1?'месяц':'месяца'}</strong>`:''}<span>Валюта для поездок</span></div>`:`<div class="pass-next-reward complete"><small>Маршрут пройден</small><b>Все награды открыты</b><span>20 из 20 уровней</span></div>`;
-  const levelRows=rewards.map(item=>{const done=Number(item.level)<=Number(p.level),next=Number(item.level)===Number(p.next_level),months=Number(item.subscription_months)||0,status=done?'заработано':next?'следующая':'',classes=[done?'done':'',next?'current':'',months?'milestone':''].filter(Boolean).join(' ');return `<div class="pass-level-row ${classes}"><span class="pass-level-axis"><i></i></span><span class="pass-level-copy"><small>Уровень ${String(item.level).padStart(2,'0')}</small><b>${Number(item.bibibonuses)||0} БибиБонусов</b>${months?`<em>Подписка на ${months} ${months===1?'месяц':'месяца'}</em>`:''}</span><span class="pass-level-threshold"><b>${bibipassNumber(item.cumulative_points)}</b><small>баллов</small>${status?`<em>${status}</em>`:''}</span></div>`}).join('');
-  const actionRows=actions.map(item=>`<div class="pass-rate-row points"><span>${esc(actionLabels[item.type]||item.label)}</span><b>+${bibipassPointsText(item.points)}</b></div>`).join('');
-  const rankingRows=ranking.length?ranking.map(item=>`<div class="bibipass-rank ${item.is_me?'me':''}"><span class="place">${item.position}</span><span><b>${esc(item.name)}</b><small>${esc([item.role,item.city].filter(Boolean).join(' · '))}${item.is_me?' · Вы':''}</small></span><span class="score">Ур. ${item.level}<br>${bibipassNumber(item.points)} бал.</span></div>`).join(''):'<div class="task-api-state">Участников пока нет.</div>';
-  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${bibipassPointsText(p.points)}</b><span>${p.next_level?`${bibipassPointsText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Маршрут завершён'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" aria-label="Прогресс БибиПасса ${progressPercent.toFixed(1)}%"><span style="width:${progressPercent.toFixed(2)}%"></span><div>${routeStops}</div></div><div class="pass-progress-meta"><span>Старт</span><b>${Number(p.level)||0} / ${levelCount} уровней</b><span>Финиш</span></div><p class="pass-plain-note"><b>Баллы</b> двигают полоску прогресса. <b>БибиБонусы</b> — награда для поездок.</p></section>
-  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>Только действия с байками</small><b>Как получить баллы</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details><details class="pass-drawer"><summary><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><b>Рейтинг всех городов</b></span><em>Таблица</em></summary><div class="pass-drawer-body">${rankingRows}</div></details></div>`;tickBibipassCountdowns();
+  const levelRows=rewards.map(item=>{const done=Number(item.level)<=Number(p.level),next=Number(item.level)===Number(p.next_level),months=Number(item.subscription_months)||0,status=done?'заработано':next?'следующая':'',classes=[done?'done':'',next?'current':'',months?'milestone':''].filter(Boolean).join(' ');return `<div class="pass-level-row ${classes}"><span class="pass-level-axis"><i></i></span><span class="pass-level-copy"><small>Уровень ${String(item.level).padStart(2,'0')}</small><b>${Number(item.bibibonuses)||0} БибиБонусов</b>${months?`<em>Подписка на ${months} ${months===1?'месяц':'месяца'}</em>`:''}</span><span class="pass-level-threshold"><b>${bibipassXpText(item.cumulative_points)}</b>${status?`<em>${status}</em>`:''}</span></div>`}).join('');
+  const actionRows=actions.map(item=>`<div class="pass-rate-row points"><span>${esc(actionLabels[item.type]||item.label)}</span><b>+${bibipassXpText(item.points)}</b></div>`).join('');
+  const rankingRows=ranking.length?ranking.map(item=>`<div class="bibipass-rank ${item.is_me?'me':''}"><span class="place">${item.position}</span><span><b>${esc(item.name)}</b><small>${esc([item.role,item.city].filter(Boolean).join(' · '))}${item.is_me?' · Вы':''}</small></span><span class="score">Ур. ${item.level}<br>${bibipassXpText(item.points)}</span></div>`).join(''):'<div class="task-api-state">Участников пока нет.</div>';
+  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${bibipassXpText(p.points)}</b><span>${p.next_level?`${bibipassXpText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Маршрут завершён'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" aria-label="Прогресс БибиПасса ${progressPercent.toFixed(1)}%"><span style="width:${progressPercent.toFixed(2)}%"></span><div>${routeStops}</div></div><div class="pass-progress-meta"><span>Старт</span><b>${Number(p.level)||0} / ${levelCount} уровней</b><span>Финиш</span></div><p class="pass-plain-note"><b>XP</b> — опыт для прохождения уровней. <b>БибиБонусы</b> — награда для поездок.</p></section>
+  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>XP только за действия с байками</small><b>Как получить XP</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details><details class="pass-drawer"><summary><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><b>Рейтинг всех городов</b></span><em>Таблица</em></summary><div class="pass-drawer-body">${rankingRows}</div></details></div>`;tickBibipassCountdowns();
 }
 async function loadBibipass(force=false){
-  if(bibipassLoading)return;bibipassLoading=true;if(!bibipassData)$('bibipassRoot').innerHTML='<div class="task-api-state">Проверяю подписку и считаю баллы…</div>';
+  if(bibipassLoading)return;bibipassLoading=true;if(!bibipassData)$('bibipassRoot').innerHTML='<div class="task-api-state">Проверяю подписку и считаю XP…</div>';
   try{bibipassData=await api('/api/bibipass');renderBibipass(bibipassData);if(STATE&&STATE.bibipass)STATE.bibipass.member=!!bibipassData.member;$('profileBibipassLevel').textContent=bibipassData.progress?`Ур. ${bibipassData.progress.level}`:'Открыть'}catch(e){$('bibipassRoot').innerHTML=`<div class="task-api-error">${esc(e.message||'Не удалось загрузить БибиПасс.')}</div>`}finally{bibipassLoading=false}
 }
 function openBibipass(){selectBottomTab('profile');hidePages();$('tab-bibipass').classList.remove('hidden');loadBibipass();window.scrollTo(0,0)}

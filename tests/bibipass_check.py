@@ -106,7 +106,7 @@ async def run():
             (task_id, 701, "Первый участник", "Скаут", stamp),
         )
         # Даже сохранённая запись старой механики заданий не должна менять
-        # баллы, рейтинг или награды: в конкурсе учитываются только действия.
+        # XP, рейтинг или награды: в конкурсе учитываются только действия.
         await db.execute(
             "INSERT INTO bibipass_task_grants "
             "(season_id,user_id,task_id,task_priority,points,bibibonus_amount,earned_at) "
@@ -153,6 +153,10 @@ async def run():
     assert sender.await_count == 6
     first_message = sender.await_args_list[0]
     assert "квест сотрудников" in first_message.args[1]
+    for kind in ("bibipass_announcement", "bibipass_started"):
+        notification_text = bot._crm_notification_text(kind, {})
+        assert "XP" in notification_text
+        assert "балл" not in notification_text.lower()
     keyboard = first_message.kwargs["reply_markup"]
     assert keyboard.inline_keyboard[0][0].text == "🏆 Открыть БибиПасс"
     assert "startapp=bibipass" in keyboard.inline_keyboard[0][0].url
@@ -174,7 +178,7 @@ async def run():
     assert payload["earned"]["level_bibibonuses"] == 5
     assert payload["earned"]["bibibonuses"] == 5
     assert "tasks" not in payload["rules"]
-    assert payload["position"] == 2  # 20 баллов против 25, города объединены.
+    assert payload["position"] == 2  # 20 XP против 25, города объединены.
     assert {item["city"] for item in payload["ranking"]} == {first["name"], second["name"]}
     concurrent = await asyncio.gather(*[
         bot._bibipass_payload(701, verify=False) for _ in range(8)

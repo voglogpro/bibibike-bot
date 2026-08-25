@@ -28,13 +28,14 @@ REQUIRED = (
     "String(startParam)==='bibipass'",
     'function openBibipass()',
     'function showBibipassInstructions(replay=true)',
-    'function bibipassPointsText(value)',
+    'function bibipassXpText(value)',
     'class="pass-focus"',
     'class="pass-progress-track ${progressPercent<=0',
     'class="pass-drawers"',
     'class="pass-drawer"',
-    'Только действия с байками',
-    'Как получить баллы',
+    'XP только за действия с байками',
+    'Как получить XP',
+    '<b>XP</b> — опыт для прохождения уровней.',
     'Все награды',
     'Рейтинг всех городов',
     "'/api/bibipass'",
@@ -52,6 +53,8 @@ REMOVED_GAMIFICATION = (
     'Топ недели',
     'data-tab="tasks"',
     'Принятые задания',
+    'function bibipassPointsText(value)',
+    'Как получить баллы',
 )
 
 

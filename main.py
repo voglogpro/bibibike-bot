@@ -52,7 +52,7 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     WebAppInfo, FSInputFile, InputMediaPhoto,
 )
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 # Необязательно: подхватываем .env, если он есть (на BotHost переменные и так заданы).
 try:
@@ -325,6 +325,8 @@ BIBIPASS_SEASON_END = os.getenv(
 BIBIPASS_MEMBERSHIP_TTL_SEC = max(
     60, min(3600, int(os.getenv("BIBIPASS_MEMBERSHIP_TTL_SEC", "300")))
 )
+BIBIPASS_ANNOUNCEMENT_LEAD_HOURS = 24
+BIBIPASS_START_PUSH_WINDOW_HOURS = 6
 BIBIPASS_LEVEL_COUNT = 20
 BIBIPASS_FIRST_LEVEL_POINTS = 20
 BIBIPASS_LEVEL_POINTS_STEP = 5
@@ -6526,6 +6528,98 @@ async def _bibipass_payload(uid, verify=True, force=False):
         "ranking": ranking[:100],
     })
     return base
+
+
+def _bibipass_campaign_entity_id(season):
+    start = datetime.fromisoformat(season["start_at"])
+    return int(start.strftime("%Y%m%d"))
+
+
+def _bibipass_campaign_due(kind, season, now=None):
+    now = now or datetime.now(MSK)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=MSK)
+    else:
+        now = now.astimezone(MSK)
+    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
+    end = datetime.fromisoformat(season["end_at"]).astimezone(MSK)
+    if kind == "bibipass_announcement":
+        return start - timedelta(hours=BIBIPASS_ANNOUNCEMENT_LEAD_HOURS) <= now < start
+    if kind == "bibipass_started":
+        return start <= now < min(
+            end, start + timedelta(hours=BIBIPASS_START_PUSH_WINDOW_HOURS),
+        )
+    return False
+
+
+async def _enqueue_bibipass_campaign_notifications(kind, now=None):
+    """Один раз ставит личное сообщение квеста каждому активному сотруднику."""
+    now = now or datetime.now(MSK)
+    season = _bibipass_season(now)
+    if not BIBIPASS_ENABLED or not _bibipass_campaign_due(kind, season, now):
+        return 0
+    entity_id = _bibipass_campaign_entity_id(season)
+    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
+    end = datetime.fromisoformat(season["end_at"]).astimezone(MSK)
+    duration_days = float(season["duration_days"])
+    payload = {
+        "season_id": season["id"],
+        "season_name": season["name"],
+        "start_label": start.strftime("%d.%m.%Y в %H:%M МСК"),
+        "end_label": end.strftime("%d.%m.%Y в %H:%M МСК"),
+        "duration_days": int(duration_days) if duration_days.is_integer() else duration_days,
+    }
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        recipients = await (await db.execute(
+            "SELECT user_id,city_id FROM users WHERE user_id>0 AND city_id IS NOT NULL "
+            "AND statistics_archived_at IS NULL "
+            "AND TRIM(COALESCE(role,'')) IN ('Скаут','Водитель','Чарджер') "
+            "ORDER BY user_id"
+        )).fetchall()
+        if not recipients:
+            return 0
+        existing_rows = await (await db.execute(
+            "SELECT user_id FROM crm_notification_outbox WHERE kind=? AND entity_id=?",
+            (kind, entity_id),
+        )).fetchall()
+        existing = {int(row["user_id"]) for row in existing_rows}
+        missing = [row for row in recipients if int(row["user_id"]) not in existing]
+        for row in missing:
+            await _enqueue_crm_notification(
+                db, int(row["city_id"]), int(row["user_id"]), kind, entity_id, payload,
+            )
+        if missing:
+            await _commit_and_wake(db, _notification_wakeup)
+            logger.info(
+                "БибиПасс: в очередь %s поставлено %s личных уведомлений",
+                kind, len(missing),
+            )
+    return len(missing)
+
+
+async def bibipass_campaign_worker():
+    """Ставит анонс и старт квеста в outbox в нужное московское время."""
+    season = _bibipass_season()
+    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
+    announcement_at = start - timedelta(hours=BIBIPASS_ANNOUNCEMENT_LEAD_HOURS)
+    start_window_end = start + timedelta(hours=BIBIPASS_START_PUSH_WINDOW_HOURS)
+    announcement_checked = False
+    start_checked = False
+    while True:
+        now = datetime.now(MSK)
+        if not announcement_checked and now >= announcement_at:
+            if now < start:
+                await _enqueue_bibipass_campaign_notifications("bibipass_announcement", now)
+            announcement_checked = True
+        if not start_checked and now >= start:
+            if now < start_window_end:
+                await _enqueue_bibipass_campaign_notifications("bibipass_started", now)
+            start_checked = True
+        if start_checked:
+            return
+        target = announcement_at if not announcement_checked else start
+        await asyncio.sleep(max(1.0, (target - now).total_seconds()))
 
 
 async def api_bibipass(request):
@@ -12832,6 +12926,14 @@ def _crm_miniapp_link(task_id=None):
     return f"{base}?startapp=task_{task_id}" if task_id is not None else base
 
 
+def _bibipass_miniapp_link():
+    username = (BOT_USERNAME or "").lstrip("@")
+    if username:
+        return f"https://t.me/{username}/{WEBAPP_SHORTNAME}?startapp=bibipass"
+    separator = "&" if "?" in WEBAPP_URL else "?"
+    return f"{WEBAPP_URL}{separator}tgWebAppStartParam=bibipass"
+
+
 def _crm_human_date(value):
     try:
         parsed = datetime.strptime(str(value), "%Y-%m-%d")
@@ -12844,6 +12946,24 @@ def _crm_human_date(value):
 def _crm_notification_text(kind, payload):
     details = str(payload.get("description") or payload.get("note") or "").strip()[:1200]
     district = str(payload.get("district") or "").strip()
+    if kind == "bibipass_announcement":
+        return "\n".join([
+            "🏁 Завтра стартует квест сотрудников BibiBike!", "",
+            f"🕘 Старт: {payload.get('start_label') or '26.08.2026 в 09:00 МСК'}",
+            f"⏳ Продолжительность: {payload.get('duration_days') or 20} дней", "",
+            "Выполняй привычные рабочие действия, набирай баллы, проходи 20 уровней "
+            "и поднимайся в общем рейтинге всех городов.", "",
+            "🎁 Награды: 150 БибиБонусов, подписка на 1 месяц и подписка на 3 месяца.", "",
+            "Для участия подпишись на общий канал команды и подтверди подписку в БибиПассе.",
+        ])
+    if kind == "bibipass_started":
+        return "\n".join([
+            "🚀 Квест сотрудников BibiBike начался!", "",
+            "У тебя есть 20 дней, чтобы пройти БибиПасс и заработать награды.",
+            f"🏁 Дедлайн: {payload.get('end_label') or '15.09.2026 в 09:00 МСК'}", "",
+            "Первые баллы уже можно набирать. Открой БибиПасс, проверь подписку "
+            "на канал и следи за своим местом в общем рейтинге.", "", "Удачи! 🏆",
+        ])
     if kind == "task_assigned":
         date_from = _crm_human_date(payload.get("date_from"))
         date_to = payload.get("date_to")
@@ -13112,16 +13232,22 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
-        if row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
+        if row["kind"].startswith("bibipass_"):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏆 Открыть БибиПасс", url=_bibipass_miniapp_link())],
+                [InlineKeyboardButton(text="📢 Канал команды", url=BIBIPASS_CHANNEL_URL)],
+            ])
+        elif row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
             button_text = "🗂 Открыть CRM"
         elif row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
                              "shift_auto_started", "shift_plan_changed", "shift_extended_by_admin"}:
             button_text = "⚡ Открыть смену"
         else:
             button_text = "🗓 Открыть приложение"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
-        ]])
+        if not row["kind"].startswith("bibipass_"):
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
+            ]])
         try:
             sent_messages = []
             photo_sent = False
@@ -13178,11 +13304,20 @@ async def deliver_crm_notifications_once(limit=50):
                     )
                 await db.commit()
             delivered += 1
+            if row["kind"].startswith("bibipass_"):
+                # Массовую рассылку держим значительно ниже глобального лимита Telegram.
+                await asyncio.sleep(0.06)
         except Exception as exc:
             attempts = int(row["attempt_count"] or 0) + 1
-            status = "failed" if attempts >= 5 else "retry"
-            delay = min(3600, 60 * (2 ** max(0, attempts - 1)))
-            next_at = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+            permanent = isinstance(exc, TelegramForbiddenError)
+            status = "failed" if permanent or attempts >= 5 else "retry"
+            if isinstance(exc, TelegramRetryAfter):
+                delay = max(1, int(exc.retry_after) + 1)
+            else:
+                delay = min(3600, 60 * (2 ** max(0, attempts - 1)))
+            next_at = None if status == "failed" else (
+                datetime.now(timezone.utc) + timedelta(seconds=delay)
+            ).isoformat()
             async with db_connect() as db:
                 await db.execute(
                     "UPDATE crm_notification_outbox SET status=?,attempt_count=?,next_attempt_at=?,"
@@ -14460,6 +14595,7 @@ def start_background_workers():
         ("auto-close", auto_close_worker),
         ("health", health_watchdog),
         ("planned-shift", crm_planned_shift_worker),
+        ("bibipass-campaign", bibipass_campaign_worker),
         ("notification", crm_notification_worker),
         ("shift-task-sync", crm_shift_task_sync_worker),
         ("todo-cleanup", todo_cleanup_worker),

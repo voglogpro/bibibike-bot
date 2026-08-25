@@ -2523,6 +2523,7 @@ load().then(async ok=>{
   if(!ok)return;
   await loadMyTasks(true);
   const startParam=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||new URLSearchParams(location.search).get('tgWebAppStartParam')||'';
+  if(String(startParam)==='bibipass')openBibipass();
   const match=String(startParam).match(/^task_(\d+)$/);
   if(match){
     const taskId=Number(match[1]);

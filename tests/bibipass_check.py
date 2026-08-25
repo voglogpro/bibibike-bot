@@ -58,7 +58,12 @@ async def run():
             "INSERT INTO users (user_id,full_name,role,city_id) VALUES (?,?,?,?)",
             [(701, "Первый участник", "Скаут", first["id"]),
              (702, "Второй участник", "Водитель", second["id"]),
-             (703, "Новый участник", "Чарджер", first["id"])],
+             (703, "Новый участник", "Чарджер", first["id"]),
+             (704, "Не сотрудник", "Администратор", first["id"]),
+             (705, "Архивный сотрудник", "Скаут", first["id"])],
+        )
+        await db.execute(
+            "UPDATE users SET statistics_archived_at=? WHERE user_id=705", (stamp,)
         )
         first_shift = (await db.execute(
             "INSERT INTO shifts (user_id,full_name,role,start_time,created_at,start_at,"
@@ -109,6 +114,48 @@ async def run():
         )
         await db.commit()
 
+    announcement_at = datetime(2026, 8, 25, 21, 0, tzinfo=bot.MSK)
+    started_at = datetime(2026, 8, 26, 9, 0, tzinfo=bot.MSK)
+    assert await bot._enqueue_bibipass_campaign_notifications(
+        "bibipass_started", announcement_at,
+    ) == 0
+    assert await bot._enqueue_bibipass_campaign_notifications(
+        "bibipass_announcement", announcement_at,
+    ) == 3
+    assert await bot._enqueue_bibipass_campaign_notifications(
+        "bibipass_announcement", announcement_at,
+    ) == 0
+    assert await bot._enqueue_bibipass_campaign_notifications(
+        "bibipass_started", started_at,
+    ) == 3
+    assert await bot._enqueue_bibipass_campaign_notifications(
+        "bibipass_started", started_at,
+    ) == 0
+    async with bot.db_connect() as db:
+        queued = await (await db.execute(
+            "SELECT kind,user_id,status FROM crm_notification_outbox "
+            "WHERE kind LIKE 'bibipass_%' ORDER BY kind,user_id"
+        )).fetchall()
+    assert len(queued) == 6
+    assert {row[1] for row in queued} == {701, 702, 703}
+    assert {row[0] for row in queued} == {"bibipass_announcement", "bibipass_started"}
+    sender = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    with patch.object(bot.bot, "send_message", sender):
+        assert await bot.deliver_crm_notifications_once(limit=20) == 6
+    assert sender.await_count == 6
+    first_message = sender.await_args_list[0]
+    assert "квест сотрудников" in first_message.args[1]
+    keyboard = first_message.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "🏆 Открыть БибиПасс"
+    assert "startapp=bibipass" in keyboard.inline_keyboard[0][0].url
+    assert keyboard.inline_keyboard[1][0].url == "https://t.me/bbbikefan"
+    async with bot.db_connect() as db:
+        statuses = await (await db.execute(
+            "SELECT status,COUNT(*) FROM crm_notification_outbox "
+            "WHERE kind LIKE 'bibipass_%' GROUP BY status"
+        )).fetchall()
+    assert statuses == [("sent", 6)]
+
     score = await bot._bibipass_points(701, season)
     assert score["action_points"] == 20
     assert score["task_points"] == 10
@@ -146,7 +193,7 @@ async def run():
     participant = await bot._bibipass_participant(703, season, create=False)
     assert participant["membership_status"] == "member" and participant["joined_at"]
 
-    print("PASS BibiPass: exact 20-day timer, levels, rewards, rating and membership")
+    print("PASS BibiPass: timer, rewards, rating and idempotent private notifications")
 
 
 if __name__ == "__main__":

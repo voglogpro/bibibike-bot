@@ -23,6 +23,7 @@ REQUIRED = (
     'id="bibipassIntroTimer"',
     'function tickBibipassCountdowns()',
     'data-bibipass-countdown',
+    "String(startParam)==='bibipass'",
     'function openBibipass()',
     "'/api/bibipass'",
     'id="profileNavBadge"',

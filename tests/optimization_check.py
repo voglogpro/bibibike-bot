@@ -90,7 +90,8 @@ async def check_worker_lifecycle():
     gate = asyncio.Event()
     names = (
         "kpi_background_worker", "scheduled_report_status_worker", "auto_close_worker",
-        "health_watchdog", "crm_planned_shift_worker", "crm_notification_worker",
+        "health_watchdog", "crm_planned_shift_worker", "bibipass_campaign_worker",
+        "crm_notification_worker",
         "crm_shift_task_sync_worker", "todo_cleanup_worker",
     )
 
@@ -115,7 +116,8 @@ async def check_worker_lifecycle():
         assert started == set(names)
         assert {task.get_name() for task in tasks} == {
             "bibibike:kpi", "bibibike:scheduled-report", "bibibike:auto-close",
-            "bibibike:health", "bibibike:planned-shift", "bibibike:notification",
+            "bibibike:health", "bibibike:planned-shift", "bibibike:bibipass-campaign",
+            "bibibike:notification",
             "bibibike:shift-task-sync", "bibibike:todo-cleanup",
         }
         await bot.stop_background_workers(tasks)

@@ -87,16 +87,34 @@ async def run():
         96, ids["author"], -1003431950710,
         caption="@first_worker ты сегодня выходишь на смену?", photos=1,
     )
-    assert (await task_filter(question))["task_route"]["city_key"] == app.DEFAULT_CITY_KEY
-    await app.task_chat_message(question, route)
-    question.reply.assert_not_awaited()
+    # CRM-роль автора не должна поглощать обычные рабочие фото. Если формат
+    # задачи не распознан, сообщение продолжит путь в рабочий парсер.
+    assert await task_filter(question) is False
     missing_target = Message(
         97, ids["author"], -1003431950710,
         caption="Саня приоритет к выполнению убрать байк с территории", photos=1,
     )
-    assert (await task_filter(missing_target))["task_route"]["city_key"] == app.DEFAULT_CITY_KEY
-    await app.task_chat_message(missing_target, route)
-    missing_target.reply.assert_not_awaited()
+    assert await task_filter(missing_target) is False
+
+    # Все части альбома приходится сначала собрать: подпись задачи может прийти
+    # последней. Но если корректной задачи в альбоме нет, даже альбом автора с
+    # правом ставить задачи целиком возвращается в учёт действий.
+    work_album = [
+        Message(94, ids["author"], -1003431950710,
+                caption="Переместил 0123", photos=1, media_group_id="work-album"),
+        Message(95, ids["author"], -1003431950710,
+                photos=1, media_group_id="work-album"),
+    ]
+    work_album_key = (work_album[0].chat.id, "work-album")
+    app._task_chat_albums[work_album_key] = {
+        "messages": work_album, "text": "", "route": route,
+        "generation": 1, "task": None,
+    }
+    with patch.object(app.asyncio, "sleep", AsyncMock()), \
+            patch.object(app, "process_work_message", AsyncMock()) as work_parser:
+        await app._flush_task_chat_album(work_album_key, 1)
+    assert work_parser.await_count == 2
+    assert [call.args[0].message_id for call in work_parser.await_args_list] == [94, 95]
     album = [
         Message(101, ids["author"], -1003431950710,
                 caption="@first_worker @second_worker\nПереставить велосипеды\nПо отмеченной зоне",

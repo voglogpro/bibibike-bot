@@ -5079,13 +5079,10 @@ class TaskChatFilter(BaseFilter):
                 "«Задача: @user текст», не вопрос и минимум два слова после тегов.",
                 message.chat.id, message.message_thread_id, message.message_id,
             )
-        # Фото руководителя, которое не является задачей, тихо поглощаем в
-        # выделенной теме: бот не должен отвечать в рабочем чате без @username.
-        if message.photo:
-            city = await _task_chat_city(route)
-            sender = getattr(message, "from_user", None)
-            if sender and city and await _task_chat_authorized(sender.id, city):
-                return {"task_route": route}
+        # Сообщение, не похожее на задачу, обязательно оставляем рабочему
+        # парсеру. Это относится и к администраторам/старшим скаутам: у них
+        # тоже может быть открыта обычная смена, а роль в CRM не должна
+        # отключать учёт их собственных действий.
         return False
 
 
@@ -5337,13 +5334,9 @@ async def _flush_task_chat_album(key, generation):
         await _create_task_from_chat(entry["messages"], entry["route"], entry["text"])
         return
     messages = sorted(entry["messages"], key=lambda item: item.message_id)
-    source = messages[0] if messages else None
-    city = await _task_chat_city(entry["route"])
-    sender = getattr(source, "from_user", None) if source else None
-    if source and city and sender and await _task_chat_authorized(sender.id, city):
-        return
-    # Альбом обычного сотрудника без @упоминания — не задача. Передаём каждую его
-    # часть прежнему рабочему парсеру, чтобы OCR и учёт действий не изменились.
+    # Альбом без корректного формата задачи — это обычное рабочее сообщение.
+    # Передаём каждую часть прежнему парсеру независимо от CRM-роли автора:
+    # администратор или старший скаут может одновременно работать на смене.
     city = get_city_by_group(messages[0].chat.id) if messages else None
     if not city:
         return

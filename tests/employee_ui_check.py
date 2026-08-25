@@ -17,6 +17,14 @@ REQUIRED = (
     'id="tab-profile"',
     'id="profileTasksOpen"',
     'id="profileScheduleOpen"',
+    'id="profileBibipassOpen"',
+    'id="tab-bibipass"',
+    'id="bibipassIntro"',
+    'id="bibipassIntroTimer"',
+    'function tickBibipassCountdowns()',
+    'data-bibipass-countdown',
+    'function openBibipass()',
+    "'/api/bibipass'",
     'id="profileNavBadge"',
     'id="todoProfileBack"',
     'id="myScheduleBack">← Профиль',
@@ -62,7 +70,7 @@ def main():
     else:
         print("WARN employee UI: node не найден, проверены только контракты разметки")
 
-    print("PASS employee UI: profile navigation, tasks, schedule and no gamification")
+    print("PASS employee UI: profile navigation, tasks, schedule and BibiPass")
 
 
 if __name__ == "__main__":

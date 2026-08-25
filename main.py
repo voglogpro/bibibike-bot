@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-24 · операционная карта районов и задач"
+BUILD_VERSION = "2026-08-25 · БибиПасс: квест 26 августа"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -300,6 +300,70 @@ CRM_UPLOAD_MAX_BYTES = max(
     1024 * 1024,
     min(10 * 1024 * 1024, int(os.getenv("CRM_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))),
 )
+
+# Ежемесячный конкурс сотрудников «БибиПасс». Проверка подписки работает
+# надёжно только когда бот добавлен администратором в указанный канал.
+BIBIPASS_ENABLED = os.getenv("BIBIPASS_ENABLED", "1").strip().lower() not in {
+    "0", "false", "off", "no",
+}
+BIBIPASS_CHANNEL_CHAT = os.getenv("BIBIPASS_CHANNEL_CHAT", "@bbbikefan").strip()
+BIBIPASS_CHANNEL_URL = os.getenv(
+    "BIBIPASS_CHANNEL_URL", "https://t.me/bbbikefan"
+).strip()
+BIBIPASS_SEASON_ID = os.getenv(
+    "BIBIPASS_SEASON_ID", "employee-quest-2026-08-26"
+).strip()
+BIBIPASS_SEASON_NAME = os.getenv(
+    "BIBIPASS_SEASON_NAME", "Квест сотрудников · 20 дней"
+).strip()
+BIBIPASS_SEASON_START = os.getenv(
+    "BIBIPASS_SEASON_START", "2026-08-26T09:00:00+03:00"
+).strip()
+BIBIPASS_SEASON_END = os.getenv(
+    "BIBIPASS_SEASON_END", "2026-09-15T09:00:00+03:00"
+).strip()
+BIBIPASS_MEMBERSHIP_TTL_SEC = max(
+    60, min(3600, int(os.getenv("BIBIPASS_MEMBERSHIP_TTL_SEC", "300")))
+)
+BIBIPASS_LEVEL_COUNT = 20
+BIBIPASS_FIRST_LEVEL_POINTS = 20
+BIBIPASS_LEVEL_POINTS_STEP = 5
+# Полбалла храним целым числом: 1 = 0,5 балла, 2 = 1 балл.
+BIBIPASS_ACTION_HALF_POINTS = {
+    "move": 2,
+    "fix": 1,
+    "to_sc": 2,
+    "from_sc": 2,
+    "battery": 2,
+}
+# Принятая руководителем задача даёт больше очков и Бибибонусов в
+# зависимости от уже существующего приоритета задания.
+BIBIPASS_TASK_REWARDS = {
+    "low": {"points": 5, "bibibonuses": 1},
+    "normal": {"points": 5, "bibibonuses": 1},
+    "high": {"points": 10, "bibibonuses": 3},
+    "urgent": {"points": 20, "bibibonuses": 5},
+}
+# Цена уровня и награда растут вместе. 20 + 25 + ... + 115 = 1350 баллов
+# за полный сезон. Банк на участника — ровно 150 Бибибонусов:
+# 12×5 + 6×10 + 2×15. Две подписки идут дополнительно: 1 месяц и 3 месяца.
+BIBIPASS_REWARDS = []
+_bibipass_cumulative_points = 0
+for _bibipass_level_number in range(1, BIBIPASS_LEVEL_COUNT + 1):
+    _bibipass_need = (
+        BIBIPASS_FIRST_LEVEL_POINTS
+        + (_bibipass_level_number - 1) * BIBIPASS_LEVEL_POINTS_STEP
+    )
+    _bibipass_cumulative_points += _bibipass_need
+    BIBIPASS_REWARDS.append({
+        "level": _bibipass_level_number,
+        "points_needed": _bibipass_need,
+        "cumulative_points": _bibipass_cumulative_points,
+        "bibibonuses": (5 if _bibipass_level_number <= 12
+                         else 10 if _bibipass_level_number <= 18 else 15),
+        "subscription_months": (1 if _bibipass_level_number == 10
+                                else 3 if _bibipass_level_number == 20 else 0),
+    })
 
 # One source of truth for the quick CRM calendar.  The night hours for scouts
 # and chargers match the existing single-shift editor.  Driver presets keep
@@ -1273,6 +1337,50 @@ async def init_db():
                 FOREIGN KEY(route_id) REFERENCES task_chat_routes(id) ON DELETE CASCADE
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bibipass_participants (
+                season_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                intro_seen_at TEXT,
+                joined_at TEXT,
+                membership_status TEXT NOT NULL DEFAULT 'unknown',
+                membership_checked_at TEXT,
+                PRIMARY KEY(season_id, user_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bibipass_reward_grants (
+                season_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                level INTEGER NOT NULL,
+                reward_type TEXT NOT NULL CHECK (
+                    reward_type IN ('bibibonus', 'subscription')
+                ),
+                amount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'earned' CHECK (
+                    status IN ('earned', 'delivered')
+                ),
+                earned_at TEXT NOT NULL,
+                delivered_at TEXT,
+                PRIMARY KEY(season_id, user_id, level, reward_type)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bibipass_task_grants (
+                season_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                task_id INTEGER NOT NULL,
+                task_priority TEXT NOT NULL,
+                points INTEGER NOT NULL,
+                bibibonus_amount INTEGER NOT NULL,
+                earned_at TEXT NOT NULL,
+                PRIMARY KEY(season_id, user_id, task_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bibipass_participants_status "
+            "ON bibipass_participants(season_id, membership_status, joined_at)"
+        )
         try:
             await db.execute("ALTER TABLE cities ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
         except aiosqlite.OperationalError:
@@ -1643,6 +1751,14 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_actions_city_type_shift "
             "ON actions(city_id, action_type, shift_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_actions_user_shift_type "
+            "ON actions(user_id, shift_id, action_type)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bibipass_task_grants_season_user "
+            "ON bibipass_task_grants(season_id, user_id, task_id)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_kpi_city_hour_user "
@@ -6010,6 +6126,445 @@ async def _request_json_object(request):
         return None
     return body if isinstance(body, dict) else None
 
+
+_BIBIPASS_MONTHS = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
+
+
+def _bibipass_boundary(value, fallback, *, inclusive_date_end=False):
+    """Разбирает ISO-дату/время; старую конечную дату считает включительной."""
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return fallback
+    date_only = len(value) == 10
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MSK)
+    else:
+        parsed = parsed.astimezone(MSK)
+    if inclusive_date_end and date_only:
+        parsed += timedelta(days=1)
+    return parsed
+
+
+def _bibipass_season(now=None):
+    """Возвращает границы и состояние конкурса по московскому времени."""
+    now = now or datetime.now(MSK)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=MSK)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start = _bibipass_boundary(BIBIPASS_SEASON_START, month_start)
+    next_month = (start.replace(year=start.year + 1, month=1)
+                  if start.month == 12 else start.replace(month=start.month + 1))
+    end_exclusive = _bibipass_boundary(
+        BIBIPASS_SEASON_END, next_month, inclusive_date_end=True,
+    )
+    if end_exclusive <= start:
+        end_exclusive = start + timedelta(days=20)
+    season_id = BIBIPASS_SEASON_ID or start.strftime("%Y-%m")
+    name = BIBIPASS_SEASON_NAME or (
+        f"БибиПасс · {_BIBIPASS_MONTHS[start.month - 1].capitalize()} {start.year}"
+    )
+    status = "upcoming" if now < start else "active" if now < end_exclusive else "ended"
+    return {
+        "id": season_id,
+        "name": name,
+        "start_at": start.isoformat(),
+        "end_at": end_exclusive.isoformat(),
+        "start_date": start.strftime("%Y-%m-%d"),
+        "end_date": end_exclusive.strftime("%Y-%m-%d"),
+        "server_now": now.isoformat(),
+        "duration_days": round((end_exclusive - start).total_seconds() / 86400, 3),
+        "status": status,
+        "active": bool(BIBIPASS_ENABLED and status == "active"),
+    }
+
+
+def _bibipass_reward_label(reward):
+    label = f"{reward['bibibonuses']} Бибибонусов"
+    months = reward.get("subscription_months", 0)
+    if months:
+        label += (" + подписка на 1 месяц" if months == 1
+                  else " + подписка на 3 месяца")
+    return label
+
+
+def _bibipass_public_rewards():
+    return [dict(reward, label=_bibipass_reward_label(reward))
+            for reward in BIBIPASS_REWARDS]
+
+
+def _bibipass_level(points):
+    points = max(0.0, float(points or 0))
+    level, remaining = 0, points
+    for reward in BIBIPASS_REWARDS:
+        need = reward["points_needed"]
+        if remaining < need:
+            return {
+                "level": level, "next_level": level + 1, "points": points,
+                "current": remaining, "need": need,
+                "percent": round(remaining / need * 100, 1),
+                "season_need": BIBIPASS_REWARDS[-1]["cumulative_points"],
+            }
+        remaining -= need
+        level += 1
+    return {
+        "level": BIBIPASS_LEVEL_COUNT, "next_level": None, "points": points,
+        "current": BIBIPASS_REWARDS[-1]["points_needed"],
+        "need": BIBIPASS_REWARDS[-1]["points_needed"], "percent": 100,
+        "season_need": BIBIPASS_REWARDS[-1]["cumulative_points"],
+    }
+
+
+async def _bibipass_participant(uid, season, create=True):
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM bibipass_participants WHERE season_id=? AND user_id=?",
+            (season["id"], uid),
+        )).fetchone()
+        if row or not create:
+            return dict(row) if row else None
+        # api_state вызывается фоново каждые 20 секунд. Пишем строку только
+        # при первом входе в сезон, а не берём write-lock на каждом polling.
+        await db.execute(
+            "INSERT OR IGNORE INTO bibipass_participants "
+            "(season_id,user_id,membership_status) VALUES (?,?, 'unknown')",
+            (season["id"], uid),
+        )
+        await db.commit()
+        row = await (await db.execute(
+            "SELECT * FROM bibipass_participants WHERE season_id=? AND user_id=?",
+            (season["id"], uid),
+        )).fetchone()
+    return dict(row) if row else {
+        "season_id": season["id"], "user_id": uid, "membership_status": "unknown",
+        "intro_seen_at": None, "joined_at": None, "membership_checked_at": None,
+    }
+
+
+def _bibipass_member_allowed(member):
+    status = getattr(member.status, "value", str(member.status)).lower().split(".")[-1]
+    if status == "restricted":
+        return bool(getattr(member, "is_member", False)), status
+    return status in {"creator", "administrator", "member"}, status
+
+
+async def _bibipass_verify_membership(uid, season, force=False):
+    participant = await _bibipass_participant(uid, season)
+    checked = _parse_datetime(participant.get("membership_checked_at"))
+    now = datetime.now(MSK)
+    if (not force and checked and
+            (now - checked.astimezone(MSK)).total_seconds() < BIBIPASS_MEMBERSHIP_TTL_SEC):
+        return participant.get("membership_status") == "member", None
+    try:
+        member = await bot.get_chat_member(BIBIPASS_CHANNEL_CHAT, uid)
+        allowed, telegram_status = _bibipass_member_allowed(member)
+    except Exception as exc:
+        logger.warning(
+            "БибиПасс: не удалось проверить подписку uid=%s в %s: %s",
+            uid, BIBIPASS_CHANNEL_CHAT, exc,
+        )
+        # Кратковременный сбой Telegram не отбирает уже выданный доступ.
+        return participant.get("membership_status") == "member", "check_failed"
+    stored_status = "member" if allowed else telegram_status
+    async with db_connect() as db:
+        await db.execute(
+            "UPDATE bibipass_participants SET membership_status=?,"
+            "membership_checked_at=?,joined_at=CASE WHEN ? AND joined_at IS NULL "
+            "THEN ? ELSE joined_at END WHERE season_id=? AND user_id=?",
+            (stored_status, now.isoformat(), int(allowed), now.isoformat(), season["id"], uid),
+        )
+        await db.commit()
+    return allowed, None
+
+
+async def _bibipass_sync_task_grants_many(user_ids, season):
+    """Одной транзакцией замораживает новые награды принятых заданий."""
+    user_ids = sorted({int(value) for value in user_ids})
+    if not user_ids:
+        return
+    marks = ",".join("?" for _ in user_ids)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT t.id,t.priority,a.updated_at,a.user_id FROM crm_task_assignees a "
+            "JOIN crm_tasks t ON t.id=a.task_id "
+            f"WHERE a.user_id IN ({marks}) AND a.status='accepted' "
+            "AND t.created_by<>a.user_id AND datetime(a.updated_at)>=datetime(?) "
+            "AND datetime(a.updated_at)<datetime(?)",
+            (*user_ids, season["start_at"], season["end_at"]),
+        )).fetchall()
+        accepted = await (await db.execute(
+            f"SELECT user_id,task_id FROM bibipass_task_grants WHERE season_id=? "
+            f"AND user_id IN ({marks})",
+            (season["id"], *user_ids),
+        )).fetchall()
+        existing = {(int(row["user_id"]), int(row["task_id"])) for row in accepted}
+        inserts = []
+        for row in rows:
+            key = (int(row["user_id"]), int(row["id"]))
+            if key in existing:
+                continue
+            priority = (row["priority"] or "normal").lower()
+            reward = BIBIPASS_TASK_REWARDS.get(priority, BIBIPASS_TASK_REWARDS["normal"])
+            inserts.append((season["id"], row["user_id"], row["id"], priority,
+                            reward["points"], reward["bibibonuses"], row["updated_at"]))
+        if inserts:
+            await db.executemany(
+                "INSERT OR IGNORE INTO bibipass_task_grants "
+                "(season_id,user_id,task_id,task_priority,points,bibibonus_amount,earned_at) "
+                "VALUES (?,?,?,?,?,?,?)", inserts,
+            )
+            await db.commit()
+
+
+async def _bibipass_scores(user_ids, season):
+    user_ids = sorted({int(value) for value in user_ids})
+    if not user_ids:
+        return {}
+    await _bibipass_sync_task_grants_many(user_ids, season)
+    scores = {
+        uid: {"action_points": 0, "task_points": 0, "task_bibibonuses": 0,
+              "completed_tasks": 0, "total": 0}
+        for uid in user_ids
+    }
+    marks = ",".join("?" for _ in user_ids)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT a.user_id,a.action_type,a.bike_codes,a.quantity,a.message_id FROM actions a "
+            f"JOIN shifts s ON s.id=a.shift_id WHERE a.user_id IN ({marks}) "
+            "AND datetime(COALESCE(s.start_at,s.created_at))>=datetime(?) "
+            "AND datetime(COALESCE(s.start_at,s.created_at))<datetime(?)",
+            (*user_ids, season["start_at"], season["end_at"]),
+        )).fetchall()
+        half_points = {uid: 0 for uid in user_ids}
+        for row in rows:
+            # Ручной плюс в Mini App не участвует в конкурсе: иначе счётчик
+            # можно накрутить. Ручной минус учитывается как честная коррекция.
+            if not row["message_id"] and (row["quantity"] or 0) >= 0:
+                continue
+            units = _action_units(row)
+            half_points[int(row["user_id"])] += (
+                units * BIBIPASS_ACTION_HALF_POINTS.get(row["action_type"], 0)
+            )
+        task_rows = await (await db.execute(
+            "SELECT user_id,COALESCE(SUM(points),0) AS points,"
+            "COALESCE(SUM(bibibonus_amount),0) AS bonuses,COUNT(*) AS task_count "
+            f"FROM bibipass_task_grants WHERE season_id=? AND user_id IN ({marks}) "
+            "GROUP BY user_id",
+            (season["id"], *user_ids),
+        )).fetchall()
+    for uid, value in half_points.items():
+        scores[uid]["action_points"] = max(0, value) / 2
+    for row in task_rows:
+        score = scores[int(row["user_id"])]
+        score["task_points"] = int(row["points"] or 0)
+        score["task_bibibonuses"] = int(row["bonuses"] or 0)
+        score["completed_tasks"] = int(row["task_count"] or 0)
+    for score in scores.values():
+        score["total"] = score["action_points"] + score["task_points"]
+    return scores
+
+
+async def _bibipass_points(uid, season):
+    return (await _bibipass_scores([uid], season))[int(uid)]
+
+
+async def _bibipass_sync_level_rewards(uid, season, level):
+    now_iso = datetime.now(MSK).isoformat()
+    async with db_connect() as db:
+        existing_rows = await (await db.execute(
+            "SELECT level,reward_type FROM bibipass_reward_grants "
+            "WHERE season_id=? AND user_id=?", (season["id"], uid),
+        )).fetchall()
+        existing = {(int(row[0]), row[1]) for row in existing_rows}
+        inserts = []
+        for reward in BIBIPASS_REWARDS:
+            if reward["level"] > level:
+                break
+            if (reward["level"], "bibibonus") not in existing:
+                inserts.append((season["id"], uid, reward["level"], "bibibonus",
+                                reward["bibibonuses"], now_iso))
+            if (reward["level"], "subscription") not in existing and reward.get(
+                    "subscription_months"):
+                inserts.append((season["id"], uid, reward["level"], "subscription",
+                                reward["subscription_months"], now_iso))
+        if inserts:
+            await db.executemany(
+                "INSERT OR IGNORE INTO bibipass_reward_grants "
+                "(season_id,user_id,level,reward_type,amount,earned_at) "
+                "VALUES (?,?,?,?,?,?)", inserts,
+            )
+            await db.commit()
+
+
+async def _bibipass_state_summary(uid):
+    season = _bibipass_season()
+    if not BIBIPASS_ENABLED:
+        return {"enabled": False}
+    participant = await _bibipass_participant(uid, season)
+    return {
+        "enabled": True,
+        "season_id": season["id"],
+        "name": season["name"],
+        "active": season["active"],
+        "status": season["status"],
+        "start_at": season["start_at"],
+        "end_at": season["end_at"],
+        "server_now": season["server_now"],
+        "intro_required": not bool(participant.get("intro_seen_at")),
+        "member": participant.get("membership_status") == "member",
+        "joined": bool(participant.get("joined_at")),
+        "channel_url": BIBIPASS_CHANNEL_URL,
+    }
+
+
+async def _bibipass_payload(uid, verify=True, force=False):
+    season = _bibipass_season()
+    participant = await _bibipass_participant(uid, season)
+    member = participant.get("membership_status") == "member"
+    check_error = None
+    # До старта можно заранее подписаться и открыть участие. После дедлайна
+    # сохраняем финальную таблицу без лишних обращений к Telegram.
+    if verify and season["status"] != "ended":
+        member, check_error = await _bibipass_verify_membership(uid, season, force=force)
+        participant = await _bibipass_participant(uid, season, create=False)
+    base = {
+        "enabled": BIBIPASS_ENABLED,
+        "season": season,
+        "channel": {
+            "chat": BIBIPASS_CHANNEL_CHAT,
+            "url": BIBIPASS_CHANNEL_URL,
+            "title": "Общий канал команды BibiBike",
+        },
+        "member": bool(member),
+        "joined": bool(participant.get("joined_at")),
+        "intro_required": not bool(participant.get("intro_seen_at")),
+        "check_error": check_error,
+        "rules": {
+            "levels": BIBIPASS_LEVEL_COUNT,
+            "first_level_points": BIBIPASS_FIRST_LEVEL_POINTS,
+            "level_points_step": BIBIPASS_LEVEL_POINTS_STEP,
+            "season_points": BIBIPASS_REWARDS[-1]["cumulative_points"],
+            "actions": [
+                {"type": "move", "label": "Перемещение", "points": 1},
+                {"type": "fix", "label": "Поправленный байк", "points": 0.5},
+                {"type": "to_sc", "label": "Привоз на СЦ", "points": 1},
+                {"type": "from_sc", "label": "Вывоз с СЦ", "points": 1},
+                {"type": "battery", "label": "Замена АКБ", "points": 1},
+            ],
+            "tasks": [
+                {"priority": key, "points": value["points"],
+                 "bibibonuses": value["bibibonuses"]}
+                for key, value in BIBIPASS_TASK_REWARDS.items() if key != "low"
+            ],
+        },
+        "rewards": _bibipass_public_rewards(),
+    }
+    if not BIBIPASS_ENABLED or not member:
+        return base
+
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        people = await (await db.execute(
+            "SELECT p.user_id,p.joined_at,u.full_name,u.role,c.name AS city_name "
+            "FROM bibipass_participants p JOIN users u ON u.user_id=p.user_id "
+            "LEFT JOIN cities c ON c.id=u.city_id WHERE p.season_id=? "
+            "AND p.membership_status='member' AND p.joined_at IS NOT NULL "
+            "AND COALESCE(u.statistics_visible,1)=1",
+            (season["id"],),
+        )).fetchall()
+    score_ids = [int(person["user_id"]) for person in people]
+    if int(uid) not in score_ids:
+        score_ids.append(int(uid))
+    scores = await _bibipass_scores(score_ids, season)
+    own_points = scores[int(uid)]
+    own_level = _bibipass_level(own_points["total"])
+    await _bibipass_sync_level_rewards(uid, season, own_level["level"])
+    ranking = []
+    for raw in people:
+        person = dict(raw)
+        score = scores[int(person["user_id"])]
+        level_state = _bibipass_level(score["total"])
+        ranking.append({
+            "user_id": person["user_id"], "name": person["full_name"] or "Сотрудник",
+            "role": person["role"] or "", "city": person["city_name"] or "",
+            "points": score["total"], "level": level_state["level"],
+            "completed_tasks": score["completed_tasks"],
+            "joined_at": person["joined_at"],
+        })
+    ranking.sort(key=lambda item: (-item["level"], -item["points"], item["joined_at"],
+                                   item["name"].casefold()))
+    for position, item in enumerate(ranking, 1):
+        item["position"] = position
+        item["is_me"] = int(item["user_id"]) == int(uid)
+        item.pop("joined_at", None)
+    level_bonuses = sum(
+        reward["bibibonuses"] for reward in BIBIPASS_REWARDS
+        if reward["level"] <= own_level["level"]
+    )
+    subscription_months = sum(
+        reward["subscription_months"] for reward in BIBIPASS_REWARDS
+        if reward["subscription_months"] and reward["level"] <= own_level["level"]
+    )
+    base.update({
+        "progress": dict(own_level, **own_points),
+        "earned": {
+            "bibibonuses": level_bonuses + own_points["task_bibibonuses"],
+            "level_bibibonuses": level_bonuses,
+            "task_bibibonuses": own_points["task_bibibonuses"],
+            "subscription_months": subscription_months,
+        },
+        "position": next((item["position"] for item in ranking if item["is_me"]), None),
+        "participants": len(ranking),
+        "ranking": ranking[:100],
+    })
+    return base
+
+
+async def api_bibipass(request):
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    return web.json_response(await _bibipass_payload(tg_user["id"], verify=True))
+
+
+async def api_bibipass_check_membership(request):
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    payload = await _bibipass_payload(tg_user["id"], verify=True, force=True)
+    if payload.get("check_error") and not payload.get("member"):
+        payload["message"] = (
+            "Не удалось проверить подписку. Убедитесь, что бот — администратор канала."
+        )
+        return web.json_response(payload, status=503)
+    if not payload.get("member"):
+        payload["message"] = "Подписка пока не найдена. Подпишитесь и повторите проверку."
+        return web.json_response(payload, status=403)
+    return web.json_response(payload)
+
+
+async def api_bibipass_intro_seen(request):
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    season = _bibipass_season()
+    await _bibipass_participant(tg_user["id"], season)
+    async with db_connect() as db:
+        await db.execute(
+            "UPDATE bibipass_participants SET intro_seen_at=? WHERE season_id=? AND user_id=?",
+            (datetime.now(MSK).isoformat(), season["id"], tg_user["id"]),
+        )
+        await db.commit()
+    return web.json_response({"ok": True})
+
 @web.middleware
 async def cors_mw(request, handler):
     if request.method == "OPTIONS":
@@ -6226,6 +6781,7 @@ async def api_state(request):
         }
 
     title, tier = _title_for_level(lvl)
+    bibipass_summary = await _bibipass_state_summary(uid)
     return web.json_response({
         "user": {
             "id": uid,
@@ -6263,6 +6819,7 @@ async def api_state(request):
         "build_version": BUILD_VERSION,
         "period_started_at": period_start,
         "period_started_label": _fmt_date(period_start),
+        "bibipass": bibipass_summary,
     })
 
 async def api_settings(request):
@@ -13747,6 +14304,9 @@ async def start_api_server():
             client_max_size=CRM_UPLOAD_MAX_FILES * CRM_UPLOAD_MAX_BYTES + 1024 * 1024,
         )
         app.router.add_get("/api/state", api_state)
+        app.router.add_get("/api/bibipass", api_bibipass)
+        app.router.add_post("/api/bibipass/check-membership", api_bibipass_check_membership)
+        app.router.add_post("/api/bibipass/intro-seen", api_bibipass_intro_seen)
         app.router.add_get("/api/my-schedule", api_my_schedule)
         app.router.add_post("/api/settings", api_settings)
         app.router.add_patch(

@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-25 · Плавные переходы интерфейса"
+BUILD_VERSION = "2026-08-25 · БибиПасс: растущие награды"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -338,9 +338,20 @@ BIBIPASS_ACTION_HALF_POINTS = {
     "from_sc": 2,
     "battery": 2,
 }
-# Цена уровня и награда растут вместе. 20 + 25 + ... + 115 = 1350 XP.
+# Цена уровня и награда растут вместе. 20 + 25 + ... + 115 = 1350 XP
 # за полный сезон. Банк на участника — ровно 150 Бибибонусов:
-# 12×5 + 6×10 + 2×15. Две подписки идут дополнительно: 1 месяц и 3 месяца.
+# Ступени 2 → 4 → 6 → 8 → 10 → 12 → 14 → 20 дают ровно 150.
+# Две подписки идут дополнительно: 1 месяц и 3 месяца.
+BIBIPASS_BONUS_PROGRESSION = (
+    2, 2, 2, 2,
+    4, 4, 4,
+    6, 6, 6,
+    8, 8, 8,
+    10, 10, 10,
+    12, 12,
+    14,
+    20,
+)
 BIBIPASS_REWARDS = []
 _bibipass_cumulative_points = 0
 for _bibipass_level_number in range(1, BIBIPASS_LEVEL_COUNT + 1):
@@ -353,8 +364,9 @@ for _bibipass_level_number in range(1, BIBIPASS_LEVEL_COUNT + 1):
         "level": _bibipass_level_number,
         "points_needed": _bibipass_need,
         "cumulative_points": _bibipass_cumulative_points,
-        "bibibonuses": (5 if _bibipass_level_number <= 12
-                         else 10 if _bibipass_level_number <= 18 else 15),
+        "bibibonuses": BIBIPASS_BONUS_PROGRESSION[
+            _bibipass_level_number - 1
+        ],
         "subscription_months": (1 if _bibipass_level_number == 10
                                 else 3 if _bibipass_level_number == 20 else 0),
     })

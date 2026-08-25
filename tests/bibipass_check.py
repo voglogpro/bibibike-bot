@@ -41,6 +41,10 @@ async def run():
     assert rewards[0]["points_needed"] == 20
     assert rewards[-1]["points_needed"] == 115
     assert rewards[-1]["cumulative_points"] == 1350
+    assert [item["bibibonuses"] for item in rewards] == [
+        2, 2, 2, 2, 4, 4, 4, 6, 6, 6,
+        8, 8, 8, 10, 10, 10, 12, 12, 14, 20,
+    ]
     assert sum(item["bibibonuses"] for item in rewards) == 150
     assert [(item["level"], item["subscription_months"]) for item in rewards
             if item["subscription_months"]] == [(10, 1), (20, 3)]
@@ -175,8 +179,8 @@ async def run():
 
     payload = await bot._bibipass_payload(701, verify=False)
     assert payload["progress"]["level"] == 1
-    assert payload["earned"]["level_bibibonuses"] == 5
-    assert payload["earned"]["bibibonuses"] == 5
+    assert payload["earned"]["level_bibibonuses"] == 2
+    assert payload["earned"]["bibibonuses"] == 2
     assert "tasks" not in payload["rules"]
     assert payload["position"] == 2  # 20 XP против 25, города объединены.
     assert {item["city"] for item in payload["ranking"]} == {first["name"], second["name"]}

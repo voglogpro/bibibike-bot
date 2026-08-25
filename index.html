@@ -100,13 +100,6 @@
   .foot{display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--muted);padding:2px 4px}
   .foot b{color:var(--ink);font-family:'Montserrat';font-weight:800;margin-left:5px}
 
-  /* Тиры бейджа уровня */
-  .badge-lvl.bronze{background:linear-gradient(140deg,#D89A6A,#9C5B2B);box-shadow:0 10px 24px rgba(156,91,43,.4)}
-  .badge-lvl.silver{background:linear-gradient(140deg,#DDE4E8,#94A3AE);box-shadow:0 10px 24px rgba(148,163,174,.4)}
-  .badge-lvl.gold{background:linear-gradient(140deg,#F7D774,#D99A1B);box-shadow:0 10px 24px rgba(217,154,27,.45)}
-  .badge-lvl.platinum{background:linear-gradient(140deg,#B8F1E4,#4FA895);box-shadow:0 10px 24px rgba(79,168,149,.45)}
-  .badge-lvl.diamond{background:linear-gradient(140deg,#BFE3FF,#5A8FE8);box-shadow:0 10px 24px rgba(90,143,232,.5)}
-
   /* Удаление смены в истории */
   .hrow .del{border:0;background:#FDECEC;color:#B3261E;border-radius:10px;width:34px;height:34px;
     font-size:15px;cursor:pointer;margin-left:10px;flex:none}
@@ -176,30 +169,8 @@
   .switch input:checked + .slider{background:var(--green)}
   .switch input:checked + .slider::before{transform:translateX(22px)}
 
-  /* ============ Рейтинг ============ */
-  .badge-lvl{
-    width:92px;height:92px;border-radius:26px;margin:6px auto 12px;position:relative;overflow:hidden;
-    background:linear-gradient(140deg,var(--green),var(--green-deep));display:grid;place-items:center;
-    box-shadow:0 10px 24px rgba(22,160,42,.4);
-  }
-  .badge-lvl::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(120deg, rgba(0,0,0,.08) 0 3px, transparent 3px 9px)}
-  .badge-lvl b{position:relative;font-family:'Montserrat';font-weight:900;font-size:42px;color:#08130B}
-  .rk-title{text-align:center;font-family:'Montserrat';font-weight:900;font-size:24px}
-  .rk-sub{text-align:center;color:var(--muted);font-weight:600;font-size:13.5px;margin:4px 0 14px}
-  .bar{height:12px;background:#E6EBDD;border-radius:99px;overflow:hidden}
-  .bar span{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--green-deep));border-radius:99px;transition:width .5s ease}
-  .xp-line{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:700;margin:8px 2px 16px}
-  .xp-line b{color:var(--ink)}
-  .ranks{display:grid;gap:8px;margin-top:14px}
-  .rank{display:flex;align-items:center;gap:12px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}
-  .rank .ic{width:38px;height:38px;border-radius:11px;background:#E7ECDE;display:grid;place-items:center;font-size:19px;flex:none}
-  .rank.cur{border-color:var(--green);background:#F3FBF2}
-  .rank.cur .ic{background:var(--green)}
-  .rank .rn{font-weight:800;font-size:15px}
-  .rank .rq{color:var(--muted);font-size:12px;font-weight:600;margin-top:2px}
-  .rank .ok{margin-left:auto;color:var(--green-deep);font-weight:900;font-size:18px}
-
-  /* История внутри рейтинга */
+  /* ============ Профиль и история ============ */
+  /* История внутри профиля */
   .htotal{background:var(--ink);border-radius:16px;padding:14px 16px;color:#fff;display:flex;justify-content:space-between;align-items:center;margin:14px 0}
   .htotal .l{color:#9fb0a2;font-size:13px;font-weight:600}
   .htotal .r{font-family:'Montserrat';font-weight:900;font-size:24px;color:var(--money)}
@@ -303,7 +274,7 @@
   .manual-controls .tinput{min-width:0}
   @media(max-width:420px){.manual-controls{grid-template-columns:1fr 1fr}.manual-controls .mini{grid-column:1/-1}}
   .mini{border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:8px 11px;font-weight:800}
-  /* Задания сотрудника: изолированный экран внутри «Ещё» */
+  /* Задания сотрудника: дочерний экран профиля */
   .task-count{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 7px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;font-weight:900}
   .my-task-list{display:grid;gap:9px}.my-task-card{width:100%;text-align:left;border:1px solid var(--line);border-radius:14px;background:var(--bg);padding:12px;color:var(--ink);font:inherit;cursor:pointer}
   .my-task-card:active{transform:scale(.99)}.my-task-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;min-width:0}.my-task-title{font-weight:900;font-size:14px;line-height:1.3;min-width:0;overflow-wrap:anywhere}.my-task-top .formhead{min-width:0;overflow-wrap:anywhere}.my-task-meta{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.4}
@@ -315,6 +286,8 @@
   .todo-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.todo-head .formhead{margin:0}.todo-add{width:42px;height:42px;border:0;border-radius:13px;background:var(--green);color:#07120A;font-size:24px;font-weight:900}.todo-schedule-card{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:11px;text-align:left;border:1px solid rgba(49,216,67,.27);border-radius:16px;background:linear-gradient(145deg,#102819,#101A14);color:var(--ink);padding:13px;margin-bottom:12px}.todo-schedule-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:#173923;color:var(--green)}.todo-schedule-card b{display:block;font-size:14px}.todo-schedule-card small{display:block;color:var(--muted);font-size:10px;margin-top:4px}.todo-segments,.todo-filters,.todo-choice-grid{display:flex;gap:7px;overflow-x:auto;scrollbar-width:none;margin-bottom:10px}.todo-segments::-webkit-scrollbar,.todo-filters::-webkit-scrollbar{display:none}.todo-segments button,.todo-filters button,.todo-choice{flex:0 0 auto;min-height:40px;border:1px solid var(--line);border-radius:999px;background:var(--tile);color:var(--muted);padding:9px 14px;font:inherit;font-size:11px;font-weight:850}.todo-segments button.on,.todo-filters button.on,.todo-choice.on{background:#13351D;border-color:#2B7440;color:var(--green)}.todo-form{margin-top:10px}.todo-form textarea{min-height:88px;resize:vertical}.todo-form-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.todo-people{display:grid;gap:7px;max-height:210px;overflow:auto}.todo-person{width:100%;display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);border-radius:13px;background:var(--tile);color:var(--ink);padding:10px}.todo-person.on{border-color:var(--green);background:#102B18}.todo-person .avatar{width:34px;height:34px;border-radius:10px;background:#1F2A23;display:grid;place-items:center;color:var(--green);font-weight:900}.todo-person b{display:block;font-size:12px}.todo-person small{display:block;color:var(--muted);font-size:9px;margin-top:2px}.todo-custom-label{color:var(--muted);font-size:10px;font-weight:800;margin:7px 2px 5px}.todo-card-owner{color:#92A198;font-size:10px;margin-top:5px}.todo-card-actions{display:flex;gap:6px;margin-top:10px}.todo-card-actions button{min-height:36px;border:1px solid var(--line);border-radius:10px;background:#1B241E;color:var(--ink);padding:7px 10px;font-size:10px;font-weight:850}.todo-card-actions .danger{color:#FF8B93}.todo-dialog{position:fixed;inset:0;z-index:90;display:flex;align-items:flex-end;justify-content:center;padding:16px;background:rgba(0,0,0,.66);backdrop-filter:blur(5px)}.todo-dialog-card{width:min(100%,470px);border:1px solid var(--line);border-radius:22px;background:#101713;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.45)}.todo-dialog-card h3{margin:0 0 7px;font-size:18px}.todo-dialog-card p{margin:0 0 13px;color:var(--muted);font-size:12px;line-height:1.45}.todo-dialog-card textarea{width:100%;min-height:86px;margin-bottom:12px}.todo-dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.nav-icon{width:21px;height:21px;display:block}.tab .ti svg{width:21px;height:21px;display:block}
   /* Личный график сотрудника: мобильная декада 5×2 и детали выбранного дня. */
   .my-schedule-month{display:grid;grid-template-columns:42px minmax(0,1fr) 42px;align-items:center;gap:8px;margin-bottom:10px}.my-schedule-month b{text-align:center;font-family:'Manrope';font-size:17px;text-transform:capitalize}.my-schedule-month button{height:40px;border:1px solid var(--line);border-radius:12px;background:var(--tile);color:var(--ink);font-weight:900}.my-schedule-today{width:100%;margin-bottom:10px}.my-schedule-decades{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:10px}.my-schedule-decades button{min-height:38px;border:1px solid var(--line);border-radius:999px;background:var(--tile);color:var(--muted);font-size:11px;font-weight:850}.my-schedule-decades button.on{border-color:var(--green);background:#102B18;color:var(--green)}.my-schedule-summary{font-size:12px;color:var(--muted);margin:0 2px 10px}.my-schedule-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.my-schedule-day{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:13px;background:var(--tile);color:var(--ink);display:grid;place-items:center;align-content:center;gap:2px;padding:6px 3px}.my-schedule-day b{font-size:17px}.my-schedule-day small{font-size:9px;color:var(--muted);text-transform:capitalize}.my-schedule-day span{max-width:100%;font-size:8px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.my-schedule-day.regular{background:#102B18;border-color:#245A32}.my-schedule-day.extra{background:#332811;border-color:#6B5115;color:#FFE19A}.my-schedule-day.cancelled{opacity:.58;text-decoration:line-through}.my-schedule-day.active{box-shadow:0 0 0 2px rgba(53,211,58,.35)}.my-schedule-day.missed{border-color:#7B3036}.my-schedule-day.today{border-color:var(--green)}.my-schedule-day.selected{box-shadow:inset 0 -3px var(--green)}.my-schedule-detail{margin-top:12px;border:1px solid var(--line);border-radius:15px;background:var(--tile);padding:13px}.my-schedule-detail h3{font-family:'Manrope';font-size:15px;margin:0 0 10px}.my-schedule-shift{border-top:1px solid var(--line);padding:10px 0}.my-schedule-shift:first-of-type{border-top:0;padding-top:0}.my-schedule-shift-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.my-schedule-shift-head b{font-size:14px}.my-schedule-status{border-radius:999px;padding:4px 7px;background:#1C2620;color:var(--muted);font-size:9px;font-weight:900}.my-schedule-status.active,.my-schedule-status.completed{background:#102B18;color:var(--green)}.my-schedule-status.cancelled,.my-schedule-status.missed{background:#32191C;color:#FF8B93}.my-schedule-meta{font-size:11px;color:var(--muted);line-height:1.45;margin-top:5px}.my-schedule-meta.warn{color:#FF8B93}.my-schedule-updated{text-align:center;color:var(--muted);font-size:10px;margin-top:10px}
+  /* Профиль без уровней и рейтингов: только рабочая информация и переходы. */
+  .profile-person{display:flex;align-items:center;gap:13px;margin-bottom:14px}.profile-avatar{width:52px;height:52px;flex:none;display:grid;place-items:center;border-radius:16px;background:#12351D;color:var(--green);font-family:'Manrope';font-size:19px;font-weight:900}.profile-copy{min-width:0;flex:1}.profile-copy h1{margin:0;font-size:19px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.profile-copy p{margin:5px 0 0;color:var(--muted);font-size:11px}.profile-state{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:5px 8px;border-radius:99px;background:#1B241E;color:var(--muted);font-size:9px;font-weight:900}.profile-state::before{content:"";width:7px;height:7px;border-radius:50%;background:#68736C}.profile-state.on{background:#102B18;color:var(--green)}.profile-state.on::before{background:var(--green)}.profile-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.profile-stat{min-width:0;padding:12px 8px;border:1px solid var(--line);border-radius:14px;background:var(--tile);text-align:center}.profile-stat b{display:block;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.profile-stat small{display:block;margin-top:5px;color:var(--muted);font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}.profile-section-title{margin:2px 2px 10px;font-size:12px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.profile-links{display:grid;gap:9px}.profile-link{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:11px;text-align:left;border:1px solid var(--line);border-radius:16px;background:var(--tile);color:var(--ink);padding:13px;font:inherit}.profile-link:active{transform:scale(.99)}.profile-link-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:#102B18;color:var(--green)}.profile-link-icon svg{width:21px;height:21px}.profile-link-copy b{display:block;font-size:14px}.profile-link-copy small{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:4px}.profile-link-end{display:flex;align-items:center;gap:7px}.profile-link-end .chev{color:var(--muted);font-size:20px}.todo-head.profile-child{display:grid;grid-template-columns:auto minmax(0,1fr) auto}.todo-head.profile-child .formhead{text-align:center}
   @media(max-width:420px){
     .my-task-actions .buttons{display:grid;grid-template-columns:1fr}
     .my-task-actions .buttons button{width:100%;min-width:0}
@@ -352,11 +325,10 @@
   .shift-task{width:100%;display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:11px;align-items:center;text-align:left;background:#151C18;border:1px solid var(--line);border-radius:15px;padding:13px;margin:0 0 12px;color:var(--ink);font-family:'Manrope';cursor:pointer}
   .shift-task .task-ic{width:34px;height:34px;border-radius:10px;background:#102845;color:#4A91FF;display:grid;place-items:center;font-weight:900}.shift-task .task-copy{min-width:0}.shift-task .task-kicker{display:block;color:#4A91FF;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.shift-task .task-name{display:block;font-size:13px;font-weight:800;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.shift-task .task-note{display:block;color:var(--muted);font-size:10px;margin-top:3px}.shift-task .task-go{color:var(--muted);font-size:20px}
   .bigbtn,.save{font-family:'Manrope';border-radius:14px;min-height:52px;padding:14px;font-size:15px}.bigbtn.start,.save{background:var(--green);color:#07120A}.bigbtn.lunch{background:#2A2311;color:#FFD16B;border-color:#5A4614}.bigbtn.lunch.on{background:#49370D;color:#FFE19A;border-color:#9B7217}.bigbtn.stop{background:#171E1A;border:1px solid rgba(255,89,100,.28);color:#F5F8F5}
-  .empty .big,.formhead,.rk-title{font-family:'Manrope';color:var(--ink)}.empty .sm,.hint{color:var(--muted)}.lastcard,.rank,.more-item,.soon .card,.admin-row,.task-upload-row{background:#151C18;border-color:var(--line)}
+  .empty .big,.formhead{font-family:'Manrope';color:var(--ink)}.empty .sm,.hint{color:var(--muted)}.lastcard,.more-item,.soon .card,.admin-row,.task-upload-row{background:#151C18;border-color:var(--line)}
   .lastcard .l,.more-item .tx i,.soon .card .td{color:var(--muted)}.lastcard .r,.more-item .tx b,.soon .card .tn{color:var(--ink)}
   .tinput,.amount,.edit-cmt textarea{background:#151C18;border-color:var(--line);color:var(--ink)}.tinput::placeholder,.edit-cmt textarea::placeholder{color:#66736B}.field>label{color:var(--ink)}
   .seg{background:#151C18}.seg button{color:var(--muted)}.seg button.on{background:#253029;color:#fff;box-shadow:none}.slider{background:#334039}
-  .badge-lvl{box-shadow:none}.bar{background:#202923}.xp-line{color:var(--muted)}.xp-line b{color:var(--ink)}.rank.cur{background:#0E2B18;border-color:rgba(49,216,67,.40)}.rank .rn{color:var(--ink)}
   .htotal{background:#0A2113;border:1px solid rgba(49,216,67,.22)}.hrow{border-color:var(--line)}.hrow .d{color:var(--ink)}
   .more-item{color:var(--ink)}.more-item .ic{width:38px;height:38px;border-radius:11px;background:#1C2620;display:grid;place-items:center;font-size:18px}.soon .card{opacity:.52}
   .admin-login,.admin-history-box,.edit-cmt{background:#0E1511;border-color:var(--line)}.admin-city,.period-box,.admin-row.active{background:#101D14;border-color:var(--line)}
@@ -575,11 +547,7 @@
     <!-- ================= ВКЛАДКА: ЗАДАЧИ ================= -->
     <div id="tab-tasks" class="page hidden">
       <div class="panel" id="todoMainView">
-        <div class="todo-head"><div class="formhead">Задачи</div><button class="todo-add" id="todoAdd" aria-label="Создать задачу">+</button></div>
-        <button class="todo-schedule-card" id="todoScheduleOpen">
-          <span class="todo-schedule-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4m8-4v4M3 10h18"/></svg></span>
-          <span><b>Мои смены</b><small id="todoScheduleHint">Личный график и ближайшая смена</small></span><span class="chev">›</span>
-        </button>
+        <div class="todo-head profile-child"><button class="mini" id="todoProfileBack">← Профиль</button><div class="formhead">Задачи</div><button class="todo-add" id="todoAdd" aria-label="Создать задачу">+</button></div>
         <div class="todo-segments" id="todoScope"><button class="on" data-scope="mine">Мне</button><button data-scope="created">От меня</button></div>
         <div class="todo-filters" id="todoFilters"><button class="on" data-filter="active">Основные задачи</button><button data-filter="history">История по дням</button></div>
         <div class="task-api-error hidden" id="myTasksError"></div>
@@ -603,25 +571,36 @@
     </div>
 
     <!-- ================= ВКЛАДКА: ПРОФИЛЬ ================= -->
-    <div id="tab-rating" class="page hidden">
+    <div id="tab-profile" class="page hidden">
       <div class="panel">
-        <div class="badge-lvl" id="badgeLvl"><b id="rLvl">1</b></div>
-        <div class="rk-title"><span id="rIcon">🥾</span> <span id="rTitle">Пеший</span></div>
-        <div class="rk-sub">Уровень <span id="rLvl2">1</span> · опыт за перемещения, поправки и замены</div>
-        <div class="bar"><span id="rBar" style="width:0%"></span></div>
-        <div class="xp-line"><span><b id="rXp">0</b> XP</span><span>до уровня: <b id="rNeed">100</b></span></div>
-
-        <!-- Доход за текущий месяц -->
-        <div class="htotal" style="margin:0 0 10px">
-          <span class="l">Доход за <span id="monthName">месяц</span></span>
-          <span class="r" id="monthEarned">0 ₽</span>
+        <div class="profile-person">
+          <div class="profile-avatar" id="profileInitials">—</div>
+          <div class="profile-copy">
+            <h1 id="profileName">Сотрудник</h1>
+            <p><span id="profileRole">Роль не указана</span> · <span id="profileCity">Город не указан</span></p>
+            <span class="profile-state" id="profileShiftState">Смена не открыта</span>
+          </div>
         </div>
+        <div class="profile-stats">
+          <div class="profile-stat"><b id="profilePeriodEarned">0 ₽</b><small>За декаду</small></div>
+          <div class="profile-stat"><b id="profileShifts">0</b><small>Смен</small></div>
+          <div class="profile-stat"><b id="profileActions">0</b><small>Действий</small></div>
+        </div>
+      </div>
 
-        <div class="grid" style="margin-bottom:0">
-          <div class="tile g"><div class="n" id="rEarned">0</div><div class="t">Всего ₽</div></div>
-          <div class="tile"><div class="n" id="rShifts">0</div><div class="t">Смен</div></div>
-          <div class="tile"><div class="n" id="rActions">0</div><div class="t">Действий</div></div>
-          <div class="tile o"><div class="n" id="rTitleShort" style="font-size:20px">—</div><div class="t">Звание</div></div>
+      <div class="panel">
+        <div class="profile-section-title">Работа</div>
+        <div class="profile-links">
+          <button class="profile-link" id="profileTasksOpen">
+            <span class="profile-link-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 9 1.5 1.5L12 8m2 2h3M8 15l1.5 1.5L12 14m2 2h3"/></svg></span>
+            <span class="profile-link-copy"><b>Мои задачи</b><small>Задания руководителя, результаты и история</small></span>
+            <span class="profile-link-end"><span class="task-count hidden" id="profileTasksBadge">0</span><span class="chev">›</span></span>
+          </button>
+          <button class="profile-link" id="profileScheduleOpen">
+            <span class="profile-link-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4m8-4v4M3 10h18"/></svg></span>
+            <span class="profile-link-copy"><b>Мой календарь</b><small>Плановые смены, подработки и районы</small></span>
+            <span class="profile-link-end"><span class="chev">›</span></span>
+          </button>
         </div>
       </div>
 
@@ -731,15 +710,6 @@
       <div class="panel" id="morePanel">
         <div class="formhead">Ещё</div>
         <div class="more-list">
-          <button class="more-item" id="btnProfileOpen">
-            <span class="ic">◉</span><span class="tx"><b>Профиль</b><i>Доход, уровень и история смен</i></span><span class="chev">›</span>
-          </button>
-          <button class="more-item hidden" id="btnMyTasks" aria-hidden="true" tabindex="-1">
-            <span class="ic">✅</span>
-            <span class="tx"><b>Мои задания</b><i>Задания руководителя и результаты</i></span>
-            <span class="task-count hidden" id="myTasksBadge">0</span>
-            <span class="chev">›</span>
-          </button>
           <button class="more-item" id="btnSettingsOpen">
             <span class="ic">⚙</span>
             <span class="tx"><b>Настройки</b><i>Имя, роль, город, ставка и исправление счётчиков</i></span>
@@ -756,9 +726,8 @@
           <input class="tinput" id="adminPassword" type="password" autocomplete="current-password" placeholder="Пароль админки">
           <button class="save" id="adminLoginBtn" style="margin-top:9px">Открыть CRM</button>
         </div>
-        <p class="hint" style="margin-top:16px">Скоро добавим ещё:</p>
+        <p class="hint" style="margin-top:16px">Скоро добавим:</p>
         <div class="soon">
-          <div class="card"><div class="ic">🏆</div><div><div class="tn">Топ недели</div><div class="td">Рейтинг сотрудников по перемещениям</div></div></div>
           <div class="card"><div class="ic">🗺️</div><div><div class="tn">Карта зон</div><div class="td">Районы и загрузка по городу</div></div></div>
         </div>
       </div>
@@ -848,7 +817,7 @@
       <!-- Личный календарь плановых смен сотрудника. -->
       <div class="panel hidden" id="myScheduleView">
         <div class="admin-head">
-          <button class="mini" id="myScheduleBack">← Ещё</button>
+          <button class="mini" id="myScheduleBack">← Профиль</button>
           <div class="formhead">Мой график</div>
           <button class="mini" id="myScheduleReload">Обновить</button>
         </div>
@@ -872,7 +841,7 @@
   <!-- Tab Bar -->
   <nav class="tabbar hidden" id="tabbar">
     <button class="tab on" data-tab="shift"><span class="ti">ϟ</span>Смена</button>
-    <button class="tab" data-tab="tasks"><span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 9 1.5 1.5L12 8m2 2h3M8 15l1.5 1.5L12 14m2 2h3"/></svg></span>Задачи<span class="task-count nav-count hidden" id="tasksNavBadge">0</span></button>
+    <button class="tab" data-tab="profile"><span class="ti"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg></span>Профиль<span class="task-count nav-count hidden" id="profileNavBadge">0</span></button>
     <button class="tab" data-tab="more"><span class="ti">≡</span>Ещё</button>
   </nav>
 
@@ -889,10 +858,6 @@ const PAY = {
   hourly: { label:"Ставка",                suf:"₽ / час",   earnLbl:"Заработок за смену" },
   salary: { label:"Оклад за смену",        suf:"₽ / смену", earnLbl:"Оклад за смену" },
   piece:  { label:"Оплата за одну замену", suf:"₽ / АКБ",   earnLbl:"Заработок (сделка)" },
-};
-const RANK_ICONS = {
-  "Пеший":"🥾","Велик":"🚲","Скутер":"🛵","Молния":"⚡","Гонщик":"🏍️",
-  "Профи":"🏆","Мастер":"🥇","Ас":"💎","Легенда":"👑","Бог Асфальта":"🔥"
 };
 const MONTHS = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
 
@@ -1091,11 +1056,10 @@ function startTick(){
 
 /* ---------- рендер ---------- */
 function render(){
-  const u = STATE.user, lv = STATE.level;
+  const u = STATE.user;
 
   $('uName').textContent = u.name || 'Без имени';
-  const title = lv.title ? ' · «'+lv.title+'»' : '';
-  $('uRole').textContent = (u.role || 'Роль не указана') + title;
+  $('uRole').textContent = u.role || 'Роль не указана';
 
   const on = STATE.active && STATE.shift;
   $('statusBox').classList.toggle('on', !!on);
@@ -1138,25 +1102,21 @@ function render(){
     } else $('lastCard').classList.add('hidden');
   }
 
-  /* Профиль */
-  $('rLvl').textContent = lv.level;
-  $('rLvl2').textContent = lv.level;
-  $('rTitle').textContent = lv.title;
-  $('rIcon').textContent = RANK_ICONS[lv.title] || '🥾';
-  $('rTitleShort').textContent = lv.title;
-  const badge = $('badgeLvl');
-  badge.className = 'badge-lvl ' + (lv.tier || 'bronze');
-  $('rXp').textContent = lv.xp;
-  $('rNeed').textContent = lv.need;
-  $('rBar').style.width = lv.need ? Math.min(100, (lv.xp/lv.need)*100) + '%' : '100%';
+  /* Профиль: только рабочие данные, без уровней, XP и званий. */
   const lt = STATE.lifetime || {};
-  $('rEarned').textContent = rub(lt.earned || 0);
-  $('rShifts').textContent = lt.shifts || 0;
-  $('rActions').textContent = lt.actions || 0;
-  $('monthName').textContent = STATE.period_started_label
-    ? ('декаду с ' + STATE.period_started_label)
-    : 'декаду';
-  $('monthEarned').textContent = rub(STATE.month_earned || 0) + ' ₽';
+  const words=String(u.name||'Сотрудник').trim().split(/\s+/).filter(Boolean);
+  $('profileInitials').textContent=(words.slice(0,2).map(word=>word[0]).join('')||'С').toUpperCase();
+  $('profileName').textContent=u.name||'Сотрудник';
+  $('profileRole').textContent=u.role||'Роль не указана';
+  $('profileCity').textContent=((STATE.shift&&STATE.shift.city)||STATE.city||{}).name||'Город не указан';
+  const profileState=$('profileShiftState');
+  profileState.classList.toggle('on',!!on);
+  profileState.textContent=on
+    ? (scheduledNow()?`Смена начнётся в ${STATE.shift.start_time}`:(STATE.shift.on_lunch?'Сейчас на обеде':'Смена открыта'))
+    : 'Смена не открыта';
+  $('profilePeriodEarned').textContent=rub(STATE.month_earned||0)+' ₽';
+  $('profileShifts').textContent=lt.shifts||0;
+  $('profileActions').textContent=lt.actions||0;
 }
 
 function fillCitySelect(id, selected){
@@ -1203,7 +1163,7 @@ async function load({background=false}={}){
     STATE = nextState;
     stateLoadedAt = Date.now();
     populateCitySelectors();
-    if(cityChanged && !$('tab-rating').classList.contains('hidden')) await loadHistory();
+    if(cityChanged && !$('tab-profile').classList.contains('hidden')) await loadHistory();
     $('loading').classList.add('hidden');
     $('autherr').classList.add('hidden');
     // Обязательная регистрация: пока нет имени+роли — показываем только экран знакомства
@@ -1236,21 +1196,44 @@ async function load({background=false}={}){
 }
 
 /* ---------- вкладки ---------- */
+function selectBottomTab(name){
+  document.querySelectorAll('.tab').forEach(tab=>tab.classList.toggle('on',tab.dataset.tab===name));
+}
+function hidePages(){ document.querySelectorAll('.page').forEach(page=>page.classList.add('hidden')); }
+function openProfile(){
+  selectBottomTab('profile');
+  hidePages();
+  $('tab-profile').classList.remove('hidden');
+  if(!histLoaded)loadHistory();
+  window.scrollTo(0,0);
+}
+function openTasks(taskId=null){
+  selectBottomTab('profile');
+  hidePages();
+  $('tab-tasks').classList.remove('hidden');
+  showTodoMain();
+  showMyTaskList();
+  loadMyTasks().then(()=>{if(taskId)setTimeout(()=>openMyTask(Number(taskId)),0)});
+  window.scrollTo(0,0);
+}
+function openMySchedule(){
+  selectBottomTab('profile');
+  hidePages();
+  $('tab-more').classList.remove('hidden');
+  if(!myScheduleMonth)resetMyScheduleToToday();
+  showAdminScreen('myScheduleView');
+  loadMySchedule();
+}
 document.querySelectorAll('.tab').forEach(t=>{
   t.onclick = ()=>{
-    document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x===t));
-    document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
+    selectBottomTab(t.dataset.tab);
+    hidePages();
     const pageName=t.dataset.tab;
     $('tab-'+pageName).classList.remove('hidden');
-    if(t.dataset.tab==='tasks'){
-      showTodoMain();
-      showMyTaskList();
-      loadMyTasks();
-    }else if(t.dataset.tab==='more'){
+    if(t.dataset.tab==='more'){
       showAdminScreen(null);
     }
-    if(t.dataset.tab === 'rating' && !histLoaded) loadHistory();
-    if(t.dataset.tab === 'settings') fillSettings();
+    if(t.dataset.tab==='profile'&&!histLoaded)loadHistory();
     window.scrollTo(0,0);
   };
 });
@@ -1260,13 +1243,6 @@ $('btnSettingsOpen').onclick=()=>{
   document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
   $('tab-settings').classList.remove('hidden');
   fillSettings();
-  window.scrollTo(0,0);
-};
-$('btnProfileOpen').onclick=()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='more'));
-  document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
-  $('tab-rating').classList.remove('hidden');
-  if(!histLoaded) loadHistory();
   window.scrollTo(0,0);
 };
 
@@ -1788,7 +1764,7 @@ function setTasksError(message=''){
 }
 function updateTasksBadge(){
   const count=todoInboxTasks.filter(t=>!['submitted','accepted','done','cancelled','archived'].includes(effectiveTaskStatus(t))).length;
-  ['myTasksBadge','tasksNavBadge'].forEach(id=>{
+  ['profileTasksBadge','profileNavBadge'].forEach(id=>{
     const badge=$(id);if(!badge)return;
     badge.textContent=count>99?'99+':String(count);
     badge.classList.toggle('hidden',count===0);
@@ -1807,9 +1783,7 @@ function updateShiftTaskCard(){
   $('shiftTaskName').textContent=task.title||'Задание руководителя';
   $('shiftTaskNote').textContent=`${taskDate(task.work_date)} · ${status.label}${task.requires_photo?' · нужен фотоотчёт':''}`;
   card.onclick=()=>{
-    const nav=document.querySelector('.tab[data-tab="tasks"]');
-    if(nav)nav.click();
-    todoScope='mine';employeeTasks=[...todoInboxTasks];document.querySelectorAll('#todoScope button').forEach(b=>b.classList.toggle('on',b.dataset.scope==='mine'));renderMyTasks();setTimeout(()=>openMyTask(Number(task.task_id)),0);
+    todoScope='mine';employeeTasks=[...todoInboxTasks];document.querySelectorAll('#todoScope button').forEach(b=>b.classList.toggle('on',b.dataset.scope==='mine'));renderMyTasks();openTasks(Number(task.task_id));
   };
 }
 function renderMyTasks(){
@@ -2062,10 +2036,11 @@ document.querySelectorAll('#todoTimes button').forEach(btn=>btn.onclick=()=>{con
 document.querySelectorAll('#todoPriority button').forEach(btn=>btn.onclick=()=>{todoPriority=btn.dataset.priority;document.querySelectorAll('#todoPriority button').forEach(b=>b.classList.toggle('on',b===btn))});
 document.querySelectorAll('#todoPhoto button').forEach(btn=>btn.onclick=()=>{todoRequiresPhoto=btn.dataset.photo==='1';document.querySelectorAll('#todoPhoto button').forEach(b=>b.classList.toggle('on',b===btn))});
 $('todoAdd').onclick=openTodoCreate;$('todoCreateBack').onclick=showTodoMain;$('todoCreateCancel').onclick=showTodoMain;$('todoCreateSave').onclick=createTodo;
-$('todoScheduleOpen').onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='tasks'));document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));$('tab-more').classList.remove('hidden');if(!myScheduleMonth)resetMyScheduleToToday();showAdminScreen('myScheduleView');loadMySchedule()};
-$('btnMyTasks').onclick=()=>document.querySelector('.tab[data-tab="tasks"]').click();
+$('todoProfileBack').onclick=openProfile;
+$('profileTasksOpen').onclick=()=>openTasks();
+$('profileScheduleOpen').onclick=openMySchedule;
 $('myScheduleReload').onclick=()=>{myScheduleData=null;loadMySchedule()};
-$('myScheduleBack').onclick=()=>{document.querySelector('.tab[data-tab="tasks"]').click()};
+$('myScheduleBack').onclick=openProfile;
 $('mySchedulePrev').onclick=()=>shiftMyScheduleMonth(-1);
 $('myScheduleNext').onclick=()=>shiftMyScheduleMonth(1);
 $('myScheduleToday').onclick=()=>{resetMyScheduleToToday();myScheduleData=null;loadMySchedule()};
@@ -2442,7 +2417,7 @@ load().then(async ok=>{
     const taskId=Number(match[1]);
     let task=employeeTasks.find(item=>Number(item.task_id)===taskId);
     if(!task){todoScope='created';document.querySelectorAll('#todoScope button').forEach(button=>button.classList.toggle('on',button.dataset.scope==='created'));await loadMyTasks(true);task=employeeTasks.find(item=>Number(item.task_id)===taskId)}
-    if(task){const tab=document.querySelector('.tab[data-tab="tasks"]');if(tab)tab.click();setTimeout(()=>openMyTask(taskId),0)}
+    if(task)openTasks(taskId);
   }
 });
 let periodicLoadRunning=false;

@@ -162,9 +162,10 @@ async def run():
         assert "XP" in notification_text
         assert "балл" not in notification_text.lower()
     keyboard = first_message.kwargs["reply_markup"]
-    assert keyboard.inline_keyboard[0][0].text == "🏆 Открыть БибиПасс"
-    assert "startapp=bibipass" in keyboard.inline_keyboard[0][0].url
-    assert keyboard.inline_keyboard[1][0].url == "https://t.me/bbbikefan"
+    assert keyboard.inline_keyboard[0][0].text == "1. Открыть канал"
+    assert keyboard.inline_keyboard[0][0].url == "https://t.me/bbbikefan"
+    assert keyboard.inline_keyboard[1][0].text == "2. Открыть БибиПасс"
+    assert "startapp=bibipass" in keyboard.inline_keyboard[1][0].url
     async with bot.db_connect() as db:
         statuses = await (await db.execute(
             "SELECT status,COUNT(*) FROM crm_notification_outbox "
@@ -178,6 +179,8 @@ async def run():
     assert set(score) == {"action_points", "total"}
 
     payload = await bot._bibipass_payload(701, verify=False)
+    summary = await bot._bibipass_state_summary(701)
+    assert summary["member"] is True and summary["intro_required"] is False
     assert payload["progress"]["level"] == 1
     assert payload["earned"]["level_bibibonuses"] == 2
     assert payload["earned"]["bibibonuses"] == 2
@@ -208,6 +211,14 @@ async def run():
     assert allowed is True and error is None
     participant = await bot._bibipass_participant(703, season, create=False)
     assert participant["membership_status"] == "member" and participant["joined_at"]
+
+    # Временная ошибка Telegram не закрывает квест тому, кто уже подтверждён.
+    with patch.object(bot.bot, "get_chat_member", AsyncMock(
+            side_effect=RuntimeError("temporary Telegram failure"))):
+        preserved = await bot._bibipass_payload(701, verify=True, force=True)
+    assert preserved["member"] is True
+    assert preserved["check_error"] == "check_failed"
+    assert preserved["progress"]["level"] == 1
 
     print("PASS BibiPass: timer, rewards, rating and idempotent private notifications")
 

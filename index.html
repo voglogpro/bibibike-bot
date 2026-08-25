@@ -422,6 +422,18 @@
     opacity:0;transform:translate3d(0,8px,0) scale(.99);transition-timing-function:var(--ease-motion-in);
   }
   .todo-dialog.has-input .todo-dialog-card{transform:none}
+  .bibipass-intro-state{margin:12px 0;padding:11px 12px;border:1px solid var(--line);border-radius:14px;background:#121C15;color:var(--muted);font-size:10px;line-height:1.45}
+  .bibipass-intro-state b{display:block;margin-bottom:3px;color:var(--ink);font-size:11px}
+  .bibipass-intro-state.confirmed{border-color:rgba(49,216,67,.38);background:#102719;color:#A9B6AD}
+  .bibipass-intro-state.confirmed b{color:var(--green)}
+  .bibipass-intro-state.error{border-color:rgba(255,139,147,.4);background:#2B171A;color:#FFB6BB}
+  .bibipass-intro-steps{display:grid;gap:8px;margin:13px 0}
+  .bibipass-intro-step{display:grid;grid-template-columns:26px minmax(0,1fr);gap:9px;align-items:start;padding:10px;border:1px solid var(--line);border-radius:13px;background:var(--tile)}
+  .bibipass-intro-step>i{width:26px;height:26px;display:grid;place-items:center;border-radius:50%;background:#17351F;color:var(--green);font-style:normal;font-size:11px;font-weight:950}
+  .bibipass-intro-step b{display:block;font-size:11px}.bibipass-intro-step span{display:block;margin-top:3px;color:var(--muted);font-size:9px;line-height:1.4}
+  .bibipass-intro-note{margin:12px 0;padding:10px 11px;border-left:3px solid var(--green);background:#101A12;color:var(--muted);font-size:9px;line-height:1.5}
+  .bibipass-intro-note b{color:var(--ink)}
+  .bibipass-actions.single{grid-template-columns:1fr}.bibipass-actions .hidden{display:none}
   .toast{
     transform:translate3d(-50%,8px,0) scale(.98);
     transition:opacity var(--motion-ui) var(--ease-motion-standard),transform var(--motion-ui) var(--ease-motion-out);
@@ -989,20 +1001,13 @@
 
   <div class="bibipass-overlay hidden" id="bibipassIntro">
     <div class="bibipass-intro">
-      <div class="bibipass-kicker">Новый конкурс для всей команды</div>
-      <h2>Добро пожаловать в БибиПасс</h2>
+      <div class="bibipass-kicker" id="bibipassIntroKicker">Квест сотрудников</div>
+      <h2 id="bibipassIntroTitle">Как открыть БибиПасс</h2>
       <div id="bibipassIntroTimer"></div>
-      <p>Скауты, водители и чарджеры всех городов получают XP за привычные действия, проходят 20 растущих уровней и открывают БибиБонусы и подписки.</p>
-      <p><b>XP — опыт БибиПасса: он двигает по уровням. БибиБонусы — отдельная награда и валюта для поездок.</b></p>
-      <ul>
-        <li>перемещение, привоз/вывоз с СЦ и замена АКБ — 1 XP;</li>
-        <li>поправленный байк — 0,5 XP;</li>
-        <li>в конкурс идут только рабочие действия с байками;</li>
-        <li>каждый следующий уровень требует больше XP и даёт более ценную награду.</li>
-      </ul>
-      <p>Канал объединяет сотрудников BibiBike из разных городов. Здесь можно общаться, получать общие новости и брать задания в выходной, чтобы заработать дополнительные Бибибонусы.</p>
-      <div class="bibipass-actions"><button class="mini" id="bibipassIntroJoin">Подписаться</button><button class="save" id="bibipassIntroCheck">Проверить подписку</button></div>
-      <div class="close-line"><button id="bibipassIntroClose">Посмотреть позже</button></div>
+      <div class="bibipass-intro-state" id="bibipassIntroState"></div>
+      <div id="bibipassIntroBody"></div>
+      <div class="bibipass-actions" id="bibipassIntroActions"><button class="save" id="bibipassIntroJoin">1. Открыть канал</button><button class="mini" id="bibipassIntroCheck">2. Проверить подписку</button></div>
+      <div class="close-line"><button id="bibipassIntroClose">Не сейчас</button></div>
     </div>
   </div>
 
@@ -1042,6 +1047,7 @@ let myScheduleData = null;
 let myScheduleLoading = false;
 let bibipassData = null;
 let bibipassLoading = false;
+let bibipassRequestSerial = 0;
 let bibipassIntroShownSeason = '';
 let bibipassClockOffsetMs = 0;
 let bibipassBoundaryReload = '';
@@ -1190,7 +1196,7 @@ async function api(path, opts={}){
     let data = null;
     try{ data = await res.json(); }catch(e){}
     if(res.status === 401) throw { auth:true };
-    if(!res.ok) throw { message: (data && data.message) || ('Ошибка '+res.status) };
+    if(!res.ok) throw { message: (data && data.message) || ('Ошибка '+res.status), status:res.status };
     return data;
   }finally{
     if(mutating){ stateMutationDepth=Math.max(0,stateMutationDepth-1); stateRevision++; }
@@ -1399,7 +1405,7 @@ async function load({background=false}={}){
     $('tabbar').classList.remove('hidden');
     render();
     startTick();
-    if(!background) maybeShowBibipassIntro();
+    if(!background) await maybeShowBibipassIntro();
     return true;
   }catch(e){
     clearInterval(tick);
@@ -1477,6 +1483,12 @@ function tickBibipassCountdowns(){
 }
 setInterval(tickBibipassCountdowns,1000);
 function openBibipassChannel(){
+  const intro=$('bibipassIntro'),state=$('bibipassIntroState');
+  if(intro&&!intro.classList.contains('hidden')&&intro.dataset.member!=='1'&&state){
+    state.className='bibipass-intro-state';
+    state.innerHTML='<b>Канал открыт</b>Нажмите «Подписаться» в Telegram, затем вернитесь сюда и выберите «Проверить подписку».';
+    $('bibipassIntroJoin').textContent='Снова открыть канал';
+  }
   const url=(bibipassData&&bibipassData.channel&&bibipassData.channel.url)||(STATE&&STATE.bibipass&&STATE.bibipass.channel_url)||'https://t.me/bbbikefan';
   if(tg&&tg.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener');
 }
@@ -1485,7 +1497,7 @@ function renderBibipass(data){
   if(!data||!data.enabled){root.innerHTML='<div class="task-api-state">Конкурс сейчас выключен.</div>';return}
   const timer=bibipassCountdownMarkup(data.season);
   if(!data.member){
-    root.innerHTML=`${timer}<div class="bibipass-gate"><div class="pass-gate-mark">БП</div><small class="pass-gate-kicker">BIBIPASS / СЕЗОН 01</small><h3>${esc(data.season&&data.season.name||'БибиПасс')}</h3><p><b>20 уровней · 150 БибиБонусов · подписки на 1 и 3 месяца.</b></p><div class="pass-gate-rule"><b>XP ≠ БибиБонусы</b><span>XP — опыт для прохождения уровней. БибиБонусы — награда и валюта для поездок.</span></div><p>Для участия подпишитесь на общий канал команды. Там сотрудники всех городов общаются, получают важные новости и находят задания на выходные с наградой в Бибибонусах.</p>${data.check_error?'<div class="task-api-error">Бот пока не смог проверить подписку. Проверьте, что он назначен администратором канала.</div>':''}<div class="bibipass-actions"><button class="mini" id="bibipassGateJoin">Открыть канал</button><button class="save" id="bibipassGateCheck">Проверить подписку</button></div></div>`;
+    root.innerHTML=`${timer}<div class="bibipass-gate"><div class="pass-gate-mark">БП</div><small class="pass-gate-kicker">BIBIPASS / СЕЗОН 01</small><h3>Подтвердите участие</h3><p><b>Сначала подпишитесь на канал команды, затем вернитесь сюда и проверьте подписку.</b></p><div class="pass-gate-rule"><b>Как открыть квест</b><span>1. Откройте канал и нажмите «Подписаться».<br>2. Вернитесь в бот.<br>3. Нажмите «Проверить подписку».</span></div>${data.check_error?'<div class="task-api-error">Проверка временно недоступна из-за ошибки Telegram. Попробуйте ещё раз через минуту.</div>':''}<p>Уже подписаны? Сразу нажмите кнопку проверки. После подтверждения уровни, рейтинг и награды откроются автоматически.</p><div class="bibipass-actions"><button class="save" id="bibipassGateJoin">1. Открыть канал</button><button class="mini" id="bibipassGateCheck">2. Проверить подписку</button></div></div>`;
     $('bibipassGateJoin').onclick=openBibipassChannel;$('bibipassGateCheck').onclick=()=>checkBibipassMembership($('bibipassGateCheck'));tickBibipassCountdowns();return;
   }
   const p=data.progress||{},actions=(data.rules&&data.rules.actions)||[],rewards=data.rewards||[],ranking=data.ranking||[];
@@ -1507,25 +1519,72 @@ function renderBibipass(data){
   tickBibipassCountdowns();
 }
 async function loadBibipass(force=false){
-  if(bibipassLoading)return;bibipassLoading=true;if(!bibipassData)$('bibipassRoot').innerHTML='<div class="task-api-state">Проверяю подписку и считаю XP…</div>';
-  try{bibipassData=await api('/api/bibipass');renderBibipass(bibipassData);if(STATE&&STATE.bibipass)STATE.bibipass.member=!!bibipassData.member;$('profileBibipassLevel').textContent=bibipassData.progress?`Ур. ${bibipassData.progress.level}`:'Открыть'}catch(e){$('bibipassRoot').innerHTML=`<div class="task-api-error">${esc(e.message||'Не удалось загрузить БибиПасс.')}</div>`}finally{bibipassLoading=false}
+  const requestId=++bibipassRequestSerial;bibipassLoading=true;
+  if(!bibipassData)$('bibipassRoot').innerHTML='<div class="task-api-state">Проверяю участие и считаю XP…</div>';
+  try{
+    const path=force?'/api/bibipass?force=1':'/api/bibipass';
+    const data=await api(path);
+    if(requestId!==bibipassRequestSerial)return bibipassData;
+    bibipassData=data;renderBibipass(data);
+    if(STATE&&STATE.bibipass){STATE.bibipass.member=!!data.member;STATE.bibipass.joined=!!data.joined}
+    $('profileBibipassLevel').textContent=data.progress?`Ур. ${data.progress.level}`:'Открыть';
+    if(!$('bibipassIntro').classList.contains('hidden'))renderBibipassIntro(!!data.member);
+    return data;
+  }catch(e){
+    if(requestId===bibipassRequestSerial)$('bibipassRoot').innerHTML=`<div class="task-api-error">${esc(e.message||'Не удалось загрузить БибиПасс.')}</div>`;
+    return null;
+  }finally{if(requestId===bibipassRequestSerial)bibipassLoading=false}
 }
-function openBibipass(){selectBottomTab('profile');showPage('tab-bibipass','forward');loadBibipass()}
+function openBibipass(){selectBottomTab('profile');showPage('tab-bibipass','forward');if(bibipassData)renderBibipass(bibipassData);loadBibipass()}
 async function markBibipassIntroSeen(){
   try{await api('/api/bibipass/intro-seen',{method:'POST',body:'{}'});if(STATE&&STATE.bibipass)STATE.bibipass.intro_required=false}catch(e){}
 }
-function maybeShowBibipassIntro(){
-  const info=STATE&&STATE.bibipass;if(!info||!info.enabled||!info.intro_required||bibipassIntroShownSeason===info.season_id)return;bibipassIntroShownSeason=info.season_id;showBibipassInstructions(false);
+function renderBibipassIntro(member=false,error=''){
+  const intro=$('bibipassIntro'),state=$('bibipassIntroState'),body=$('bibipassIntroBody');
+  const actions=$('bibipassIntroActions'),join=$('bibipassIntroJoin'),check=$('bibipassIntroCheck');
+  intro.dataset.member=member?'1':'0';state.className=`bibipass-intro-state${member?' confirmed':error?' error':''}`;
+  if(member){
+    $('bibipassIntroKicker').textContent='Участие подтверждено';$('bibipassIntroTitle').textContent='Как работает БибиПасс';
+    state.innerHTML='<b>✓ БибиПасс уже открыт</b>Повторно подписываться или проверять подписку не нужно.';
+    body.innerHTML='<p>Выполняйте рабочие действия с байками, получайте XP и проходите 20 уровней.</p><div class="bibipass-intro-steps"><div class="bibipass-intro-step"><i>1</i><span><b>Действия дают XP</b><span>Перемещение, привоз/вывоз с СЦ и замена АКБ — 1 XP. Поправленный байк — 0,5 XP.</span></span></div><div class="bibipass-intro-step"><i>2</i><span><b>XP открывает уровни</b><span>Каждый следующий уровень требует больше XP.</span></span></div><div class="bibipass-intro-step"><i>3</i><span><b>Уровни дают награды</b><span>БибиБонусы — валюта для поездок; на 10-м и 20-м уровнях также выдаются подписки.</span></span></div></div><div class="bibipass-intro-note"><b>Важно:</b> принятие или выполнение бот-задачи само по себе XP не даёт. В квест идут только действия с байками, которые бот учёл из рабочих сообщений.</div><div class="bibipass-intro-note"><b>Общий канал команды</b> — место для новостей и общения сотрудников разных городов. Задания на выходных могут давать БибиБонусы отдельно от XP БибиПасса.</div>';
+    actions.classList.add('single');join.classList.add('hidden');check.className='save';check.textContent='Открыть БибиПасс';
+  }else{
+    $('bibipassIntroKicker').textContent='Вход в квест сотрудников';$('bibipassIntroTitle').textContent='Как открыть БибиПасс';
+    state.innerHTML=error?`<b>Проверка не завершена</b>${esc(error)}`:'<b>Нужны два действия</b>Сначала подпишитесь на общий канал команды, затем подтвердите подписку в боте.';
+    body.innerHTML='<div class="bibipass-intro-steps"><div class="bibipass-intro-step"><i>1</i><span><b>Откройте канал и подпишитесь</b><span>Нажмите кнопку ниже, а в Telegram — «Подписаться».</span></span></div><div class="bibipass-intro-step"><i>2</i><span><b>Вернитесь в бот</b><span>Нажмите «Проверить подписку». После успешной проверки уровни, рейтинг и награды откроются автоматически.</span></span></div></div><div class="bibipass-intro-note"><b>Уже подписаны?</b> Открывать канал повторно не нужно — сразу нажмите «Проверить подписку».</div><div class="bibipass-intro-note"><b>Зачем нужен канал:</b> здесь сотрудники разных городов общаются и получают общие новости. Задания на выходных с БибиБонусами — отдельная механика и не добавляют XP за сам факт выполнения задачи.</div>';
+    actions.classList.remove('single');join.classList.remove('hidden');join.className='save';join.textContent='1. Открыть канал';check.className='mini';check.textContent='2. Проверить подписку';
+  }
+  check.disabled=false;
+}
+async function maybeShowBibipassIntro(){
+  const info=STATE&&STATE.bibipass;
+  if(!info||!info.enabled||!info.intro_required||bibipassIntroShownSeason===info.season_id)return;
+  bibipassIntroShownSeason=info.season_id;
+  await loadBibipass(false);
+  showBibipassInstructions(false);
 }
 function showBibipassInstructions(replay=true){
   const info=(bibipassData&&bibipassData.season)||(STATE&&STATE.bibipass);if(!info)return;
   const timer=$('bibipassIntroTimer');if(timer){timer.innerHTML=bibipassCountdownMarkup(info);tickBibipassCountdowns()}
-  $('bibipassIntroClose').textContent=replay?'Закрыть':'Посмотреть позже';openMotionLayer($('bibipassIntro'));
+  const member=!!((bibipassData&&bibipassData.member)||(STATE&&STATE.bibipass&&STATE.bibipass.member));
+  const error=!member&&bibipassData&&bibipassData.check_error?'Проверка временно недоступна из-за ошибки Telegram. Попробуйте ещё раз через минуту.':'';
+  renderBibipassIntro(member,error);$('bibipassIntroClose').textContent=replay?'Закрыть':member?'Понятно':'Не сейчас';openMotionLayer($('bibipassIntro'));
 }
 async function checkBibipassMembership(button){
-  if(button){button.disabled=true;button.textContent='Проверяю…'}
-  try{bibipassData=await api('/api/bibipass/check-membership',{method:'POST',body:'{}'});await markBibipassIntroSeen();if(STATE&&STATE.bibipass){STATE.bibipass.member=true;STATE.bibipass.intro_required=false}closeMotionLayer($('bibipassIntro'),()=>{renderBibipass(bibipassData);openBibipass();motionHaptic('success');toast('Участие в БибиПассе открыто!')})}
-  catch(e){toast(e.message||'Подписка пока не найдена.');if(button){button.disabled=false;button.textContent='Проверить подписку'}}
+  const requestId=++bibipassRequestSerial;bibipassLoading=true;
+  if(button){button.disabled=true;button.textContent='Проверяем подписку…'}
+  try{
+    const data=await api('/api/bibipass/check-membership',{method:'POST',body:'{}'});
+    if(requestId!==bibipassRequestSerial)return;
+    bibipassData=data;renderBibipass(data);
+    if(STATE&&STATE.bibipass){STATE.bibipass.member=true;STATE.bibipass.joined=true;STATE.bibipass.intro_required=false}
+    markBibipassIntroSeen();
+    closeMotionLayer($('bibipassIntro'),()=>{openBibipass();motionHaptic('success');toast('Готово — участие подтверждено!')});
+  }catch(e){
+    if(requestId!==bibipassRequestSerial)return;
+    const message=e.status===503?'Не удалось связаться с Telegram. Попробуйте ещё раз через минуту.':(e.message||'Подписка не найдена. Откройте канал, подпишитесь и повторите проверку.');
+    renderBibipassIntro(false,message);toast(message);
+  }finally{if(requestId===bibipassRequestSerial)bibipassLoading=false}
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.onclick = ()=>{
@@ -2351,7 +2410,12 @@ $('bibipassBack').onclick=openProfile;
 $('bibipassReload').onclick=()=>loadBibipass(true);
 $('bibipassInstructions').onclick=()=>showBibipassInstructions(true);
 $('bibipassIntroJoin').onclick=openBibipassChannel;
-$('bibipassIntroCheck').onclick=()=>checkBibipassMembership($('bibipassIntroCheck'));
+$('bibipassIntroCheck').onclick=()=>{
+  if($('bibipassIntro').dataset.member==='1'){
+    closeMotionLayer($('bibipassIntro'));markBibipassIntroSeen();openBibipass();return;
+  }
+  checkBibipassMembership($('bibipassIntroCheck'));
+};
 $('bibipassIntroClose').onclick=async()=>{closeMotionLayer($('bibipassIntro'));await markBibipassIntroSeen()};
 $('myScheduleReload').onclick=()=>{myScheduleData=null;loadMySchedule()};
 $('myScheduleBack').onclick=openProfile;

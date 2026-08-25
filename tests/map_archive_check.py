@@ -40,8 +40,13 @@ async def run():
         await bot.init_db()
         city = bot.get_default_city()
         other = next(item for item in bot.CITIES_BY_ID.values() if item["id"] != city["id"])
-        today = datetime.now(bot._city_tz(city)).date().isoformat()
-        now_iso = datetime.now(timezone.utc).isoformat()
+        city_now = datetime.now(bot._city_tz(city))
+        today = city_now.date().isoformat()
+        # Полдень выбранной локальной даты не перескакивает на предыдущий день
+        # UTC во время ночного прогона тестов.
+        now_iso = city_now.replace(
+            hour=12, minute=0, second=0, microsecond=0,
+        ).astimezone(timezone.utc).isoformat()
         async with bot.db_connect() as db:
             await db.executemany(
                 "INSERT INTO users (user_id,full_name,role,city_id,telegram_username) "

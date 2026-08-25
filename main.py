@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-25 · БибиПасс: растущие награды"
+BUILD_VERSION = "2026-08-26 · БибиПасс: понятный вход"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -6569,7 +6569,12 @@ async def api_bibipass(request):
     tg_user = await _auth_user(request)
     if not tg_user:
         return web.json_response({"error": "auth"}, status=401)
-    return web.json_response(await _bibipass_payload(tg_user["id"], verify=True))
+    force = str(request.query.get("force") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    return web.json_response(
+        await _bibipass_payload(tg_user["id"], verify=True, force=force)
+    )
 
 
 async def api_bibipass_check_membership(request):
@@ -6579,11 +6584,15 @@ async def api_bibipass_check_membership(request):
     payload = await _bibipass_payload(tg_user["id"], verify=True, force=True)
     if payload.get("check_error") and not payload.get("member"):
         payload["message"] = (
-            "Не удалось проверить подписку. Убедитесь, что бот — администратор канала."
+            "Не удалось проверить подписку из-за временной ошибки Telegram. "
+            "Попробуйте ещё раз через минуту."
         )
         return web.json_response(payload, status=503)
     if not payload.get("member"):
-        payload["message"] = "Подписка пока не найдена. Подпишитесь и повторите проверку."
+        payload["message"] = (
+            "Подписка не найдена. Откройте канал, нажмите «Подписаться», "
+            "затем вернитесь в бот и повторите проверку."
+        )
         return web.json_response(payload, status=403)
     return web.json_response(payload)
 
@@ -12897,15 +12906,19 @@ def _crm_notification_text(kind, payload):
             "Выполняй привычные рабочие действия, набирай XP, проходи 20 уровней "
             "и поднимайся в общем рейтинге всех городов.", "",
             "🎁 Награды: 150 БибиБонусов, подписка на 1 месяц и подписка на 3 месяца.", "",
-            "Для участия подпишись на общий канал команды и подтверди подписку в БибиПассе.",
+            "Как открыть участие:",
+            "1. Открой общий канал команды и подпишись.",
+            "2. Вернись в БибиПасс и нажми «Проверить подписку».",
+            "Если участие уже подтверждено, повторная проверка не нужна.",
         ])
     if kind == "bibipass_started":
         return "\n".join([
             "🚀 Квест сотрудников BibiBike начался!", "",
             "У тебя есть 20 дней, чтобы пройти БибиПасс и заработать награды.",
             f"🏁 Дедлайн: {payload.get('end_label') or '15.09.2026 в 09:00 МСК'}", "",
-            "Первые XP уже можно набирать. Открой БибиПасс, проверь подписку "
-            "на канал и следи за своим местом в общем рейтинге.", "", "Удачи! 🏆",
+            "Первые XP уже можно набирать. Если участие подтверждено — просто открой "
+            "БибиПасс. Если нет — сначала подпишись на канал, затем вернись и нажми "
+            "«Проверить подписку».", "", "Удачи! 🏆",
         ])
     if kind == "task_assigned":
         date_from = _crm_human_date(payload.get("date_from"))
@@ -13177,8 +13190,8 @@ async def deliver_crm_notifications_once(limit=50):
         } else None
         if row["kind"].startswith("bibipass_"):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🏆 Открыть БибиПасс", url=_bibipass_miniapp_link())],
-                [InlineKeyboardButton(text="📢 Канал команды", url=BIBIPASS_CHANNEL_URL)],
+                [InlineKeyboardButton(text="1. Открыть канал", url=BIBIPASS_CHANNEL_URL)],
+                [InlineKeyboardButton(text="2. Открыть БибиПасс", url=_bibipass_miniapp_link())],
             ])
         elif row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
             button_text = "🗂 Открыть CRM"

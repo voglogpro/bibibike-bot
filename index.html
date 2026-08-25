@@ -24,7 +24,7 @@
     --shadow:0 18px 40px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;padding:0}
+  html,body{margin:0;padding:0;overflow-x:hidden;overflow-x:clip}
   body{
     font-family:'Inter',system-ui,-apple-system,sans-serif;
     background:#0A100C;
@@ -359,6 +359,100 @@
   @media(min-width:600px){body{padding-top:20px}.panel{padding:18px}.tabbar{bottom:0}}
   @media(max-width:360px){body{padding-left:7px;padding-right:7px}.panel{padding:14px}.earn .val{font-size:36px}.tile{padding:12px}}
   .planned-shift-card{background:#111B15;border:1px solid rgba(49,216,67,.28);border-radius:16px;padding:14px;margin-bottom:12px}.planned-shift-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.planned-shift-kicker{color:var(--green);font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.07em}.planned-shift-title{font-size:15px;font-weight:900;margin-top:4px}.planned-shift-meta{color:var(--muted);font-size:11px;line-height:1.5;margin-top:5px}.planned-shift-timer{margin:12px 0 0;padding:10px;border-radius:11px;background:#0B2715;color:#8EF09B;text-align:center;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums}.planned-shift-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.planned-shift-buttons button{border:1px solid var(--line);border-radius:11px;background:#18231C;color:var(--ink);min-height:42px;padding:9px;font-size:11px;font-weight:850}.planned-shift-editor{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.planned-shift-editor .field{margin-bottom:9px}.planned-shift-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.planned-shift-editor-actions button{min-height:43px;border-radius:11px;border:1px solid var(--line);font-weight:850}.planned-shift-editor-actions .cancel{background:#18231C;color:var(--ink)}.planned-shift-editor-actions .save-plan{background:var(--green);color:#07120A;border-color:var(--green)}.active-settings-hint{padding:10px 12px;border:1px solid rgba(255,179,44,.3);border-radius:12px;background:#2A2211;color:#FFD16B;font-size:11px;line-height:1.45;margin:10px 0}.identity-locked{opacity:.58;pointer-events:none}
+
+  /* ============ Motion system: быстрые compositor-only переходы ============ */
+  :root{
+    --motion-press:90ms;--motion-fast:140ms;--motion-ui:180ms;
+    --motion-page:220ms;--motion-sheet:240ms;--motion-progress:380ms;
+    --ease-motion-out:cubic-bezier(.22,1,.36,1);
+    --ease-motion-standard:cubic-bezier(.2,0,0,1);
+    --ease-motion-in:cubic-bezier(.4,0,1,1);
+  }
+  :where(button,label.mini,[role="button"],summary){touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  :where(button,label.mini,[role="button"]){
+    transition:transform var(--motion-press) var(--ease-motion-out),
+      opacity var(--motion-fast) var(--ease-motion-standard),
+      background-color var(--motion-ui) var(--ease-motion-standard),
+      border-color var(--motion-ui) var(--ease-motion-standard),
+      color var(--motion-ui) var(--ease-motion-standard),
+      box-shadow var(--motion-ui) var(--ease-motion-standard);
+  }
+  :where(button,label.mini,[role="button"]):active:not(:disabled){transform:translate3d(0,0,0) scale(.98)}
+  .tab:active:not(:disabled),.formhead .x:active{transform:translate3d(0,0,0) scale(.95)}
+  :where(button,label.mini,[role="button"]):disabled{transform:none}
+  :where(button,label.mini,[role="button"]):focus-visible,summary:focus-visible{
+    outline:2px solid var(--green);outline-offset:2px;
+  }
+  .tab,.tab .ti,.seg button,.todo-choice,.todo-person,.pass-drawer>summary em::after{
+    transition:transform var(--motion-ui) var(--ease-motion-out),
+      opacity var(--motion-fast) var(--ease-motion-standard),
+      background-color var(--motion-ui) var(--ease-motion-standard),
+      border-color var(--motion-ui) var(--ease-motion-standard),
+      color var(--motion-ui) var(--ease-motion-standard);
+  }
+  @media(hover:hover){
+    :where(.more-item,.my-task-card,.todo-schedule-card,.profile-bibipass-card,.shift-bibipass-promo):hover{
+      border-color:rgba(49,216,67,.42);transform:translate3d(0,-1px,0);
+    }
+  }
+
+  .motion-page-in,.motion-forward-in,.motion-back-in,.motion-view-in{
+    will-change:transform,opacity;backface-visibility:hidden;
+  }
+  .motion-page-in{animation:motion-page-in var(--motion-page) var(--ease-motion-out) both}
+  .motion-forward-in{animation:motion-forward-in var(--motion-page) var(--ease-motion-out) both}
+  .motion-back-in{animation:motion-back-in var(--motion-ui) var(--ease-motion-out) both}
+  .motion-view-in{animation:motion-view-in var(--motion-ui) var(--ease-motion-out) both}
+  @keyframes motion-page-in{from{opacity:0;transform:translate3d(0,8px,0)}to{opacity:1;transform:none}}
+  @keyframes motion-forward-in{from{opacity:0;transform:translate3d(12px,0,0)}to{opacity:1;transform:none}}
+  @keyframes motion-back-in{from{opacity:0;transform:translate3d(-8px,0,0)}to{opacity:1;transform:none}}
+  @keyframes motion-view-in{from{opacity:0;transform:translate3d(0,6px,0)}to{opacity:1;transform:none}}
+
+  .todo-dialog,.bibipass-overlay{
+    opacity:0;transition:opacity var(--motion-ui) var(--ease-motion-standard);
+  }
+  .todo-dialog-card,.bibipass-intro{
+    opacity:0;transform:translate3d(0,18px,0) scale(.985);will-change:transform,opacity;
+    transition:transform var(--motion-sheet) var(--ease-motion-out),opacity var(--motion-ui) var(--ease-motion-standard);
+  }
+  .todo-dialog.motion-open,.bibipass-overlay.motion-open{opacity:1}
+  .todo-dialog.motion-open .todo-dialog-card,.bibipass-overlay.motion-open .bibipass-intro{opacity:1;transform:none}
+  .todo-dialog.motion-closing,.bibipass-overlay.motion-closing{opacity:0;pointer-events:none}
+  .todo-dialog.motion-closing .todo-dialog-card,.bibipass-overlay.motion-closing .bibipass-intro{
+    opacity:0;transform:translate3d(0,8px,0) scale(.99);transition-timing-function:var(--ease-motion-in);
+  }
+  .todo-dialog.has-input .todo-dialog-card{transform:none}
+  .toast{
+    transform:translate3d(-50%,8px,0) scale(.98);
+    transition:opacity var(--motion-ui) var(--ease-motion-standard),transform var(--motion-ui) var(--ease-motion-out);
+  }
+  .toast.show{transform:translate3d(-50%,0,0) scale(1)}
+
+  .pass-drawer[open]>.pass-drawer-body{animation:motion-drawer-in var(--motion-ui) var(--ease-motion-out) both}
+  @keyframes motion-drawer-in{from{opacity:0;transform:translate3d(0,-4px,0)}to{opacity:1;transform:none}}
+  .pass-drawer>summary em::after{content:'  +'!important;display:inline-block;transform-origin:62% 55%}
+  .pass-drawer[open]>summary em::after{content:'  +'!important;transform:rotate(45deg)}
+
+  .status.on .dot{position:relative;animation:none;box-shadow:none}
+  .status.on .dot::after{
+    content:'';position:absolute;inset:-5px;border:1px solid rgba(49,216,67,.5);border-radius:50%;
+    animation:motion-status-ring 2.4s var(--ease-motion-out) 3;pointer-events:none;
+  }
+  @keyframes motion-status-ring{0%{opacity:.55;transform:scale(.55)}75%,100%{opacity:0;transform:scale(1.35)}}
+
+  .bibipass-bar>i,.profile-bibipass-card .pass-track i,.pass-progress-track>span{
+    width:100%;transform:scaleX(var(--progress,0));transform-origin:left center;
+    transition:transform var(--motion-progress) var(--ease-motion-standard);
+  }
+  .pass-progress-track>span::after{display:none!important}
+
+  @media(prefers-reduced-motion:reduce){
+    *,*::before,*::after{
+      scroll-behavior:auto!important;animation-duration:.01ms!important;
+      animation-iteration-count:1!important;transition-duration:.01ms!important;
+    }
+    .status.on .dot::after{display:none}.spin{animation:none!important}
+  }
 </style>
 </head>
 <body>
@@ -958,9 +1052,56 @@ const rub = n => Math.round(n).toLocaleString('ru-RU');
 const esc = value => String(value == null ? '' : value)
   .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
   .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+const motionReduced = ()=>window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const MOTION_IN_CLASSES = ['motion-page-in','motion-forward-in','motion-back-in','motion-view-in'];
+function motionIn(element,kind='view'){
+  if(!element)return;
+  const className=`motion-${kind}-in`;
+  MOTION_IN_CLASSES.forEach(name=>{if(name!==className)element.classList.remove(name)});
+  element.classList.remove('hidden');
+  if(motionReduced()||element.classList.contains(className))return;
+  element.classList.add(className);
+  element.addEventListener('animationend',event=>{
+    if(event.target===element)element.classList.remove(className);
+  },{once:true});
+}
+function showPage(id,kind='page'){
+  hidePages();motionIn($(id),kind);window.scrollTo(0,0);
+}
+function showSubview(showId,hideIds=[],kind='view'){
+  hideIds.forEach(id=>{const element=$(id);if(element){MOTION_IN_CLASSES.forEach(name=>element.classList.remove(name));element.classList.add('hidden')}});
+  motionIn($(showId),kind);
+}
+function openMotionLayer(element){
+  if(!element)return;delete element.dataset.motionClosing;element.classList.remove('motion-closing','hidden');
+  if(motionReduced()){element.classList.add('motion-open');return}
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    if(element.isConnected&&!element.classList.contains('hidden'))element.classList.add('motion-open');
+  }));
+}
+function closeMotionLayer(element,after){
+  if(!element||element.classList.contains('hidden')){if(after)after();return}
+  if(element.dataset.motionClosing==='1')return;
+  element.dataset.motionClosing='1';element.classList.remove('motion-open');element.classList.add('motion-closing');
+  const finish=()=>{
+    if(element.dataset.motionClosing!=='1')return;
+    delete element.dataset.motionClosing;element.classList.remove('motion-closing');element.classList.add('hidden');
+    if(after)after();
+  };
+  if(motionReduced())finish();else setTimeout(finish,250);
+}
+function motionHaptic(kind='select'){
+  try{
+    if(!tg||!tg.HapticFeedback)return;
+    if(kind==='select'&&tg.HapticFeedback.selectionChanged)tg.HapticFeedback.selectionChanged();
+    else if(kind==='success'&&tg.HapticFeedback.notificationOccurred)tg.HapticFeedback.notificationOccurred('success');
+    else if(tg.HapticFeedback.impactOccurred)tg.HapticFeedback.impactOccurred('light');
+  }catch(e){}
+}
+let toastTimer=null;
 function toast(msg){
   const t = $('toast'); t.textContent = msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'), 2600);
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'), 2600);
 }
 function tzOffset(){
   if(STATE && STATE.city && Number.isFinite(Number(STATE.city.timezone_offset))){
@@ -1028,7 +1169,7 @@ function openPlannedTimeEditor(mode){
   const plan=STATE&&STATE.planned_shift;if(!plan)return;plannedEditMode=mode;
   $('plannedShiftEditLabel').textContent=mode==='start'?'Новое время начала':'Новое время окончания';
   $('plannedShiftEditTime').value=mode==='start'?plan.start_time:plan.end_time;
-  $('plannedShiftEditor').classList.remove('hidden');
+  motionIn($('plannedShiftEditor'),'view');
 }
 function maskTime(inp){
   inp.addEventListener('input', ()=>{
@@ -1279,29 +1420,26 @@ async function load({background=false}={}){
 function selectBottomTab(name){
   document.querySelectorAll('.tab').forEach(tab=>tab.classList.toggle('on',tab.dataset.tab===name));
 }
-function hidePages(){ document.querySelectorAll('.page').forEach(page=>page.classList.add('hidden')); }
+function hidePages(){
+  document.querySelectorAll('.page').forEach(page=>{MOTION_IN_CLASSES.forEach(name=>page.classList.remove(name));page.classList.add('hidden')});
+}
 function openProfile(){
   selectBottomTab('profile');
-  hidePages();
-  $('tab-profile').classList.remove('hidden');
+  showPage('tab-profile','back');
   if(!histLoaded)loadHistory();
-  window.scrollTo(0,0);
 }
 function openTasks(taskId=null){
   selectBottomTab('profile');
-  hidePages();
-  $('tab-tasks').classList.remove('hidden');
-  showTodoMain();
-  showMyTaskList();
+  showPage('tab-tasks','forward');
+  showTodoMain(false);
+  showMyTaskList(false);
   loadMyTasks().then(()=>{if(taskId)setTimeout(()=>openMyTask(Number(taskId)),0)});
-  window.scrollTo(0,0);
 }
 function openMySchedule(){
   selectBottomTab('profile');
-  hidePages();
-  $('tab-more').classList.remove('hidden');
   if(!myScheduleMonth)resetMyScheduleToToday();
-  showAdminScreen('myScheduleView');
+  showAdminScreen('myScheduleView',false);
+  showPage('tab-more','forward');
   loadMySchedule();
 }
 function bibipassNumber(value){
@@ -1355,20 +1493,24 @@ function renderBibipass(data){
   const actionLabels={move:'Переместить 1 байк',fix:'Поправить 1 байк',to_sc:'Привезти 1 байк на СЦ',from_sc:'Вывезти 1 байк с СЦ',battery:'Заменить 1 АКБ'};
   const levelCount=Number(data.rules&&data.rules.levels)||20,withinLevel=Number(p.need)>0?Math.min(1,Math.max(0,Number(p.current||0)/Number(p.need))):0;
   const progressPercent=p.next_level?Math.min(100,Math.max(0,(Number(p.level||0)+withinLevel)/levelCount*100)):100;
-  const profileProgress=$('profileBibipassProgress');if(profileProgress)profileProgress.style.width=`${progressPercent.toFixed(2)}%`;
+  const profileProgress=$('profileBibipassProgress');if(profileProgress)profileProgress.style.setProperty('--progress',String(progressPercent/100));
   const routeStops=Array.from({length:levelCount},(_,index)=>`<i class="${index<Number(p.level||0)?'done':''} ${index===Number(p.level||0)&&p.next_level?'current':''} ${index===9||index===19?'milestone':''}"></i>`).join('');
   const nextRewardLine=nextReward?`<div class="pass-next-reward ${nextReward.subscription_months?'milestone':''}"><small>Награда уровня ${String(nextReward.level).padStart(2,'0')}</small><b>${Number(nextReward.bibibonuses)||0} БибиБонусов</b>${nextReward.subscription_months?`<strong>+ подписка на ${nextReward.subscription_months} ${Number(nextReward.subscription_months)===1?'месяц':'месяца'}</strong>`:''}<span>Валюта для поездок</span></div>`:`<div class="pass-next-reward complete"><small>Маршрут пройден</small><b>Все награды открыты</b><span>20 из 20 уровней</span></div>`;
   const levelRows=rewards.map(item=>{const done=Number(item.level)<=Number(p.level),next=Number(item.level)===Number(p.next_level),months=Number(item.subscription_months)||0,status=done?'заработано':next?'следующая':'',classes=[done?'done':'',next?'current':'',months?'milestone':''].filter(Boolean).join(' ');return `<div class="pass-level-row ${classes}"><span class="pass-level-axis"><i></i></span><span class="pass-level-copy"><small>Уровень ${String(item.level).padStart(2,'0')}</small><b>${Number(item.bibibonuses)||0} БибиБонусов</b>${months?`<em>Подписка на ${months} ${months===1?'месяц':'месяца'}</em>`:''}</span><span class="pass-level-threshold"><b>${bibipassXpText(item.cumulative_points)}</b>${status?`<em>${status}</em>`:''}</span></div>`}).join('');
   const actionRows=actions.map(item=>`<div class="pass-rate-row points"><span>${esc(actionLabels[item.type]||item.label)}</span><b>+${bibipassXpText(item.points)}</b></div>`).join('');
   const rankingRows=ranking.length?ranking.map(item=>`<div class="bibipass-rank ${item.is_me?'me':''}"><span class="place">${item.position}</span><span><b>${esc(item.name)}</b><small>${esc([item.role,item.city].filter(Boolean).join(' · '))}${item.is_me?' · Вы':''}</small></span><span class="score">Ур. ${item.level}<br>${bibipassXpText(item.points)}</span></div>`).join(''):'<div class="task-api-state">Участников пока нет.</div>';
-  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${bibipassXpText(p.points)}</b><span>${p.next_level?`${bibipassXpText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Маршрут завершён'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" aria-label="Прогресс БибиПасса ${progressPercent.toFixed(1)}%"><span style="width:${progressPercent.toFixed(2)}%"></span><div>${routeStops}</div></div><div class="pass-progress-meta"><span>Старт</span><b>${Number(p.level)||0} / ${levelCount} уровней</b><span>Финиш</span></div><p class="pass-plain-note"><b>XP</b> — опыт для прохождения уровней. <b>БибиБонусы</b> — награда для поездок.</p></section>
-  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>XP только за действия с байками</small><b>Как получить XP</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details><details class="pass-drawer"><summary><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><b>Рейтинг всех городов</b></span><em>Таблица</em></summary><div class="pass-drawer-body">${rankingRows}</div></details></div>`;tickBibipassCountdowns();
+  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${bibipassXpText(p.points)}</b><span>${p.next_level?`${bibipassXpText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Маршрут завершён'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" style="--progress:${(progressPercent/100).toFixed(4)}" aria-label="Прогресс БибиПасса ${progressPercent.toFixed(1)}%"><span></span><div>${routeStops}</div></div><div class="pass-progress-meta"><span>Старт</span><b>${Number(p.level)||0} / ${levelCount} уровней</b><span>Финиш</span></div><p class="pass-plain-note"><b>XP</b> — опыт для прохождения уровней. <b>БибиБонусы</b> — награда для поездок.</p></section>
+  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>XP только за действия с байками</small><b>Как получить XP</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details><details class="pass-drawer"><summary><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><b>Рейтинг всех городов</b></span><em>Таблица</em></summary><div class="pass-drawer-body">${rankingRows}</div></details></div>`;
+  root.querySelectorAll('.pass-drawer').forEach(drawer=>drawer.addEventListener('toggle',()=>{
+    if(!drawer.open)return;root.querySelectorAll('.pass-drawer').forEach(other=>{if(other!==drawer)other.open=false});
+  }));
+  tickBibipassCountdowns();
 }
 async function loadBibipass(force=false){
   if(bibipassLoading)return;bibipassLoading=true;if(!bibipassData)$('bibipassRoot').innerHTML='<div class="task-api-state">Проверяю подписку и считаю XP…</div>';
   try{bibipassData=await api('/api/bibipass');renderBibipass(bibipassData);if(STATE&&STATE.bibipass)STATE.bibipass.member=!!bibipassData.member;$('profileBibipassLevel').textContent=bibipassData.progress?`Ур. ${bibipassData.progress.level}`:'Открыть'}catch(e){$('bibipassRoot').innerHTML=`<div class="task-api-error">${esc(e.message||'Не удалось загрузить БибиПасс.')}</div>`}finally{bibipassLoading=false}
 }
-function openBibipass(){selectBottomTab('profile');hidePages();$('tab-bibipass').classList.remove('hidden');loadBibipass();window.scrollTo(0,0)}
+function openBibipass(){selectBottomTab('profile');showPage('tab-bibipass','forward');loadBibipass()}
 async function markBibipassIntroSeen(){
   try{await api('/api/bibipass/intro-seen',{method:'POST',body:'{}'});if(STATE&&STATE.bibipass)STATE.bibipass.intro_required=false}catch(e){}
 }
@@ -1378,33 +1520,29 @@ function maybeShowBibipassIntro(){
 function showBibipassInstructions(replay=true){
   const info=(bibipassData&&bibipassData.season)||(STATE&&STATE.bibipass);if(!info)return;
   const timer=$('bibipassIntroTimer');if(timer){timer.innerHTML=bibipassCountdownMarkup(info);tickBibipassCountdowns()}
-  $('bibipassIntroClose').textContent=replay?'Закрыть':'Посмотреть позже';$('bibipassIntro').classList.remove('hidden');
+  $('bibipassIntroClose').textContent=replay?'Закрыть':'Посмотреть позже';openMotionLayer($('bibipassIntro'));
 }
 async function checkBibipassMembership(button){
   if(button){button.disabled=true;button.textContent='Проверяю…'}
-  try{bibipassData=await api('/api/bibipass/check-membership',{method:'POST',body:'{}'});await markBibipassIntroSeen();$('bibipassIntro').classList.add('hidden');if(STATE&&STATE.bibipass){STATE.bibipass.member=true;STATE.bibipass.intro_required=false}renderBibipass(bibipassData);openBibipass();toast('Участие в БибиПассе открыто!')}
+  try{bibipassData=await api('/api/bibipass/check-membership',{method:'POST',body:'{}'});await markBibipassIntroSeen();if(STATE&&STATE.bibipass){STATE.bibipass.member=true;STATE.bibipass.intro_required=false}closeMotionLayer($('bibipassIntro'),()=>{renderBibipass(bibipassData);openBibipass();motionHaptic('success');toast('Участие в БибиПассе открыто!')})}
   catch(e){toast(e.message||'Подписка пока не найдена.');if(button){button.disabled=false;button.textContent='Проверить подписку'}}
 }
 document.querySelectorAll('.tab').forEach(t=>{
   t.onclick = ()=>{
+    const pageName=t.dataset.tab,targetPage=$('tab-'+pageName),alreadyVisible=targetPage&&!targetPage.classList.contains('hidden');
     selectBottomTab(t.dataset.tab);
-    hidePages();
-    const pageName=t.dataset.tab;
-    $('tab-'+pageName).classList.remove('hidden');
+    if(!alreadyVisible){motionHaptic('select');showPage('tab-'+pageName,'page')}
     if(t.dataset.tab==='more'){
-      showAdminScreen(null);
+      showAdminScreen(null,false);
     }
     if(t.dataset.tab==='profile'&&!histLoaded)loadHistory();
-    window.scrollTo(0,0);
   };
 });
 
 $('btnSettingsOpen').onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='more'));
-  document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
-  $('tab-settings').classList.remove('hidden');
+  showPage('tab-settings','forward');
   fillSettings();
-  window.scrollTo(0,0);
 };
 
 /* ---------- смена: формы ---------- */
@@ -1436,7 +1574,7 @@ $('btnStartForm').onclick = ()=>{
   $('autoCloseToggle').checked = !!(STATE.user && STATE.user.auto_close);
   selAutoHours = (STATE.user && STATE.user.auto_close_hours) || 10;
   syncAutoClose();
-  $('startForm').classList.remove('hidden');
+  motionIn($('startForm'),'view');
   /* Прокрутку не делаем: любое движение экрана перед тапом по полю
      ломает открытие клавиатуры на Android. Поле браузер покажет сам. */
 };
@@ -1445,7 +1583,7 @@ $('btnStopForm').onclick = ()=>{
   $('stopErr').classList.remove('show');
   $('stopTime').value = nowHM();
   $('stopComment').value = '';
-  $('stopForm').classList.remove('hidden');
+  motionIn($('stopForm'),'view');
   /* Прокрутку не делаем — см. форму начала смены. */
 };
 $('editPlannedStart').onclick=()=>openPlannedTimeEditor('start');
@@ -1787,10 +1925,12 @@ function shiftMyScheduleMonth(delta){myScheduleMonth=new Date(myScheduleMonth.ge
 /* ---------- админка (живёт во вкладке «Ещё») ---------- */
 const ADMIN_SCREENS = ['adminMenu','adminViewOpen','adminViewHistory','myScheduleView'];
 
-function showAdminScreen(id){
+function showAdminScreen(id,animate=true){
   /* id = null → показать обычный экран «Ещё» */
-  $('morePanel').classList.toggle('hidden', !!id);
-  ADMIN_SCREENS.forEach(v=>$(v).classList.toggle('hidden', v!==id));
+  const target=id?$(id):$('morePanel');
+  MOTION_IN_CLASSES.forEach(name=>$('morePanel').classList.remove(name));$('morePanel').classList.add('hidden');
+  ADMIN_SCREENS.forEach(v=>{MOTION_IN_CLASSES.forEach(name=>$(v).classList.remove(name));$(v).classList.add('hidden')});
+  if(animate)motionIn(target,id?'forward':'back');else target.classList.remove('hidden');
   window.scrollTo(0,0);
 }
 
@@ -2097,9 +2237,10 @@ function renderMyTaskDetail(taskId,keepFiles=false){
     changeMyTaskProgress(task,'blocked',comment);
   };
 }
-function showMyTaskList(){
+function showMyTaskList(animate=true){
   employeeTaskId=null; employeeTaskFiles=[]; releaseEmployeeTaskPhotos();
-  $('myTaskDetail').classList.add('hidden'); $('myTasksList').classList.remove('hidden');
+  MOTION_IN_CLASSES.forEach(name=>$('myTaskDetail').classList.remove(name));$('myTaskDetail').classList.add('hidden');
+  if(animate)motionIn($('myTasksList'),'back');else $('myTasksList').classList.remove('hidden');
 }
 async function changeMyTaskProgress(task,status,comment){
   setTasksError();
@@ -2124,6 +2265,7 @@ async function submitMyTask(task){
 async function openMyTask(taskId){
   const task=employeeTasks.find(item=>Number(item.task_id)===Number(taskId)); if(!task) return;
   renderMyTaskDetail(taskId);
+  motionIn($('myTaskDetail'),'forward');
   if(task.my_status==='assigned'){
     try{
       await api(EMPLOYEE_TASK_API.progress(taskId),{method:'POST',body:JSON.stringify({status:'seen',comment:''})});
@@ -2133,13 +2275,13 @@ async function openMyTask(taskId){
 }
 function todoDialog({title,text='',placeholder='',action='Продолжить',danger=false,required=false}){
   return new Promise(resolve=>{
-    const host=document.createElement('div');host.className='todo-dialog';
+    const host=document.createElement('div');host.className=`todo-dialog${placeholder?' has-input':''}`;
     host.innerHTML=`<div class="todo-dialog-card"><h3>${esc(title)}</h3>${text?`<p>${esc(text)}</p>`:''}${placeholder?`<textarea maxlength="500" placeholder="${esc(placeholder)}"></textarea>`:''}<div class="todo-dialog-actions"><button class="mini" data-dialog-cancel>Назад</button><button class="${danger?'mini':'save'}" ${danger?'style="color:#FF8B93"':''} data-dialog-ok>${esc(action)}</button></div></div>`;
     document.body.appendChild(host);const input=host.querySelector('textarea');
-    const finish=value=>{host.remove();resolve(value)};
+    let settled=false;const finish=value=>{if(settled)return;settled=true;resolve(value);closeMotionLayer(host,()=>host.remove())};
     host.querySelector('[data-dialog-cancel]').onclick=()=>finish(null);
     host.querySelector('[data-dialog-ok]').onclick=()=>{const value=input?input.value.trim():'';if(required&&!value){input.focus();return}finish(value)};
-    host.onclick=event=>{if(event.target===host)finish(null)};if(input)setTimeout(()=>input.focus(),50);
+    host.onclick=event=>{if(event.target===host)finish(null)};openMotionLayer(host);if(input)setTimeout(()=>input.focus(),motionReduced()?0:250);
   });
 }
 async function cancelTodoTask(task){
@@ -2151,7 +2293,10 @@ async function reviewTodoTask(task,userId,action){
   let comment='';if(action==='return'){comment=await todoDialog({title:'Вернуть в работу',text:'Исполнитель получит ваше пояснение.',placeholder:'Что нужно исправить?',action:'Вернуть задачу',required:true});if(comment===null)return}
   try{await api(EMPLOYEE_TASK_API.review(task.task_id,userId),{method:'POST',body:JSON.stringify({status:action==='accept'?'accepted':'in_progress',comment:comment.trim()})});await loadMyTasks(true);renderMyTaskDetail(task.task_id);toast(action==='accept'?'Результат принят.':'Задача вернута в работу.')}catch(e){setTasksError(e.message||'Не удалось проверить результат.')}
 }
-function showTodoMain(){ $('todoMainView').classList.remove('hidden'); $('todoCreateView').classList.add('hidden'); }
+function showTodoMain(animate=true){
+  MOTION_IN_CLASSES.forEach(name=>$('todoCreateView').classList.remove(name));$('todoCreateView').classList.add('hidden');
+  if(animate)motionIn($('todoMainView'),'back');else $('todoMainView').classList.remove('hidden');
+}
 function todoInitials(name){return String(name||'?').split(/\s+/).slice(0,2).map(v=>v[0]||'').join('').toUpperCase()}
 function renderTodoDirectory(){
   const box=$('todoDirectory');
@@ -2164,7 +2309,7 @@ async function loadTodoDirectory(){
   try{const data=await api(EMPLOYEE_TASK_API.directory);todoDirectory=Array.isArray(data.items)?data.items:(Array.isArray(data)?data:[]);if(!todoAssigneeId&&todoDirectory.length)todoAssigneeId=Number(todoDirectory[0].user_id||todoDirectory[0].id);renderTodoDirectory()}catch(e){$('todoDirectory').innerHTML=`<div class="task-api-error">${esc(e.message||'Не удалось загрузить сотрудников.')}</div>`}
 }
 function openTodoCreate(){
-  $('todoMainView').classList.add('hidden');$('todoCreateView').classList.remove('hidden');$('todoCreateError').classList.add('hidden');
+  MOTION_IN_CLASSES.forEach(name=>$('todoMainView').classList.remove(name));$('todoMainView').classList.add('hidden');motionIn($('todoCreateView'),'forward');$('todoCreateError').classList.add('hidden');
   $('todoTitle').value='';$('todoDescription').value='';todoAssigneeId=null;todoDays=0;todoTime='09:00';todoHour='09';todoMinute='00';todoPriority='normal';todoRequiresPhoto=false;todoRequestId=(window.crypto&&window.crypto.randomUUID?window.crypto.randomUUID():`todo-${Date.now()}-${Math.random().toString(36).slice(2,10)}`);
   document.querySelectorAll('#todoDates button').forEach(b=>b.classList.toggle('on',Number(b.dataset.days)===0));document.querySelectorAll('#todoTimes button').forEach(b=>b.classList.toggle('on',b.dataset.time==='09:00'));document.querySelectorAll('#todoPriority button').forEach(b=>b.classList.toggle('on',b.dataset.priority==='normal'));document.querySelectorAll('#todoPhoto button').forEach(b=>b.classList.toggle('on',b.dataset.photo==='0'));$('todoCustomTime').classList.add('hidden');paintTodoCustomTime();loadTodoDirectory();window.scrollTo(0,0);
 }
@@ -2207,7 +2352,7 @@ $('bibipassReload').onclick=()=>loadBibipass(true);
 $('bibipassInstructions').onclick=()=>showBibipassInstructions(true);
 $('bibipassIntroJoin').onclick=openBibipassChannel;
 $('bibipassIntroCheck').onclick=()=>checkBibipassMembership($('bibipassIntroCheck'));
-$('bibipassIntroClose').onclick=async()=>{$('bibipassIntro').classList.add('hidden');await markBibipassIntroSeen()};
+$('bibipassIntroClose').onclick=async()=>{closeMotionLayer($('bibipassIntro'));await markBibipassIntroSeen()};
 $('myScheduleReload').onclick=()=>{myScheduleData=null;loadMySchedule()};
 $('myScheduleBack').onclick=openProfile;
 $('mySchedulePrev').onclick=()=>shiftMyScheduleMonth(-1);
@@ -2320,7 +2465,7 @@ async function loadAdminHistory(userId, append=false){
       list.insertAdjacentHTML('beforeend','<button class="mini admin-history-more">Показать ещё</button>');
       list.querySelector('.admin-history-more').onclick=()=>loadAdminHistory(userId,true);
     }
-    if(!append) box.scrollIntoView({behavior:'smooth',block:'nearest'});
+    if(!append) box.scrollIntoView({behavior:motionReduced()?'auto':'smooth',block:'nearest'});
   }catch(e){
     if(requestId!==adminHistoryRequest) return;
     if(e.status===401) closeAdmin();

@@ -33,6 +33,12 @@ REQUIRED = (
     'text/map-employee',
     '/annotations`,{method:\'POST\'',
     'renderMapVertexHandles',
+    'const motionReduced=()=>',
+    'function motionPageIn(element)',
+    'function openCrmLayer(element)',
+    'function closeCrmLayer(element,after)',
+    '@media(prefers-reduced-motion:reduce)',
+    '--motion-page:220ms',
 )
 
 

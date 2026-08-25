@@ -134,6 +134,39 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
 .map-toolbar{max-width:calc(100% - 82px);flex-wrap:wrap}.map-toolbar .btn{min-height:38px;padding:7px 10px;font-size:12px}.map-tool-active{border-color:var(--green)!important;background:#183d22!important;color:#7df08a!important}.map-sidebar{border:1px solid var(--line);border-radius:18px;background:#0c130f;padding:12px}.map-side-section{display:grid;gap:9px}.map-side-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px}.map-side-head h3{font-size:16px;margin:0}.map-side-head p{font-size:11px;color:var(--muted);margin:3px 0 0}.map-roster{display:grid;gap:7px}.map-employee{width:100%;border:1px solid var(--line);border-radius:12px;background:#131c16;color:var(--ink);padding:9px 10px;display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left;cursor:grab}.map-employee:hover,.map-employee.selected{border-color:rgba(49,216,67,.72);background:#152a1b}.map-employee.dragging{opacity:.45}.map-employee .initial{width:34px;height:34px}.map-employee-copy{min-width:0}.map-employee-copy b,.map-employee-copy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.map-employee-copy b{font-size:12px}.map-employee-copy span{font-size:10px;color:var(--muted);margin-top:2px}.map-zone-chip{border:1px solid var(--line);border-radius:10px;padding:5px 7px;color:var(--muted);font-size:9px;font-weight:850;max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.map-zone-chip.assigned{color:#71e67e;border-color:rgba(49,216,67,.35);background:#102719}.map-side-divider{height:1px;background:var(--line);margin:2px 0}.map-zone-list{display:grid;gap:6px}.map-zone-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center;border:1px solid var(--line);border-radius:11px;padding:8px;background:#111914;color:var(--ink);text-align:left}.map-zone-row.active{border-color:rgba(49,216,67,.72);background:#14251a}.map-zone-row i{width:10px;height:10px;border-radius:50%}.map-zone-row span{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.map-zone-row small{font-size:9px;color:var(--muted)}.map-side-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.map-side-actions .btn{min-height:36px;padding:7px;font-size:11px}.map-drop-hint{padding:9px 10px;border:1px dashed rgba(49,216,67,.38);border-radius:11px;color:#aab7ad;font-size:10px;line-height:1.45}.map-stage.drag-target{box-shadow:inset 0 0 0 4px rgba(49,216,67,.55)}.map-edit-bar{position:absolute;z-index:850;left:50%;bottom:18px;transform:translateX(-50%);width:min(680px,calc(100% - 28px));padding:10px;border:1px solid rgba(255,255,255,.16);border-radius:15px;background:rgba(8,14,10,.94);backdrop-filter:blur(12px);display:grid;grid-template-columns:minmax(130px,1fr) 92px auto auto;gap:8px;align-items:center;box-shadow:0 14px 40px rgba(0,0,0,.45)}.map-edit-bar .input{min-height:40px}.map-edit-help{grid-column:1/-1;color:#a9b5ac;font-size:10px}.map-vertex-icon,.map-midpoint-icon,.map-task-marker,.map-bike-marker,.map-arrow-head{background:transparent;border:0}.map-vertex-dot{width:18px;height:18px;border-radius:50%;background:#fff;border:4px solid #27c93f;box-shadow:0 2px 8px rgba(0,0,0,.45);cursor:move}.map-midpoint-dot{width:14px;height:14px;border-radius:4px;background:#27c93f;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);cursor:copy}.map-task-pin{width:26px;height:26px;border-radius:50% 50% 50% 8px;transform:rotate(-45deg);display:grid;place-items:center;border:2px solid #fff;box-shadow:0 4px 12px rgba(0,0,0,.45)}.map-task-pin:after{content:'!';transform:rotate(45deg);font-weight:950;color:#fff;font-size:13px}.map-bike-dot{width:17px;height:17px;border-radius:50%;background:#36dc48;border:3px solid #fff;box-shadow:0 0 0 5px rgba(49,216,67,.2),0 3px 9px rgba(0,0,0,.4)}.map-arrow-tip{width:0;height:0;border-top:8px solid transparent;border-bottom:8px solid transparent;border-left:15px solid var(--arrow-color,#ffb32c);filter:drop-shadow(0 2px 2px rgba(0,0,0,.45));transform:rotate(var(--arrow-angle,0deg));transform-origin:center}.map-annotation-list{display:grid;gap:6px;max-height:190px;overflow:auto}.map-annotation{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:7px;align-items:center;padding:7px 8px;border:1px solid var(--line);border-radius:10px;background:#111914}.map-annotation b{font-size:10px}.map-annotation span{display:block;color:var(--muted);font-size:9px;margin-top:2px}.map-annotation button{border:0;background:transparent;color:var(--red);font-weight:950}.map-live{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--muted)}.map-live i{width:8px;height:8px;border-radius:50%;background:var(--amber)}.map-live.active i{background:var(--green);box-shadow:0 0 0 4px rgba(49,216,67,.12)}
 @media(max-width:980px){.map-sidebar{border-radius:15px}.map-roster{grid-template-columns:repeat(2,minmax(0,1fr))}.map-edit-bar{grid-template-columns:1fr 80px}.map-edit-bar .btn{width:100%}}
 @media(max-width:620px){.map-toolbar{left:8px;top:8px;max-width:calc(100% - 58px);padding:6px}.map-toolbar .input{width:132px}.map-toolbar .btn{font-size:0;width:38px}.map-toolbar .btn:after{font-size:16px}.map-toolbar [data-map-tool="zone-edit"]:after{content:'◇'}.map-toolbar [data-map-tool="zone-new"]:after{content:'＋'}.map-toolbar [data-map-tool="marker"]:after{content:'●'}.map-toolbar [data-map-tool="arrow"]:after{content:'➜'}.map-roster{grid-template-columns:1fr}.map-edit-bar{bottom:10px}}
+
+/* Единый motion-слой CRM: короткие transform/opacity переходы без layout-анимаций. */
+:root{
+  --motion-press:90ms;--motion-fast:140ms;--motion-ui:180ms;--motion-page:220ms;--motion-sheet:240ms;
+  --ease-motion-out:cubic-bezier(.22,1,.36,1);--ease-motion-standard:cubic-bezier(.2,0,0,1);--ease-motion-in:cubic-bezier(.4,0,1,1);
+}
+:where(button,.btn,.chip,.nav-btn,.row-card.clickable,.kpi.action){touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+  transition:transform var(--motion-press) var(--ease-motion-out),opacity var(--motion-fast) var(--ease-motion-standard),
+    background-color var(--motion-ui) var(--ease-motion-standard),border-color var(--motion-ui) var(--ease-motion-standard),
+    color var(--motion-ui) var(--ease-motion-standard),box-shadow var(--motion-ui) var(--ease-motion-standard)}
+:where(button,.btn,.chip,.nav-btn,.row-card.clickable,.kpi.action):active:not(:disabled){transform:translate3d(0,0,0) scale(.98)}
+.nav-btn:active:not(:disabled),.icon-btn:active:not(:disabled),.modal-close:active:not(:disabled){transform:translate3d(0,0,0) scale(.95)}
+:where(button,.btn,.chip,.nav-btn):disabled{transform:none}
+.page.active.motion-page-in{animation:crm-page-in var(--motion-page) var(--ease-motion-out) both;will-change:transform,opacity}
+@keyframes crm-page-in{from{opacity:0;transform:translate3d(0,8px,0)}to{opacity:1;transform:none}}
+.modal-backdrop.open,.sheet-backdrop.open{animation:crm-layer-in var(--motion-ui) var(--ease-motion-standard) both}
+.modal-backdrop.open .modal{animation:crm-modal-in var(--motion-sheet) var(--ease-motion-out) both;will-change:transform,opacity}
+.sheet-backdrop.open .sheet{animation:crm-sheet-in var(--motion-sheet) var(--ease-motion-out) both;will-change:transform,opacity}
+.modal-backdrop.open.motion-closing,.sheet-backdrop.open.motion-closing{animation:crm-layer-out var(--motion-fast) var(--ease-motion-in) both;pointer-events:none}
+.modal-backdrop.open.motion-closing .modal{animation:crm-modal-out var(--motion-fast) var(--ease-motion-in) both}
+.sheet-backdrop.open.motion-closing .sheet{animation:crm-sheet-out var(--motion-fast) var(--ease-motion-in) both}
+@keyframes crm-layer-in{from{opacity:0}to{opacity:1}}
+@keyframes crm-layer-out{from{opacity:1}to{opacity:0}}
+@keyframes crm-modal-in{from{opacity:0;transform:translate3d(0,12px,0) scale(.99)}to{opacity:1;transform:none}}
+@keyframes crm-modal-out{from{opacity:1;transform:none}to{opacity:0;transform:translate3d(0,6px,0) scale(.995)}}
+@keyframes crm-sheet-in{from{opacity:0;transform:translate3d(0,20px,0)}to{opacity:1;transform:none}}
+@keyframes crm-sheet-out{from{opacity:1;transform:none}to{opacity:0;transform:translate3d(0,10px,0)}}
+.toast{transform:translate3d(-50%,8px,0) scale(.98);transition:opacity var(--motion-ui) var(--ease-motion-standard),transform var(--motion-ui) var(--ease-motion-out)}
+.toast.show{transform:translate3d(-50%,0,0) scale(1)}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  .spinner,.skeleton::after{animation:none!important}
+}
 </style>
 </head>
 <body>
@@ -348,6 +381,25 @@ const state={
 };
 
 function esc(value){return String(value==null?"":value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
+const motionReduced=()=>window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function motionPageIn(element){
+  if(!element||motionReduced()||element.classList.contains('motion-page-in'))return;
+  element.classList.add('motion-page-in');
+  element.addEventListener('animationend',event=>{if(event.target===element)element.classList.remove('motion-page-in')},{once:true});
+}
+function openCrmLayer(element){
+  if(!element)return;delete element.dataset.motionClosing;element.classList.remove('motion-closing');element.classList.add('open');
+}
+function closeCrmLayer(element,after){
+  if(!element||!element.classList.contains('open')){if(after)after();return}
+  if(element.dataset.motionClosing==='1')return;
+  element.dataset.motionClosing='1';element.classList.add('motion-closing');
+  const finish=()=>{
+    if(element.dataset.motionClosing!=='1')return;delete element.dataset.motionClosing;
+    element.classList.remove('motion-closing','open');if(after)after();
+  };
+  if(motionReduced())finish();else setTimeout(finish,150);
+}
 function icon(id){return `<svg class="icon"><use href="#${id}"/></svg>`}
 function initials(name){return String(name||"?").trim().split(/\s+/).slice(0,2).map(x=>x[0]||"").join("").toUpperCase()||"?"}
 function n(value){const x=Number(value);return Number.isFinite(x)?x:0}
@@ -427,7 +479,7 @@ function showApp(){
   $("sideUser").textContent=name;$("sideRole").textContent=ROLE_LABELS[state.context?.role]||state.context?.role||"—";
   renderScopes();setRoute(state.route,true);attemptInitialFullscreen();showReleaseNotes();
 }
-function showReleaseNotes(){if(storageGet(RELEASE_KEY)===CRM_RELEASE)return;$('releaseModal').classList.add('open')}
+function showReleaseNotes(){if(storageGet(RELEASE_KEY)===CRM_RELEASE)return;openCrmLayer($('releaseModal'))}
 function renderScopes(){
   const select=$("scopeSelect"),cities=state.context?.cities||[];select.innerHTML=cities.map(c=>`<option value="${Number(c.id)}">${esc(c.name)}</option>`).join("");
   select.value=String(state.cityId||"");select.classList.toggle("hidden",cities.length<2);syncCalendarRole();updateDistrictSuggestions();
@@ -437,8 +489,9 @@ function updateDistrictSuggestions(){
   $('districtSuggestions').innerHTML=items.map(name=>`<option value="${esc(name)}"></option>`).join('');
 }
 function setRoute(route,force=false){
-  if(!ROUTES[route])route="analysis";if(state.route==="calendar"&&route!=="calendar"&&!allowCalendarDraftDiscard())return;if(state.route==="map"&&route!=="map")destroyMap();state.route=route;
-  $$(".page").forEach(p=>p.classList.toggle("active",p.id===`page-${route}`));
+  if(!ROUTES[route])route="analysis";const previousRoute=state.route;if(state.route==="calendar"&&route!=="calendar"&&!allowCalendarDraftDiscard())return;if(state.route==="map"&&route!=="map")destroyMap();state.route=route;
+  const targetPage=$(`page-${route}`);$$(".page").forEach(p=>{const active=p===targetPage;p.classList.toggle("active",active);if(!active)p.classList.remove('motion-page-in')});
+  if(force||previousRoute!==route)motionPageIn(targetPage);
   $$("[data-route]").forEach(b=>b.classList.toggle("active",b.dataset.route===route));
   $("pageTitle").textContent=ROUTES[route][0];$("pageSubtitle").textContent=ROUTES[route][1];
   const cacheKey=route==="calendar"?calendarCacheKey():`${route}:${state.cityId}`;closeMore();if(force||!state.cache[cacheKey])loadRoute(route);else renderRoute(route,state.cache[cacheKey]);
@@ -720,7 +773,7 @@ function setBatchDecade(number){
 async function openPlanModal(date=state.selectedDate,userId=null,mode='single',workKind='regular',roleOverride=''){
   const planRole=roleOverride||roleScope()||(state.route==='calendar'?calendarRole():'');clearError('planError');state.planWorkKind=workKind;$$('#planWorkKind button').forEach(b=>b.classList.toggle('active',b.dataset.value===workKind));state.batchKey=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;$('planDate').value=date||isoDate(new Date());$('batchFrom').value=date||isoDate(new Date());$('batchTo').value=isoDate(addDays(new Date((date||isoDate(new Date()))+'T12:00:00'),9));
   const rolePresets=calendarPresets(planRole||'Скаут'),defaultPreset=rolePresets[0];$('batchShiftPreset').innerHTML=rolePresets.map((item,index)=>`<button class="chip ${index===0?'active':''}" type="button" data-start="${esc(item.start_time)}" data-end="${esc(item.end_time)}">${esc(item.label)} · ${esc(calendarTimeLabel(item.start_time,item.end_time))}</button>`).join('');$('batchStart').value=defaultPreset.start_time;$('batchEnd').value=defaultPreset.end_time;$$('#batchShiftPreset button').forEach(b=>b.onclick=()=>{$('batchStart').value=b.dataset.start;$('batchEnd').value=b.dataset.end;$$('#batchShiftPreset button').forEach(x=>x.classList.toggle('active',x===b));updateBatchPreview()});
-  $('planModal').querySelector('.modal-head h2').textContent=`${mode==='month'?'График на месяц':'Запланировать смены'}${planRole?` · ${calendarRolePlural(planRole)}`:''}`;$('planModal').classList.add('open');setPlanMode(mode);
+  $('planModal').querySelector('.modal-head h2').textContent=`${mode==='month'?'График на месяц':'Запланировать смены'}${planRole?` · ${calendarRolePlural(planRole)}`:''}`;openCrmLayer($('planModal'));setPlanMode(mode);
   $('planEmployee').innerHTML='<option value="">Загружаю…</option>';$('batchEmployees').innerHTML='<div class="check-row">Загружаю…</div>';
   try{
     const data=await request(API.employees+query({city_id:state.cityId,role:planRole,limit:200})),items=data.items||[];
@@ -777,7 +830,7 @@ async function openTaskModal(date=state.selectedDate,task=null,presetUserId=null
   state.taskCompletion=task?.completion_mode||'manual';$$('#taskCompletion button').forEach(b=>b.classList.toggle('active',b.dataset.value===state.taskCompletion));
   const roles=roleScope()?[roleScope()]:['Скаут','Водитель','Чарджер'];$('taskRole').innerHTML=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const roleTarget=(task?.targets||[]).find(t=>t.target_type==='role');if(roleTarget&&roleTarget.role)$('taskRole').value=roleTarget.role;
-  toggleTargetMode(state.editTaskTargetIds.length?'users':'role');$('taskModal').classList.add('open');await Promise.all([refreshAssigneePreview(),loadTaskTemplates()]);
+  toggleTargetMode(state.editTaskTargetIds.length?'users':'role');openCrmLayer($('taskModal'));await Promise.all([refreshAssigneePreview(),loadTaskTemplates()]);
 }
 async function loadTaskTemplates(){const select=$('taskTemplate');select.innerHTML='<option value="">Без шаблона</option>';try{const data=await request(API.templates+query({city_id:state.cityId}));state.taskTemplates=data.items||[];select.innerHTML+=[...state.taskTemplates].map(t=>`<option value="${Number(t.id)}">${esc(t.name)}</option>`).join('');select.onchange=()=>applyTaskTemplate(Number(select.value))}catch(err){select.innerHTML='<option value="">Шаблоны недоступны</option>'}}
 function applyTaskTemplate(id){const t=(state.taskTemplates||[]).find(x=>Number(x.id)===id);if(!t)return;$('taskTitle').value=t.title||'';$('taskDescription').value=t.description||'';$('taskDistrict').value=t.district||'';$('taskPriority').value=t.priority||'normal';$('taskRequiresPhoto').checked=!!t.requires_photo;state.taskCompletion=t.completion_mode||'manual';$$('#taskCompletion button').forEach(b=>b.classList.toggle('active',b.dataset.value===state.taskCompletion))}
@@ -873,10 +926,10 @@ async function calculatePayroll(){const button=$('payrollCalculate'),root=$('pay
 function wirePayroll(root){$$('[data-payroll-employee]',root).forEach(button=>button.onclick=()=>openPayrollEmployee(Number(button.dataset.payrollEmployee)))}
 function openPayrollEmployee(userId){const item=(state.payrollData?.items||[]).find(employee=>Number(employee.user_id)===Number(userId));if(!item)return;openDetail(item.name,`<div class="payroll-total"><div><div class="kpi-label">Зарплата за декаду</div><div class="row-meta">${fmtDate(state.payrollData.range?.from)} — ${fmtDate(state.payrollData.range?.to)}</div></div><strong>${fmtMoney(item.earned)}</strong></div><div class="day-section"><div class="day-section-head"><b>Смены</b><span>${item.shifts.length}</span></div><div class="list">${item.shifts.length?item.shifts.map(shift=>`<div class="row-card"><div><div class="row-title">${fmtDate(shift.date)} · ${esc(shift.start_time||'—')}–${esc(shift.end_time||'…')}</div><div class="row-meta">${esc(shift.district||'район не указан')} · факт ${fmtMinutes(shift.actual_worked_minutes??shift.worked_minutes)} → к оплате ${fmtPayrollHours(shift.worked_minutes)}</div></div><div class="row-side"><b>${fmtMoney(shift.earned)}</b><span>${shift.status==='active'?'предварительно':'закрыта'}</span></div></div>`).join(''):stateBlock('Смен нет','В выбранной декаде у сотрудника нет смен.')}</div></div>`)}
 
-function openDetail(title,html,variant=""){const modal=document.querySelector('#detailModal .modal');modal.classList.remove('modal-wide','calendar-guide-modal');if(variant)modal.classList.add(variant);$("detailTitle").textContent=title;$("detailRoot").innerHTML=html;$("detailModal").classList.add("open")}
-function closeModal(id){$(id).classList.remove("open")}
-function openMore(){$("moreSheet").classList.add("open")}
-function closeMore(){$("moreSheet").classList.remove("open")}
+function openDetail(title,html,variant=""){const modal=document.querySelector('#detailModal .modal');modal.classList.remove('modal-wide','calendar-guide-modal');if(variant)modal.classList.add(variant);$("detailTitle").textContent=title;$("detailRoot").innerHTML=html;openCrmLayer($("detailModal"))}
+function closeModal(id){closeCrmLayer($(id))}
+function openMore(){openCrmLayer($("moreSheet"))}
+function closeMore(){closeCrmLayer($("moreSheet"))}
 function applyUiZoom(value=state.uiZoom){
   const closest=ZOOM_LEVELS.reduce((best,item)=>Math.abs(item-value)<Math.abs(best-value)?item:best,1);
   state.uiZoom=closest;document.body.style.zoom=String(closest);storageSet(ZOOM_KEY,String(closest));
@@ -918,7 +971,7 @@ function updateCloseShiftPreview(){const shift=state.shiftLookup[String(state.cl
 function openCloseShiftModal(shiftId){
   const shift=state.shiftLookup[String(shiftId)]||{};state.closeShiftId=shiftId;state.closeShiftHours=10;
   $("closeShiftEmployee").textContent=shift.name||"Сотрудник";$("closeShiftMeta").textContent=`${selectedCity()?.name||"Город"} · начало ${shift.start_time||"указано в смене"}`;$("closeShiftComment").value="";clearError("closeShiftError");
-  $$('#closeShiftDuration button').forEach(button=>button.classList.toggle("active",Number(button.dataset.hours)===10));updateCloseShiftPreview();$("closeShiftModal").classList.add("open")
+  $$('#closeShiftDuration button').forEach(button=>button.classList.toggle("active",Number(button.dataset.hours)===10));updateCloseShiftPreview();openCrmLayer($("closeShiftModal"))
 }
 async function closeShiftFromCrm(event){
   event.preventDefault();clearError("closeShiftError");const shiftId=Number(state.closeShiftId),button=$("closeShiftSubmit");if(!shiftId)return;
@@ -932,7 +985,7 @@ function activeShiftDeadline(shift){const parsed=shift?.auto_close_at?new Date(s
 function openExtendShiftModal(shiftId){
   const shift=state.shiftLookup[String(shiftId)]||{},deadline=activeShiftDeadline(shift);state.extendShiftId=shiftId;
   $('extendShiftEmployee').textContent=shift.name||'Сотрудник';$('extendShiftMeta').textContent=deadline?`Сейчас бот закроет смену в ${cityTimeFromDate(deadline)}.`:'Автоматическое окончание ещё не задано.';
-  const initial=new Date(Math.max(Date.now(),deadline?.getTime()||0)+60*60*1000);$('extendShiftEnd').value=cityTimeFromDate(initial);clearError('extendShiftError');$('extendShiftModal').classList.add('open')
+  const initial=new Date(Math.max(Date.now(),deadline?.getTime()||0)+60*60*1000);$('extendShiftEnd').value=cityTimeFromDate(initial);clearError('extendShiftError');openCrmLayer($('extendShiftModal'))
 }
 function addExtendHours(hours){const shift=state.shiftLookup[String(state.extendShiftId)]||{},deadline=activeShiftDeadline(shift),base=new Date(Math.max(Date.now(),deadline?.getTime()||0));base.setTime(base.getTime()+Number(hours)*60*60*1000);$('extendShiftEnd').value=cityTimeFromDate(base)}
 async function extendShiftFromCrm(event){

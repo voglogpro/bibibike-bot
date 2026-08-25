@@ -45,6 +45,13 @@ REQUIRED = (
     'function openProfile()',
     'function openTasks(taskId=null)',
     'function openMySchedule()',
+    'const motionReduced = ()',
+    "function motionIn(element,kind='view')",
+    "function showPage(id,kind='page')",
+    'function openMotionLayer(element)',
+    '@media(prefers-reduced-motion:reduce)',
+    '--motion-page:220ms',
+    'transform:scaleX(var(--progress,0))',
 )
 
 REMOVED_GAMIFICATION = (

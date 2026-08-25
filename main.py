@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-25 · БибиПасс: маршрут сезона"
+BUILD_VERSION = "2026-08-25 · БибиПасс: баллы только за действия"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -337,14 +337,6 @@ BIBIPASS_ACTION_HALF_POINTS = {
     "to_sc": 2,
     "from_sc": 2,
     "battery": 2,
-}
-# Принятая руководителем задача даёт больше очков и Бибибонусов в
-# зависимости от уже существующего приоритета задания.
-BIBIPASS_TASK_REWARDS = {
-    "low": {"points": 5, "bibibonuses": 1},
-    "normal": {"points": 5, "bibibonuses": 1},
-    "high": {"points": 10, "bibibonuses": 3},
-    "urgent": {"points": 20, "bibibonuses": 5},
 }
 # Цена уровня и награда растут вместе. 20 + 25 + ... + 115 = 1350 баллов
 # за полный сезон. Банк на участника — ровно 150 Бибибонусов:
@@ -6285,54 +6277,12 @@ async def _bibipass_verify_membership(uid, season, force=False):
     return allowed, None
 
 
-async def _bibipass_sync_task_grants_many(user_ids, season):
-    """Одной транзакцией замораживает новые награды принятых заданий."""
-    user_ids = sorted({int(value) for value in user_ids})
-    if not user_ids:
-        return
-    marks = ",".join("?" for _ in user_ids)
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(
-            "SELECT t.id,t.priority,a.updated_at,a.user_id FROM crm_task_assignees a "
-            "JOIN crm_tasks t ON t.id=a.task_id "
-            f"WHERE a.user_id IN ({marks}) AND a.status='accepted' "
-            "AND t.created_by<>a.user_id AND datetime(a.updated_at)>=datetime(?) "
-            "AND datetime(a.updated_at)<datetime(?)",
-            (*user_ids, season["start_at"], season["end_at"]),
-        )).fetchall()
-        accepted = await (await db.execute(
-            f"SELECT user_id,task_id FROM bibipass_task_grants WHERE season_id=? "
-            f"AND user_id IN ({marks})",
-            (season["id"], *user_ids),
-        )).fetchall()
-        existing = {(int(row["user_id"]), int(row["task_id"])) for row in accepted}
-        inserts = []
-        for row in rows:
-            key = (int(row["user_id"]), int(row["id"]))
-            if key in existing:
-                continue
-            priority = (row["priority"] or "normal").lower()
-            reward = BIBIPASS_TASK_REWARDS.get(priority, BIBIPASS_TASK_REWARDS["normal"])
-            inserts.append((season["id"], row["user_id"], row["id"], priority,
-                            reward["points"], reward["bibibonuses"], row["updated_at"]))
-        if inserts:
-            await db.executemany(
-                "INSERT OR IGNORE INTO bibipass_task_grants "
-                "(season_id,user_id,task_id,task_priority,points,bibibonus_amount,earned_at) "
-                "VALUES (?,?,?,?,?,?,?)", inserts,
-            )
-            await db.commit()
-
-
 async def _bibipass_scores(user_ids, season):
     user_ids = sorted({int(value) for value in user_ids})
     if not user_ids:
         return {}
-    await _bibipass_sync_task_grants_many(user_ids, season)
     scores = {
-        uid: {"action_points": 0, "task_points": 0, "task_bibibonuses": 0,
-              "completed_tasks": 0, "total": 0}
+        uid: {"action_points": 0, "total": 0}
         for uid in user_ids
     }
     marks = ",".join("?" for _ in user_ids)
@@ -6355,22 +6305,10 @@ async def _bibipass_scores(user_ids, season):
             half_points[int(row["user_id"])] += (
                 units * BIBIPASS_ACTION_HALF_POINTS.get(row["action_type"], 0)
             )
-        task_rows = await (await db.execute(
-            "SELECT user_id,COALESCE(SUM(points),0) AS points,"
-            "COALESCE(SUM(bibibonus_amount),0) AS bonuses,COUNT(*) AS task_count "
-            f"FROM bibipass_task_grants WHERE season_id=? AND user_id IN ({marks}) "
-            "GROUP BY user_id",
-            (season["id"], *user_ids),
-        )).fetchall()
     for uid, value in half_points.items():
         scores[uid]["action_points"] = max(0, value) / 2
-    for row in task_rows:
-        score = scores[int(row["user_id"])]
-        score["task_points"] = int(row["points"] or 0)
-        score["task_bibibonuses"] = int(row["bonuses"] or 0)
-        score["completed_tasks"] = int(row["task_count"] or 0)
     for score in scores.values():
-        score["total"] = score["action_points"] + score["task_points"]
+        score["total"] = score["action_points"]
     return scores
 
 
@@ -6461,11 +6399,6 @@ async def _bibipass_payload(uid, verify=True, force=False):
                 {"type": "from_sc", "label": "Вывоз с СЦ", "points": 1},
                 {"type": "battery", "label": "Замена АКБ", "points": 1},
             ],
-            "tasks": [
-                {"priority": key, "points": value["points"],
-                 "bibibonuses": value["bibibonuses"]}
-                for key, value in BIBIPASS_TASK_REWARDS.items() if key != "low"
-            ],
         },
         "rewards": _bibipass_public_rewards(),
     }
@@ -6498,7 +6431,6 @@ async def _bibipass_payload(uid, verify=True, force=False):
             "user_id": person["user_id"], "name": person["full_name"] or "Сотрудник",
             "role": person["role"] or "", "city": person["city_name"] or "",
             "points": score["total"], "level": level_state["level"],
-            "completed_tasks": score["completed_tasks"],
             "joined_at": person["joined_at"],
         })
     ranking.sort(key=lambda item: (-item["level"], -item["points"], item["joined_at"],
@@ -6518,9 +6450,8 @@ async def _bibipass_payload(uid, verify=True, force=False):
     base.update({
         "progress": dict(own_level, **own_points),
         "earned": {
-            "bibibonuses": level_bonuses + own_points["task_bibibonuses"],
+            "bibibonuses": level_bonuses,
             "level_bibibonuses": level_bonuses,
-            "task_bibibonuses": own_points["task_bibibonuses"],
             "subscription_months": subscription_months,
         },
         "position": next((item["position"] for item in ranking if item["is_me"]), None),

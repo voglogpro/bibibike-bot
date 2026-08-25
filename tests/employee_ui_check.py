@@ -29,13 +29,14 @@ REQUIRED = (
     'function openBibipass()',
     'function showBibipassInstructions(replay=true)',
     'function bibipassPointsText(value)',
-    'function bibipassBonusText(value)',
     'class="pass-stage"',
     'class="pass-route"',
-    'class="pass-equation"',
-    'Что приносит баллы',
+    'class="pass-equation action-only"',
+    'только действия с байками',
+    'Сколько даёт действие',
+    'Баллы уровня <i>≠</i> БибиБонусы',
     'Маршрут уровней',
-    'ожидают начисления',
+    'ожидает начисления',
     "'/api/bibipass'",
     'id="profileNavBadge"',
     'id="todoProfileBack"',
@@ -50,6 +51,7 @@ REMOVED_GAMIFICATION = (
     'RANK_ICONS',
     'Топ недели',
     'data-tab="tasks"',
+    'Принятые задания',
 )
 
 

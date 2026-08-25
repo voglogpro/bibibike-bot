@@ -1,4 +1,4 @@
-"""Контракт БибиПасса: прогрессия, награды, задачи, рейтинг и подписка."""
+"""Контракт БибиПасса: прогрессия только по действиям, награды и подписка."""
 import asyncio
 import importlib.util
 import os
@@ -105,6 +105,14 @@ async def run():
             "VALUES (?,?,?,?, 'accepted', ?)",
             (task_id, 701, "Первый участник", "Скаут", stamp),
         )
+        # Даже сохранённая запись старой механики заданий не должна менять
+        # баллы, рейтинг или награды: в конкурсе учитываются только действия.
+        await db.execute(
+            "INSERT INTO bibipass_task_grants "
+            "(season_id,user_id,task_id,task_priority,points,bibibonus_amount,earned_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (season["id"], 701, task_id, "high", 10, 3, stamp),
+        )
         await db.executemany(
             "INSERT INTO bibipass_participants "
             "(season_id,user_id,intro_seen_at,joined_at,membership_status,membership_checked_at) "
@@ -158,20 +166,20 @@ async def run():
 
     score = await bot._bibipass_points(701, season)
     assert score["action_points"] == 20
-    assert score["task_points"] == 10
-    assert score["task_bibibonuses"] == 3
-    assert score["total"] == 30
+    assert score["total"] == 20
+    assert set(score) == {"action_points", "total"}
 
     payload = await bot._bibipass_payload(701, verify=False)
     assert payload["progress"]["level"] == 1
     assert payload["earned"]["level_bibibonuses"] == 5
-    assert payload["earned"]["bibibonuses"] == 8
-    assert payload["position"] == 1  # 30 баллов против 25, города объединены.
+    assert payload["earned"]["bibibonuses"] == 5
+    assert "tasks" not in payload["rules"]
+    assert payload["position"] == 2  # 20 баллов против 25, города объединены.
     assert {item["city"] for item in payload["ranking"]} == {first["name"], second["name"]}
     concurrent = await asyncio.gather(*[
         bot._bibipass_payload(701, verify=False) for _ in range(8)
     ])
-    assert all(item["progress"]["points"] == 30 for item in concurrent)
+    assert all(item["progress"]["points"] == 20 for item in concurrent)
 
     await bot._bibipass_sync_level_rewards(701, season, 20)
     async with bot.db_connect() as db:

@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · профиль, задачи и уровни БибиПасса"
+BUILD_VERSION = "2026-08-26 · календарная декада в профиле"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -2225,6 +2225,77 @@ def _shift_in_period(shift, periods, city=None):
     started = shift.get("start_at") or shift.get("created_at")
     period_start = period.get("started_at")
     return bool(period_start and started and started >= period_start)
+
+
+def _calendar_pay_bounds(city, now=None):
+    """Границы календарного месяца и текущей декады в часовом поясе города."""
+    city_tz = _city_tz(city)
+    current = now or datetime.now(city_tz)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=city_tz)
+    else:
+        current = current.astimezone(city_tz)
+
+    month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        next_month_start = month_start.replace(month=month_start.month + 1)
+
+    if current.day <= 10:
+        decade_start = month_start
+        decade_end = month_start.replace(day=11)
+    elif current.day <= 20:
+        decade_start = month_start.replace(day=11)
+        decade_end = month_start.replace(day=21)
+    else:
+        decade_start = month_start.replace(day=21)
+        decade_end = next_month_start
+    return month_start, next_month_start, decade_start, decade_end
+
+
+def _profile_pay_metrics(closed_rows, city, now=None):
+    """Зарплата профиля: календарный месяц и календарная декада."""
+    city_tz = _city_tz(city)
+    month_start, next_month_start, decade_start, decade_end = _calendar_pay_bounds(city, now)
+    month_earned = 0
+    decade_earned = 0
+    month_shifts = 0
+    for row in closed_rows:
+        started_at = _parse_datetime(row.get("start_at") or row.get("created_at"))
+        if not started_at:
+            continue
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=city_tz)
+        else:
+            started_at = started_at.astimezone(city_tz)
+        earned = row.get("earned") or 0
+        if month_start <= started_at < next_month_start:
+            month_earned += earned
+            month_shifts += 1
+        if decade_start <= started_at < decade_end:
+            decade_earned += earned
+    return {
+        "month_earned": month_earned,
+        "decade_earned": decade_earned,
+        "month_shifts": month_shifts,
+        "decade_start": decade_start,
+        "decade_end": decade_end,
+    }
+
+
+def _shift_in_calendar_decade(shift, city, now=None):
+    """Входит ли закрытая смена в текущую календарную декаду города."""
+    city_tz = _city_tz(city)
+    _, _, decade_start, decade_end = _calendar_pay_bounds(city, now)
+    started_at = _parse_datetime(shift.get("start_at") or shift.get("created_at"))
+    if not started_at:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=city_tz)
+    else:
+        started_at = started_at.astimezone(city_tz)
+    return decade_start <= started_at < decade_end
 
 
 async def start_new_period(city_id, uid, segment="day"):
@@ -6848,9 +6919,8 @@ async def api_state(request):
     total, total_earned, shifts_count = await get_lifetime(uid, selected_city_id)
     lvl, xp, need = _level_from_xp(total)
 
-    # Доход за текущую декаду СВОЕЙ группы (день/ночь) — по каждой смене
-    # отдельно: дневные смены сверяются с дневной декадой, ночные с ночной.
-    periods = await city_periods(selected_city_id)
+    # Профиль сотрудника использует предсказуемые календарные интервалы:
+    # месяц целиком и текущую декаду (1–10, 11–20, 21–конец месяца).
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         closed_rows = await (await db.execute(
@@ -6859,40 +6929,12 @@ async def api_state(request):
             "ORDER BY COALESCE(start_at, created_at) DESC",
             (uid, selected_city_id)
         )).fetchall()
-    decade_earned = sum(
-        (r["earned"] or 0) for r in closed_rows
-        if _shift_in_period(dict(r), periods, city)
-    )
-    city_tz = _city_tz(city)
-    month_start = datetime.now(city_tz).replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    )
-    if month_start.month == 12:
-        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
-    else:
-        next_month_start = month_start.replace(month=month_start.month + 1)
-    month_rows = []
-    for row in closed_rows:
-        started_at = _parse_datetime(row["start_at"] or row["created_at"])
-        if not started_at:
-            continue
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=city_tz)
-        else:
-            started_at = started_at.astimezone(city_tz)
-        if month_start <= started_at < next_month_start:
-            month_rows.append(row)
-    month_earned = sum((row["earned"] or 0) for row in month_rows)
-    month_shifts = len(month_rows)
-    # Подпись «с даты»: декада группы последней смены сотрудника.
-    _last_seg = "day"
-    if closed_rows:
-        _last_seg = _shift_segment(dict(closed_rows[0]), city)
-    period_start = ((periods.get(_last_seg) or {}).get("started_at")
-                    or (periods.get("day") or {}).get("started_at")
-                    or datetime.now(_city_tz(city)).replace(
-                        day=1, hour=0, minute=0, second=0, microsecond=0
-                    ).isoformat())
+    metrics = _profile_pay_metrics([dict(row) for row in closed_rows], city)
+    month_earned = metrics["month_earned"]
+    decade_earned = metrics["decade_earned"]
+    month_shifts = metrics["month_shifts"]
+    # Подпись «с даты» совпадает с началом календарной декады.
+    period_start = metrics["decade_start"].isoformat()
 
     shift = active_any if active_any and active_any.get("city_id") == selected_city_id else None
     shift_data = None
@@ -7558,15 +7600,16 @@ async def api_history(request):
     active = await get_active_shift(uid)
     city_id = (active or {}).get("city_id") or user.get("city_id") or (get_default_city() or {}).get("id")
     rows = await get_history(uid, city_id)
-    periods = await city_periods(city_id)
     home_city = get_city(city_id) or {}
-    period_start = ((periods.get("day") or {}).get("started_at"))
+    history_now = datetime.now(_city_tz(home_city))
+    _, _, decade_start, _ = _calendar_pay_bounds(home_city, history_now)
+    period_start = decade_start.isoformat()
     items = []
     for s in rows:
         worked = _duration_shift(s) if s.get("end_time") else "—"
         city = get_city(s.get("city_id")) or {}
-        # Смена сверяется с декадой СВОЕЙ группы: день или ночь.
-        in_period = _shift_in_period(s, periods, city or home_city)
+        # История и профиль должны показывать одну и ту же календарную декаду.
+        in_period = _shift_in_calendar_decade(s, city or home_city, history_now)
         items.append({
             "shift_id": s["id"],
             "date": _fmt_date(s.get("created_at")),
@@ -7579,7 +7622,7 @@ async def api_history(request):
             "city_name": city.get("name", ""),
             "source": s.get("source") or "bot",
             "comment": s.get("comment") or "",
-            # Смена входит в текущую декаду — по ней считается «Всего заработано».
+            # Смена входит в текущую календарную декаду профиля.
             "in_period": in_period,
         })
     return web.json_response({"items": items, "period_started_at": period_start})

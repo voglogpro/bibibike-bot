@@ -29,7 +29,21 @@ REQUIRED = (
     'calendar-guide-modal',
     'id="extendShiftModal"',
     '/extend`,{method:\'PATCH\'',
-    'data-map-tool="zone-edit"',
+    'id="mapNewZone"',
+    'data-map-tool="draw"',
+    'data-map-tool="marker"',
+    'data-map-tool="arrow"',
+    'aria-pressed="false"',
+    'const MAP_MARKER_TYPES=',
+    "empty_parking:{label:'Пустая парковка'",
+    'function wireMapDrawing(',
+    'function renderMapAnnotationBar(',
+    'async function saveMapAnnotation(',
+    'idempotency_key:state.mapRequestKey',
+    'Без сотрудника и задачи',
+    'Черновик сохранён — попробуйте ещё раз.',
+    '.map-tool-button{min-height:48px',
+    '.map-compose-close{width:44px;height:44px',
     'text/map-employee',
     '/annotations`,{method:\'POST\'',
     'renderMapVertexHandles',
@@ -58,6 +72,15 @@ def main():
     for required in REQUIRED:
         if required not in source:
             raise SystemExit(f"CRM contract missing: {required}")
+
+    forbidden = (
+        'answer=prompt(',
+        "confirm('Убрать сотрудника из этого района",
+        "confirm('Убрать эту отметку с карты",
+    )
+    for value in forbidden:
+        if value in source:
+            raise SystemExit(f"CRM map still uses a native browser dialog: {value}")
 
     node = shutil.which("node")
     if not node:

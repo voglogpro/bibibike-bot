@@ -230,14 +230,24 @@ async def run():
         assert next(item for item in moved_map["employees"] if item["user_id"] == 910002)[
             "district"
         ] == "Юг"
-        marker = await bot.api_crm_map_annotation_create(Request(body={
+        marker_body = {
             "city_id": city["id"], "date": today, "kind": "marker",
+            "variant": "empty_parking", "idempotency_key": "marker-empty-park-001",
             "geometry": {"type": "Point", "coordinates": [38.98, 45.03]},
             "note": "Проверить парковку", "assigned_user_id": 910002,
-        }))
+        }
+        marker = await bot.api_crm_map_annotation_create(Request(body=marker_body))
         assert marker.status == 201, marker.text
         marker_id = payload(marker)["annotation"]["id"]
-        assert payload(marker)["annotation"]["task_id"]
+        marker_task_id = payload(marker)["annotation"]["task_id"]
+        assert marker_task_id and payload(marker)["annotation"]["variant"] == "empty_parking"
+        replayed = await bot.api_crm_map_annotation_create(Request(body=marker_body))
+        assert replayed.status == 200 and payload(replayed)["reused"] is True
+        assert payload(replayed)["annotation"]["id"] == marker_id
+        conflicting_body = dict(marker_body)
+        conflicting_body["geometry"] = {"type": "Point", "coordinates": [38.99, 45.03]}
+        conflict = await bot.api_crm_map_annotation_create(Request(body=conflicting_body))
+        assert conflict.status == 409, conflict.text
         arrow = await bot.api_crm_map_annotation_create(Request(body={
             "city_id": city["id"], "date": today, "kind": "arrow",
             "geometry": {"type": "LineString", "coordinates": [
@@ -245,10 +255,21 @@ async def run():
             ]}, "note": "Переместить сюда", "assigned_user_id": 910002,
         }))
         assert arrow.status == 201, arrow.text
+        drawing = await bot.api_crm_map_annotation_create(Request(body={
+            "city_id": city["id"], "date": today, "kind": "arrow", "variant": "drawing",
+            "idempotency_key": "drawing-freehand-001",
+            "geometry": {"type": "LineString", "coordinates": [
+                [38.97, 45.02], [38.98, 45.025], [38.99, 45.03],
+            ]}, "note": "Объезд",
+        }))
+        assert drawing.status == 201 and payload(drawing)["annotation"]["task_id"] is None
         annotated = payload(await bot.api_crm_map(Request(query={
             "city_id": str(city["id"]), "date": today,
         })))
         assert {item["kind"] for item in annotated["annotations"]} == {"marker", "arrow"}
+        assert {item["variant"] for item in annotated["annotations"]} == {
+            "empty_parking", "direction", "drawing",
+        }
         async with bot.db_connect() as db:
             map_tasks = (await (await db.execute(
                 "SELECT COUNT(*) FROM crm_tasks WHERE created_via='map' AND status='published'"
@@ -262,6 +283,17 @@ async def run():
             match={"annotation_id": str(marker_id)}
         ))
         assert removed_marker.status == 200
+        async with bot.db_connect() as db:
+            cancelled_task = await (await db.execute(
+                "SELECT status,description FROM crm_tasks WHERE id=?", (marker_task_id,)
+            )).fetchone()
+            cancelled_delivery = await (await db.execute(
+                "SELECT status,last_error FROM crm_notification_outbox "
+                "WHERE kind='task_assigned' AND entity_id=?", (marker_task_id,)
+            )).fetchone()
+        assert cancelled_task[0] == "cancelled"
+        assert "https://yandex.ru/maps/" in cancelled_task[1]
+        assert tuple(cancelled_delivery) == ("failed", "task_cancelled")
         no_schedule = await bot.api_crm_map_assignment_create(Request(body={
             "city_id": city["id"], "date": today, "zone_id": zone_id,
             "user_id": 910003,

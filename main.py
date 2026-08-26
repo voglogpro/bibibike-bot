@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · календарная декада в профиле"
+BUILD_VERSION = "2026-08-26 · новая карта и метки"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1305,6 +1305,8 @@ async def init_db():
                 geometry_json TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 color TEXT NOT NULL DEFAULT '#ff5d66',
+                variant TEXT NOT NULL DEFAULT 'attention',
+                idempotency_key TEXT,
                 assigned_user_id INTEGER,
                 task_id INTEGER,
                 status TEXT NOT NULL DEFAULT 'active' CHECK (
@@ -1567,11 +1569,20 @@ async def init_db():
             "ALTER TABLE crm_planned_shifts ADD COLUMN actual_shift_id INTEGER",
             "ALTER TABLE crm_planned_shifts ADD COLUMN auto_started_at TEXT",
             "ALTER TABLE crm_planned_shifts ADD COLUMN auto_closed_at TEXT",
+            "ALTER TABLE crm_map_annotations ADD COLUMN variant TEXT NOT NULL DEFAULT 'attention'",
+            "ALTER TABLE crm_map_annotations ADD COLUMN idempotency_key TEXT",
         ]:
             try:
                 await db.execute(ddl); await db.commit()
             except aiosqlite.OperationalError:
                 pass
+
+        # Старые стрелки получили общий DEFAULT при ADD COLUMN; восстанавливаем их тип.
+        await db.execute(
+            "UPDATE crm_map_annotations SET variant='direction' "
+            "WHERE kind='arrow' AND (variant IS NULL OR variant='' OR variant='attention')"
+        )
+        await db.commit()
 
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_telegram_username "
@@ -1834,6 +1845,11 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_map_annotations_city_date_status "
             "ON crm_map_annotations(city_id, work_date, status, id)"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_map_annotations_request "
+            "ON crm_map_annotations(city_id, created_by, idempotency_key) "
+            "WHERE idempotency_key IS NOT NULL"
         )
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_creator_request "
@@ -9431,7 +9447,19 @@ def _crm_map_polygon(raw_geometry):
     return {"type": "Polygon", "coordinates": [points]}
 
 
-def _crm_map_annotation_geometry(kind, raw_geometry):
+CRM_MAP_ANNOTATION_VARIANTS = {
+    "marker": {"attention", "empty_parking", "pickup", "service"},
+    "arrow": {"direction", "drawing"},
+}
+
+
+def _crm_map_annotation_variant(kind, raw_variant):
+    default = "attention" if kind == "marker" else "direction"
+    variant = str(raw_variant or default).strip().lower()
+    return variant if variant in CRM_MAP_ANNOTATION_VARIANTS.get(kind, set()) else None
+
+
+def _crm_map_annotation_geometry(kind, raw_geometry, variant=None):
     if isinstance(raw_geometry, str):
         try:
             raw_geometry = json.loads(raw_geometry)
@@ -9442,7 +9470,14 @@ def _crm_map_annotation_geometry(kind, raw_geometry):
         return None
     coordinates = raw_geometry.get("coordinates")
     raw_points = [coordinates] if kind == "marker" else coordinates
-    if not isinstance(raw_points, list) or len(raw_points) != (1 if kind == "marker" else 2):
+    expected_count = 1 if kind == "marker" else 2
+    if not isinstance(raw_points, list):
+        return None
+    if kind == "marker" and len(raw_points) != expected_count:
+        return None
+    if kind == "arrow" and variant != "drawing" and len(raw_points) != expected_count:
+        return None
+    if kind == "arrow" and variant == "drawing" and not 2 <= len(raw_points) <= 250:
         return None
     points = []
     for raw_point in raw_points:
@@ -9454,7 +9489,11 @@ def _crm_map_annotation_geometry(kind, raw_geometry):
             return None
         if not (math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90):
             return None
-        points.append([round(lng, 7), round(lat, 7)])
+        point = [round(lng, 7), round(lat, 7)]
+        if not points or point != points[-1]:
+            points.append(point)
+    if kind == "arrow" and len(points) < 2:
+        return None
     return {"type": expected, "coordinates": points[0] if kind == "marker" else points}
 
 
@@ -9662,9 +9701,13 @@ async def api_crm_map(request):
     annotation_items = []
     for row in annotations:
         item = dict(row)
-        if role_scope and item.get("assigned_user_id") and \
-                (item.get("assigned_role") or "").casefold() != role_scope.casefold():
-            continue
+        if role_scope:
+            if item.get("assigned_user_id") and \
+                    (item.get("assigned_role") or "").casefold() != role_scope.casefold():
+                continue
+            if not item.get("assigned_user_id") and \
+                    int(item.get("created_by") or 0) != int(context["telegram_user"]["id"]):
+                continue
         try:
             item["geometry"] = json.loads(item.pop("geometry_json"))
         except (TypeError, ValueError):
@@ -9987,15 +10030,24 @@ async def api_crm_map_annotation_create(request):
         return web.json_response({"error": "map_unavailable"}, status=409)
     work_date = _crm_date(body.get("date") or body.get("work_date"))
     kind = str(body.get("kind") or "").strip().lower()
-    geometry = _crm_map_annotation_geometry(kind, body.get("geometry"))
-    color = str(body.get("color") or ("#ff5d66" if kind == "marker" else "#ffb32c")).lower()
+    variant = _crm_map_annotation_variant(kind, body.get("variant"))
+    geometry = _crm_map_annotation_geometry(kind, body.get("geometry"), variant)
+    default_colors = {
+        "attention": "#ff5d66", "empty_parking": "#ffb32c",
+        "pickup": "#48b7ff", "service": "#a77bff",
+        "direction": "#ffb32c", "drawing": "#4fd56a",
+    }
+    color = str(body.get("color") or default_colors.get(variant, "#ff5d66")).lower()
     note = " ".join(str(body.get("note") or "").split())[:500]
+    idempotency_key = str(body.get("idempotency_key") or "").strip() or None
     try:
         assigned_user_id = (int(body["assigned_user_id"])
                             if body.get("assigned_user_id") not in (None, "") else None)
     except (TypeError, ValueError):
         return web.json_response({"error": "assigned_user_id"}, status=400)
-    if not work_date or kind not in {"marker", "arrow"} or not geometry \
+    if idempotency_key and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", idempotency_key):
+        return web.json_response({"error": "idempotency_key"}, status=400)
+    if not work_date or kind not in {"marker", "arrow"} or not variant or not geometry \
             or not re.fullmatch(r"#[0-9a-f]{6}", color):
         return web.json_response({
             "error": "annotation", "message": "Не удалось прочитать точку или стрелку.",
@@ -10004,8 +10056,43 @@ async def api_crm_map_annotation_create(request):
     admin_uid = context["telegram_user"]["id"]
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        if idempotency_key:
+            existing = await (await db.execute(
+                "SELECT a.*,u.full_name AS assigned_name,u.role AS assigned_role "
+                "FROM crm_map_annotations a LEFT JOIN users u ON u.user_id=a.assigned_user_id "
+                "WHERE a.city_id=? AND a.created_by=? AND a.idempotency_key=?",
+                (city["id"], admin_uid, idempotency_key),
+            )).fetchone()
+            if existing:
+                try:
+                    existing_geometry = json.loads(existing["geometry_json"])
+                except (TypeError, ValueError):
+                    existing_geometry = None
+                same_request = (
+                    existing["work_date"] == work_date.isoformat()
+                    and existing["kind"] == kind
+                    and (existing["variant"] or "") == variant
+                    and existing_geometry == geometry
+                    and (existing["note"] or "") == note
+                    and (existing["color"] or "").lower() == color
+                    and existing["assigned_user_id"] == assigned_user_id
+                )
+                await db.rollback()
+                if not same_request:
+                    return web.json_response({
+                        "error": "idempotency_conflict",
+                        "message": "Этот запрос уже использован для другой отметки.",
+                    }, status=409)
+                item = dict(existing)
+                try:
+                    item["geometry"] = json.loads(item.pop("geometry_json"))
+                except (TypeError, ValueError):
+                    item["geometry"] = geometry
+                    item.pop("geometry_json", None)
+                return web.json_response({"ok": True, "annotation": item, "reused": True})
         task_id = None
-        if assigned_user_id is not None:
+        if assigned_user_id is not None and variant != "drawing":
             employee = await (await db.execute(
                 "SELECT u.user_id,u.role FROM users u WHERE u.user_id=? AND u.city_id=? "
                 "AND COALESCE(u.statistics_visible,1)=1 AND EXISTS ("
@@ -10025,11 +10112,21 @@ async def api_crm_map_annotation_create(request):
                 "ORDER BY a.id LIMIT 1",
                 (city["id"], work_date.isoformat(), assigned_user_id),
             )).fetchone()
+            variant_labels = {
+                "attention": "Важная точка", "empty_parking": "Пустая парковка",
+                "pickup": "Забрать байки", "service": "Нужен сервис",
+                "direction": "Направление", "drawing": "Пометка на карте",
+            }
             task_title = (
-                ("Маркер на карте: " if kind == "marker" else "Направление на карте: ")
-                + (note or "задача руководителя")
+                f"{variant_labels.get(variant, 'Метка на карте')}: "
+                + (note or "указание руководителя")
             )[:200]
             task_description = note
+            if kind == "marker":
+                lng, lat = geometry["coordinates"]
+                location_url = f"https://yandex.ru/maps/?pt={lng},{lat}&z=17&l=map"
+                task_description = (task_description + "\n\n" if task_description else "") + \
+                    "Открыть точку на карте: " + location_url
             task_cursor = await db.execute(
                 "INSERT INTO crm_tasks "
                 "(city_id,work_date,title,description,priority,status,created_by,created_at,"
@@ -10047,10 +10144,12 @@ async def api_crm_map_annotation_create(request):
             await _crm_publish_task(db, task_id, city["id"], admin_uid)
         cursor = await db.execute(
             "INSERT INTO crm_map_annotations "
-            "(city_id,work_date,kind,geometry_json,note,color,assigned_user_id,task_id,status,"
-            "created_by,created_at,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?,'active',?,?,?,?)",
+            "(city_id,work_date,kind,geometry_json,note,color,variant,idempotency_key,"
+            "assigned_user_id,task_id,status,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)",
             (city["id"], work_date.isoformat(), kind,
-             json.dumps(geometry, ensure_ascii=False), note, color, assigned_user_id, task_id,
+             json.dumps(geometry, ensure_ascii=False), note, color, variant, idempotency_key,
+             assigned_user_id, task_id,
              admin_uid, now_iso, admin_uid, now_iso),
         )
         row = await (await db.execute(
@@ -10076,14 +10175,20 @@ async def api_crm_map_annotation_delete(request):
         return web.json_response({"error": "annotation_id"}, status=400)
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         current = await (await db.execute(
             "SELECT a.*,u.role AS assigned_role FROM crm_map_annotations a "
             "LEFT JOIN users u ON u.user_id=a.assigned_user_id AND u.city_id=a.city_id "
             "WHERE a.id=? AND a.status='active'", (annotation_id,),
         )).fetchone()
-        if (not current or current["city_id"] not in context["allowed_city_ids"] or
-                (_crm_scope_role(context) and current["assigned_user_id"] and
-                 (current["assigned_role"] or "").casefold() != _crm_scope_role(context).casefold())):
+        scoped_denied = bool(_crm_scope_role(context) and current and (
+            (current["assigned_user_id"] and
+             (current["assigned_role"] or "").casefold() != _crm_scope_role(context).casefold())
+            or (not current["assigned_user_id"] and
+                int(current["created_by"] or 0) != int(context["telegram_user"]["id"]))
+        ))
+        if not current or current["city_id"] not in context["allowed_city_ids"] or scoped_denied:
+            await db.rollback()
             return web.json_response({"error": "not_found"}, status=404)
         now_iso = datetime.now(timezone.utc).isoformat()
         await db.execute(
@@ -10092,7 +10197,40 @@ async def api_crm_map_annotation_delete(request):
         )
         await _crm_audit(db, context, "map.annotation.delete", "map_annotation",
                          annotation_id, current["city_id"], before=dict(current), after=None)
-        await db.commit()
+        cancelled_task_id = None
+        if current["task_id"]:
+            task = await (await db.execute(
+                "SELECT * FROM crm_tasks WHERE id=? AND city_id=?",
+                (current["task_id"], current["city_id"]),
+            )).fetchone()
+            if task and task["status"] == "published":
+                cancelled_task_id = int(task["id"])
+                await db.execute(
+                    "UPDATE crm_tasks SET status='cancelled',updated_by=?,updated_at=? WHERE id=?",
+                    (context["telegram_user"]["id"], now_iso, cancelled_task_id),
+                )
+                event_id = await _crm_task_event(
+                    db, cancelled_task_id, context["telegram_user"]["id"],
+                    "task.cancelled.crm", {"reason": "Отметка удалена с карты"},
+                )
+                recipients = await (await db.execute(
+                    "SELECT user_id FROM crm_task_assignees WHERE task_id=?",
+                    (cancelled_task_id,),
+                )).fetchall()
+                await db.execute(
+                    "UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+                    "last_error='task_cancelled' WHERE kind='task_assigned' AND entity_id=? "
+                    "AND status IN ('pending','retry')", (cancelled_task_id,),
+                )
+                for recipient in recipients:
+                    await _enqueue_crm_notification(
+                        db, current["city_id"], recipient[0], "task_cancelled", event_id,
+                        {"task_id": cancelled_task_id, "title": task["title"],
+                         "reason": "Отметка удалена с карты"},
+                    )
+        await _commit_and_wake(db, _notification_wakeup)
+    if cancelled_task_id:
+        await _delete_task_messages(cancelled_task_id)
     return web.json_response({"ok": True, "annotation_id": annotation_id})
 
 

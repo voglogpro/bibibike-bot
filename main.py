@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · новая карта и метки"
+BUILD_VERSION = "2026-08-26 · даты карты и районы"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -9604,7 +9604,8 @@ async def api_crm_map(request):
     if error is not None: return error
     city, error = _crm_city(context, request=request)
     if error is not None: return error
-    work_date = _crm_date(request.query.get("date")) or datetime.now(_city_tz(city)).date()
+    city_today = datetime.now(_city_tz(city)).date()
+    work_date = _crm_date(request.query.get("date")) or city_today
     if not _crm_map_supported(city):
         return web.json_response({
             "city": {"id": city["id"], "name": city["name"]},
@@ -9626,7 +9627,8 @@ async def api_crm_map(request):
             "WHERE candidate.city_id=u.city_id AND candidate.user_id=u.user_id "
             "AND candidate.work_date=? AND candidate.status='scheduled' "
             "AND candidate.auto_closed_at IS NULL ORDER BY candidate.start_time,candidate.id LIMIT 1) "
-            "WHERE u.city_id=? AND COALESCE(u.statistics_visible,1)=1"
+            "WHERE u.city_id=? AND COALESCE(u.statistics_visible,1)=1 "
+            "AND COALESCE(u.calendar_visible,1)=1"
         )
         employee_params = [work_date.isoformat(), city["id"]]
         if role_scope:
@@ -9639,7 +9641,8 @@ async def api_crm_map(request):
             "FROM crm_map_assignments a JOIN users u ON u.user_id=a.user_id "
             "AND u.city_id=a.city_id "
             "LEFT JOIN crm_tasks t ON t.id=a.task_id "
-            "WHERE a.city_id=? AND a.work_date=? AND COALESCE(u.statistics_visible,1)=1"
+            "WHERE a.city_id=? AND a.work_date=? AND COALESCE(u.statistics_visible,1)=1 "
+            "AND COALESCE(u.calendar_visible,1)=1"
         )
         assignment_params = [city["id"], work_date.isoformat()]
         if role_scope:
@@ -9716,7 +9719,7 @@ async def api_crm_map(request):
     bikes, bike_provider = await _crm_live_bikes(city)
     return web.json_response({
         "city": {"id": city["id"], "name": city["name"]},
-        "date": work_date.isoformat(), "supported": True,
+        "date": work_date.isoformat(), "today": city_today.isoformat(), "supported": True,
         "map": {
             "center": [38.976, 45.035], "zoom": 11,
             "maptiler_api_key": MAPTILER_API_KEY,
@@ -9797,6 +9800,7 @@ async def api_crm_map_zone_update(request):
         }, status=400)
     now_iso = datetime.now(timezone.utc).isoformat()
     admin_uid = context["telegram_user"]["id"]
+    refresh_shift_ids = []
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
@@ -9807,17 +9811,48 @@ async def api_crm_map_zone_update(request):
         if not current:
             await db.rollback()
             return web.json_response({"error": "not_found"}, status=404)
+        renamed_plans = []
+        if current["name"] != name:
+            renamed_plans = await (await db.execute(
+                "SELECT p.* FROM crm_planned_shifts p "
+                "JOIN crm_map_assignments a ON a.city_id=p.city_id "
+                "AND a.work_date=p.work_date AND a.user_id=p.user_id "
+                "WHERE a.zone_id=? AND a.city_id=? AND p.status='scheduled' "
+                "AND p.auto_closed_at IS NULL ORDER BY p.id",
+                (zone_id, city["id"]),
+            )).fetchall()
         await db.execute(
             "UPDATE crm_map_zones SET name=?,color=?,geometry_json=?,updated_by=?,updated_at=? "
             "WHERE id=?",
             (name, color, json.dumps(geometry, ensure_ascii=False), admin_uid, now_iso, zone_id),
         )
+        for plan in renamed_plans:
+            await db.execute(
+                "UPDATE crm_planned_shifts SET district=?,updated_by=?,updated_at=? WHERE id=?",
+                (name, admin_uid, now_iso, plan["id"]),
+            )
+            if plan["actual_shift_id"]:
+                actual_update = await db.execute(
+                    "UPDATE shifts SET district=? WHERE id=? AND user_id=? AND city_id=? "
+                    "AND is_active=1",
+                    (name, plan["actual_shift_id"], plan["user_id"], city["id"]),
+                )
+                if actual_update.rowcount:
+                    refresh_shift_ids.append(int(plan["actual_shift_id"]))
+            updated_plan = dict(plan)
+            updated_plan.update({"district": name, "updated_by": admin_uid,
+                                 "updated_at": now_iso})
+            await _enqueue_plan_change(
+                db, city["id"], plan["user_id"], plan["id"], ["district"], updated_plan,
+            )
         updated = await (await db.execute(
             "SELECT * FROM crm_map_zones WHERE id=?", (zone_id,)
         )).fetchone()
         await _crm_audit(db, context, "map.zone.update", "map_zone", zone_id,
                          city["id"], before=dict(current), after=dict(updated))
         await db.commit()
+    for shift_id in set(refresh_shift_ids):
+        await safe_flush_report_update(shift_id)
     return web.json_response({
         "ok": True,
         "zone": {"type": "Feature", "id": zone_id, "geometry": geometry,
@@ -9854,7 +9889,8 @@ async def api_crm_map_assignment_create(request):
         )).fetchone()
         user = await (await db.execute(
             "SELECT * FROM users WHERE user_id=? AND city_id=? "
-            "AND COALESCE(statistics_visible,1)=1", (user_id, city["id"]),
+            "AND COALESCE(statistics_visible,1)=1 AND COALESCE(calendar_visible,1)=1",
+            (user_id, city["id"]),
         )).fetchone()
         if not zone or not user or (_crm_scope_role(context) and
                 (user["role"] or "").casefold() != _crm_scope_role(context).casefold()):

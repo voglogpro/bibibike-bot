@@ -4,7 +4,7 @@ import importlib.util
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -42,6 +42,7 @@ async def run():
         other = next(item for item in bot.CITIES_BY_ID.values() if item["id"] != city["id"])
         city_now = datetime.now(bot._city_tz(city))
         today = city_now.date().isoformat()
+        tomorrow = (city_now.date() + timedelta(days=1)).isoformat()
         # Полдень выбранной локальной даты не перескакивает на предыдущий день
         # UTC во время ночного прогона тестов.
         now_iso = city_now.replace(
@@ -53,7 +54,8 @@ async def run():
                 "VALUES (?,?,?,?,?)",
                 [(910001, "Архивный Сотрудник", "Скаут", city["id"], "archive_me"),
                  (910002, "Сотрудник Карты", "Скаут", city["id"], "map_worker"),
-                 (910003, "Активный Сотрудник", "Скаут", city["id"], "active_worker")],
+                 (910003, "Активный Сотрудник", "Скаут", city["id"], "active_worker"),
+                 (910004, "Скрытый в календаре", "Скаут", city["id"], "calendar_hidden")],
             )
             closed = await db.execute(
                 "INSERT INTO shifts (user_id,full_name,role,start_time,end_time,is_active,"
@@ -80,6 +82,23 @@ async def run():
                 (city["id"], today, "09:00", "19:00", 910002,
                  900001, now_iso, 900001, now_iso),
             )
+            await db.execute(
+                "INSERT INTO crm_planned_shifts "
+                "(city_id,work_date,start_time,end_time,user_id,role,district,note,work_kind,status,"
+                "created_by,created_at,updated_by,updated_at) "
+                "VALUES (?,?,?,?,?,NULL,'','','regular','scheduled',?,?,?,?)",
+                (city["id"], tomorrow, "10:00", "18:00", 910003,
+                 900001, now_iso, 900001, now_iso),
+            )
+            await db.execute(
+                "INSERT INTO crm_planned_shifts "
+                "(city_id,work_date,start_time,end_time,user_id,role,district,note,work_kind,status,"
+                "created_by,created_at,updated_by,updated_at) "
+                "VALUES (?,?,?,?,?,NULL,'','','regular','scheduled',?,?,?,?)",
+                (city["id"], tomorrow, "11:00", "17:00", 910004,
+                 900001, now_iso, 900001, now_iso),
+            )
+            await db.execute("UPDATE users SET calendar_visible=0 WHERE user_id=910004")
             await db.execute("UPDATE users SET calendar_visible=0 WHERE user_id=910001")
             await db.commit()
 
@@ -160,6 +179,13 @@ async def run():
         assert 910001 not in {item["user_id"] for item in map_data["employees"]}
         assert [item["user_id"] for item in map_data["employees"]] == [910002]
         assert map_data["employees"][0]["start_time"] == "09:00"
+        tomorrow_map = payload(await bot.api_crm_map(Request(query={
+            "city_id": str(city["id"]), "date": tomorrow,
+        })))
+        assert [item["user_id"] for item in tomorrow_map["employees"]] == [910003]
+        assert tomorrow_map["employees"][0]["start_time"] == "10:00"
+        assert tomorrow_map["assignments"] == [] and tomorrow_map["annotations"] == []
+        assert tomorrow_map["zones"] == map_data["zones"]
         async with bot.db_connect() as db:
             for task_id, title, role in ((501, "Задача скаута", "Скаут"),
                                          (502, "Задача водителя", "Водитель")):
@@ -230,6 +256,18 @@ async def run():
         assert next(item for item in moved_map["employees"] if item["user_id"] == 910002)[
             "district"
         ] == "Юг"
+        renamed_south = await bot.api_crm_map_zone_update(Request(
+            body={"city_id": city["id"], "name": "Юг 2", "color": "#9b51e0",
+                  "geometry": payload(created_zone)["zone"]["geometry"]},
+            match={"zone_id": str(south_zone_id)},
+        ))
+        assert renamed_south.status == 200, renamed_south.text
+        async with bot.db_connect() as db:
+            renamed_district = (await (await db.execute(
+                "SELECT district FROM crm_planned_shifts WHERE user_id=910002 AND work_date=?",
+                (today,),
+            )).fetchone())[0]
+        assert renamed_district == "Юг 2"
         marker_body = {
             "city_id": city["id"], "date": today, "kind": "marker",
             "variant": "empty_parking", "idempotency_key": "marker-empty-park-001",
@@ -270,6 +308,11 @@ async def run():
         assert {item["variant"] for item in annotated["annotations"]} == {
             "empty_parking", "direction", "drawing",
         }
+        clean_tomorrow = payload(await bot.api_crm_map(Request(query={
+            "city_id": str(city["id"]), "date": tomorrow,
+        })))
+        assert clean_tomorrow["assignments"] == [] and clean_tomorrow["annotations"] == []
+        assert clean_tomorrow["zones"] == annotated["zones"]
         async with bot.db_connect() as db:
             map_tasks = (await (await db.execute(
                 "SELECT COUNT(*) FROM crm_tasks WHERE created_via='map' AND status='published'"

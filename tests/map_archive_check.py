@@ -12,11 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Request:
-    def __init__(self, query=None, body=None, match=None, role_scope=None):
+    def __init__(self, query=None, body=None, match=None, role_scope=None, admin_uid=900001):
         self.query = query or {}
         self._body = body or {}
         self.match_info = match or {}
         self.role_scope = role_scope
+        self.admin_uid = admin_uid
 
     async def json(self):
         return self._body
@@ -104,7 +105,7 @@ async def run():
 
         async def fake_admin(request, **_kwargs):
             return ({
-                "telegram_user": {"id": 900001},
+                "telegram_user": {"id": request.admin_uid},
                 "user": {"full_name": "Owner"},
                 "admin": {"role": "city_manager" if request.role_scope else "network_admin",
                           "role_scope": request.role_scope},
@@ -211,11 +212,20 @@ async def run():
         edited_geometry["coordinates"][0].insert(1, [38.96, 45.01])
         updated_zone = await bot.api_crm_map_zone_update(Request(
             body={"city_id": city["id"], "name": "Центр", "color": "#31cf42",
-                  "geometry": edited_geometry},
+                  "geometry": edited_geometry,
+                  "base_updated_at": original_zone["properties"]["updated_at"]},
             match={"zone_id": str(zone_id)},
         ))
         assert updated_zone.status == 200, updated_zone.text
         assert len(payload(updated_zone)["zone"]["geometry"]["coordinates"][0]) == 6
+        stale_zone = await bot.api_crm_map_zone_update(Request(
+            body={"city_id": city["id"], "name": "Старое имя", "color": "#31cf42",
+                  "geometry": edited_geometry,
+                  "base_updated_at": original_zone["properties"]["updated_at"]},
+            match={"zone_id": str(zone_id)}, admin_uid=900002,
+        ))
+        assert stale_zone.status == 409
+        assert payload(stale_zone)["error"] == "zone_edit_conflict"
         created_zone = await bot.api_crm_map_zone_create(Request(body={
             "city_id": city["id"], "name": "Юг", "color": "#9b51e0",
             "geometry": {"type": "Polygon", "coordinates": [[
@@ -225,6 +235,12 @@ async def run():
         }))
         assert created_zone.status == 201, created_zone.text
         south_zone_id = payload(created_zone)["zone"]["properties"]["id"]
+        duplicate_zone = await bot.api_crm_map_zone_create(Request(body={
+            "city_id": city["id"], "name": "Юг", "color": "#9b51e0",
+            "geometry": payload(created_zone)["zone"]["geometry"],
+        }, admin_uid=900002))
+        assert duplicate_zone.status == 200 and payload(duplicate_zone)["reused"] is True
+        assert payload(duplicate_zone)["zone"]["properties"]["id"] == south_zone_id
         assigned = await bot.api_crm_map_assignment_create(Request(body={
             "city_id": city["id"], "date": today, "zone_id": zone_id,
             "user_id": 910002, "note": "Проверить зону",
@@ -282,6 +298,12 @@ async def run():
         replayed = await bot.api_crm_map_annotation_create(Request(body=marker_body))
         assert replayed.status == 200 and payload(replayed)["reused"] is True
         assert payload(replayed)["annotation"]["id"] == marker_id
+        other_editor_marker = dict(marker_body, idempotency_key="marker-empty-park-002")
+        deduplicated = await bot.api_crm_map_annotation_create(Request(
+            body=other_editor_marker, admin_uid=900002,
+        ))
+        assert deduplicated.status == 200 and payload(deduplicated)["deduplicated"] is True
+        assert payload(deduplicated)["annotation"]["id"] == marker_id
         conflicting_body = dict(marker_body)
         conflicting_body["geometry"] = {"type": "Point", "coordinates": [38.99, 45.03]}
         conflict = await bot.api_crm_map_annotation_create(Request(body=conflicting_body))
@@ -322,6 +344,32 @@ async def run():
                 "WHERE kind='task_assigned' AND user_id=910002"
             )).fetchone())[0]
         assert map_tasks == 2 and map_alerts == 2
+        concurrent_body = {
+            "city_id": city["id"], "date": today, "kind": "marker",
+            "variant": "service",
+            "geometry": {"type": "Point", "coordinates": [39.02, 45.05]},
+            "note": "Одновременная отметка",
+        }
+        concurrent_results = await asyncio.gather(
+            bot.api_crm_map_annotation_create(Request(
+                body=dict(concurrent_body, idempotency_key="concurrent-editor-001"),
+                role_scope="Скаут", admin_uid=900001,
+            )),
+            bot.api_crm_map_annotation_create(Request(
+                body=dict(concurrent_body, idempotency_key="concurrent-editor-002"),
+                role_scope="Скаут", admin_uid=900002,
+            )),
+        )
+        assert sorted(response.status for response in concurrent_results) == [200, 201]
+        assert len({payload(response)["annotation"]["id"]
+                    for response in concurrent_results}) == 1
+        shared_role_map = payload(await bot.api_crm_map(Request(
+            query={"city_id": str(city["id"]), "date": today},
+            role_scope="Скаут", admin_uid=900003,
+        )))
+        assert "Одновременная отметка" in {
+            item["note"] for item in shared_role_map["annotations"]
+        }
         removed_marker = await bot.api_crm_map_annotation_delete(Request(
             match={"annotation_id": str(marker_id)}
         ))

@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · даты карты и районы"
+BUILD_VERSION = "2026-08-26 · совместная карта"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1313,6 +1313,7 @@ async def init_db():
                     status IN ('active', 'done', 'cancelled')
                 ),
                 created_by INTEGER NOT NULL,
+                role_scope TEXT,
                 created_at TEXT NOT NULL,
                 updated_by INTEGER NOT NULL,
                 updated_at TEXT NOT NULL
@@ -1571,6 +1572,7 @@ async def init_db():
             "ALTER TABLE crm_planned_shifts ADD COLUMN auto_closed_at TEXT",
             "ALTER TABLE crm_map_annotations ADD COLUMN variant TEXT NOT NULL DEFAULT 'attention'",
             "ALTER TABLE crm_map_annotations ADD COLUMN idempotency_key TEXT",
+            "ALTER TABLE crm_map_annotations ADD COLUMN role_scope TEXT",
         ]:
             try:
                 await db.execute(ddl); await db.commit()
@@ -9699,7 +9701,8 @@ async def api_crm_map(request):
             continue
         features.append({
             "type": "Feature", "id": int(row["id"]), "geometry": geometry,
-            "properties": {"id": int(row["id"]), "name": row["name"], "color": row["color"]},
+            "properties": {"id": int(row["id"]), "name": row["name"], "color": row["color"],
+                           "updated_at": row["updated_at"]},
         })
     annotation_items = []
     for row in annotations:
@@ -9708,9 +9711,14 @@ async def api_crm_map(request):
             if item.get("assigned_user_id") and \
                     (item.get("assigned_role") or "").casefold() != role_scope.casefold():
                 continue
-            if not item.get("assigned_user_id") and \
-                    int(item.get("created_by") or 0) != int(context["telegram_user"]["id"]):
-                continue
+            if not item.get("assigned_user_id"):
+                saved_scope = (item.get("role_scope") or "").casefold()
+                if saved_scope:
+                    if saved_scope != role_scope.casefold():
+                        continue
+                elif int(item.get("created_by") or 0) != \
+                        int(context["telegram_user"]["id"]):
+                    continue
         try:
             item["geometry"] = json.loads(item.pop("geometry_json"))
         except (TypeError, ValueError):
@@ -9756,6 +9764,31 @@ async def api_crm_map_zone_create(request):
     admin_uid = context["telegram_user"]["id"]
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        duplicate = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE city_id=? AND is_active=1 "
+            "AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1",
+            (city["id"], name),
+        )).fetchone()
+        if duplicate:
+            await db.rollback()
+            try:
+                duplicate_geometry = json.loads(duplicate["geometry_json"])
+            except (TypeError, ValueError):
+                duplicate_geometry = None
+            if duplicate_geometry != geometry or (duplicate["color"] or "").lower() != color:
+                return web.json_response({
+                    "error": "zone_name_conflict",
+                    "message": "Район с таким названием уже существует. Выберите его в списке или задайте другое название.",
+                }, status=409)
+            return web.json_response({
+                "ok": True, "reused": True,
+                "zone": {"type": "Feature", "id": duplicate["id"],
+                         "geometry": duplicate_geometry,
+                         "properties": {"id": duplicate["id"], "name": duplicate["name"],
+                                        "color": duplicate["color"],
+                                        "updated_at": duplicate["updated_at"]}},
+            })
         sort_order = (await (await db.execute(
             "SELECT COALESCE(MAX(sort_order),0)+1 FROM crm_map_zones WHERE city_id=?",
             (city["id"],),
@@ -9776,7 +9809,8 @@ async def api_crm_map_zone_create(request):
     return web.json_response({
         "ok": True,
         "zone": {"type": "Feature", "id": row["id"], "geometry": geometry,
-                 "properties": {"id": row["id"], "name": name, "color": color}},
+                 "properties": {"id": row["id"], "name": name, "color": color,
+                                "updated_at": row["updated_at"]}},
     }, status=201)
 
 
@@ -9794,6 +9828,7 @@ async def api_crm_map_zone_update(request):
     name = " ".join(str(body.get("name") or "").split())[:100]
     color = str(body.get("color") or "#31cf42").strip().lower()
     geometry = _crm_map_polygon(body.get("geometry"))
+    base_updated_at = str(body.get("base_updated_at") or "").strip()
     if not name or not geometry or not re.fullmatch(r"#[0-9a-f]{6}", color):
         return web.json_response({
             "error": "zone", "message": "Зона должна содержать название и минимум три точки.",
@@ -9811,6 +9846,12 @@ async def api_crm_map_zone_update(request):
         if not current:
             await db.rollback()
             return web.json_response({"error": "not_found"}, status=404)
+        if base_updated_at and base_updated_at != current["updated_at"]:
+            await db.rollback()
+            return web.json_response({
+                "error": "zone_edit_conflict",
+                "message": "Этот район уже изменил другой редактор. Карта обновлена — повторите правку на новой версии.",
+            }, status=409)
         renamed_plans = []
         if current["name"] != name:
             renamed_plans = await (await db.execute(
@@ -9856,7 +9897,8 @@ async def api_crm_map_zone_update(request):
     return web.json_response({
         "ok": True,
         "zone": {"type": "Feature", "id": zone_id, "geometry": geometry,
-                 "properties": {"id": zone_id, "name": name, "color": color}},
+                 "properties": {"id": zone_id, "name": name, "color": color,
+                                "updated_at": updated["updated_at"]}},
     })
 
 
@@ -10090,6 +10132,7 @@ async def api_crm_map_annotation_create(request):
         }, status=400)
     now_iso = datetime.now(timezone.utc).isoformat()
     admin_uid = context["telegram_user"]["id"]
+    current_role_scope = _crm_scope_role(context)
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
@@ -10127,6 +10170,44 @@ async def api_crm_map_annotation_create(request):
                     item["geometry"] = geometry
                     item.pop("geometry_json", None)
                 return web.json_response({"ok": True, "annotation": item, "reused": True})
+        duplicate_rows = await (await db.execute(
+                "SELECT a.*,u.full_name AS assigned_name,u.role AS assigned_role "
+                "FROM crm_map_annotations a LEFT JOIN users u "
+                "ON u.user_id=a.assigned_user_id AND u.city_id=a.city_id "
+                "WHERE a.city_id=? AND a.work_date=? AND a.kind=? AND a.variant=? "
+                "AND a.status='active' AND ((a.assigned_user_id IS NULL AND ? IS NULL) "
+                "OR a.assigned_user_id=?) ORDER BY a.id",
+                (city["id"], work_date.isoformat(), kind, variant,
+                 assigned_user_id, assigned_user_id),
+            )).fetchall()
+        for duplicate in duplicate_rows:
+            if current_role_scope:
+                if duplicate["assigned_user_id"]:
+                    if (duplicate["assigned_role"] or "").casefold() != \
+                            current_role_scope.casefold():
+                        continue
+                else:
+                    saved_scope = (duplicate["role_scope"] or "").casefold()
+                    if saved_scope:
+                        if saved_scope != current_role_scope.casefold():
+                            continue
+                    elif int(duplicate["created_by"] or 0) != int(admin_uid):
+                        continue
+            try:
+                duplicate_geometry = json.loads(duplicate["geometry_json"])
+            except (TypeError, ValueError):
+                continue
+            if duplicate_geometry != geometry or (duplicate["note"] or "") != note \
+                    or (duplicate["color"] or "").lower() != color:
+                continue
+            await db.rollback()
+            item = dict(duplicate)
+            item["geometry"] = duplicate_geometry
+            item.pop("geometry_json", None)
+            return web.json_response({
+                "ok": True, "annotation": item, "reused": True,
+                "deduplicated": True,
+            })
         task_id = None
         if assigned_user_id is not None and variant != "drawing":
             employee = await (await db.execute(
@@ -10181,12 +10262,12 @@ async def api_crm_map_annotation_create(request):
         cursor = await db.execute(
             "INSERT INTO crm_map_annotations "
             "(city_id,work_date,kind,geometry_json,note,color,variant,idempotency_key,"
-            "assigned_user_id,task_id,status,created_by,created_at,updated_by,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)",
+            "assigned_user_id,task_id,status,created_by,role_scope,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)",
             (city["id"], work_date.isoformat(), kind,
              json.dumps(geometry, ensure_ascii=False), note, color, variant, idempotency_key,
              assigned_user_id, task_id,
-             admin_uid, now_iso, admin_uid, now_iso),
+             admin_uid, current_role_scope, now_iso, admin_uid, now_iso),
         )
         row = await (await db.execute(
             "SELECT a.*,u.full_name AS assigned_name,u.role AS assigned_role "
@@ -10220,8 +10301,13 @@ async def api_crm_map_annotation_delete(request):
         scoped_denied = bool(_crm_scope_role(context) and current and (
             (current["assigned_user_id"] and
              (current["assigned_role"] or "").casefold() != _crm_scope_role(context).casefold())
-            or (not current["assigned_user_id"] and
-                int(current["created_by"] or 0) != int(context["telegram_user"]["id"]))
+            or (not current["assigned_user_id"] and (
+                ((current["role_scope"] or "") and
+                 (current["role_scope"] or "").casefold() !=
+                 _crm_scope_role(context).casefold())
+                or (not (current["role_scope"] or "") and
+                    int(current["created_by"] or 0) !=
+                    int(context["telegram_user"]["id"]))))
         ))
         if not current or current["city_id"] not in context["allowed_city_ids"] or scoped_denied:
             await db.rollback()

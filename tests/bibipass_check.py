@@ -1,6 +1,7 @@
 """Контракт БибиПасса: прогрессия только по действиям, награды и подписка."""
 import asyncio
 import importlib.util
+import json
 import os
 import tempfile
 from datetime import datetime
@@ -184,6 +185,7 @@ async def run():
     assert payload["progress"]["level"] == 1
     assert payload["earned"]["level_bibibonuses"] == 2
     assert payload["earned"]["bibibonuses"] == 2
+    assert payload["earned"]["reward_levels"] == 1
     assert "tasks" not in payload["rules"]
     assert payload["position"] == 2  # 20 XP против 25, города объединены.
     assert {item["city"] for item in payload["ranking"]} == {first["name"], second["name"]}
@@ -191,6 +193,21 @@ async def run():
         bot._bibipass_payload(701, verify=False) for _ in range(8)
     ])
     assert all(item["progress"]["points"] == 20 for item in concurrent)
+    async with bot.db_connect() as db:
+        level_notices = await (await db.execute(
+            "SELECT payload_json FROM crm_notification_outbox "
+            "WHERE user_id=701 AND kind='bibipass_level_reached' ORDER BY id"
+        )).fetchall()
+    assert len(level_notices) == 1
+    first_level_notice = json.loads(level_notices[0][0])
+    assert first_level_notice["levels"] == [{
+        "level": 1, "bibibonuses": 2, "subscription_months": 0,
+    }]
+    notice_text = bot._crm_notification_text(
+        "bibipass_level_reached", first_level_notice,
+    )
+    assert all(mark in notice_text for mark in ("🎉", "🎁", "⭐", "🏦", "🎯"))
+    assert "зачислен" not in notice_text.lower()
 
     await bot._bibipass_sync_level_rewards(701, season, 20)
     async with bot.db_connect() as db:
@@ -204,6 +221,16 @@ async def run():
         )).fetchall()]
     assert bonus == 150
     assert subscriptions == [1, 3]
+    async with bot.db_connect() as db:
+        level_notices = await (await db.execute(
+            "SELECT payload_json FROM crm_notification_outbox "
+            "WHERE user_id=701 AND kind='bibipass_level_reached' ORDER BY id"
+        )).fetchall()
+    assert len(level_notices) == 2
+    milestone_notice = json.loads(level_notices[-1][0])
+    assert [item["level"] for item in milestone_notice["levels"]] == list(range(2, 21))
+    assert [(item["level"], item["subscription_months"])
+            for item in milestone_notice["levels"] if item["subscription_months"]] == [(10, 1), (20, 3)]
 
     with patch.object(bot.bot, "get_chat_member", AsyncMock(
             return_value=SimpleNamespace(status="member"))):

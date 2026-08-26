@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · БибиПасс: понятный вход"
+BUILD_VERSION = "2026-08-26 · профиль, задачи и уровни БибиПасса"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1811,6 +1811,11 @@ async def init_db():
             "ON crm_tasks(city_id, date_from, date_to, status)"
         )
         await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_tasks_active_expiry "
+            "ON crm_tasks(published_at, id) "
+            "WHERE status='published' AND archived_at IS NULL"
+        )
+        await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_notification_messages_cleanup "
             "ON crm_notification_messages(deleted_at, delete_after, id)"
         )
@@ -2679,7 +2684,11 @@ async def replace_message_actions(uid, mid, city_id, shift_id, actions, event_ve
             (event_version, city_id, chat_id, uid, mid)
         )
         await db.commit()
-        return [row[0] for row in rows], True
+    try:
+        await _bibipass_reconcile_user(uid)
+    except Exception:
+        logger.exception("BibiPass: не удалось обновить награды пользователя %s", uid)
+    return [row[0] for row in rows], True
 
 
 async def get_work_message_shift(uid, mid, city_id, chat_id=0):
@@ -6328,32 +6337,90 @@ async def _bibipass_points(uid, season):
     return (await _bibipass_scores([uid], season))[int(uid)]
 
 
-async def _bibipass_sync_level_rewards(uid, season, level):
+async def _bibipass_sync_level_rewards(uid, season, level, total_points=None):
     now_iso = datetime.now(MSK).isoformat()
     async with db_connect() as db:
+        await db.execute("BEGIN IMMEDIATE")
         existing_rows = await (await db.execute(
             "SELECT level,reward_type FROM bibipass_reward_grants "
             "WHERE season_id=? AND user_id=?", (season["id"], uid),
         )).fetchall()
         existing = {(int(row[0]), row[1]) for row in existing_rows}
-        inserts = []
+        inserted_levels = []
         for reward in BIBIPASS_REWARDS:
             if reward["level"] > level:
                 break
             if (reward["level"], "bibibonus") not in existing:
-                inserts.append((season["id"], uid, reward["level"], "bibibonus",
-                                reward["bibibonuses"], now_iso))
+                cursor = await db.execute(
+                    "INSERT OR IGNORE INTO bibipass_reward_grants "
+                    "(season_id,user_id,level,reward_type,amount,earned_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (season["id"], uid, reward["level"], "bibibonus",
+                     reward["bibibonuses"], now_iso),
+                )
+                if cursor.rowcount:
+                    inserted_levels.append(reward["level"])
             if (reward["level"], "subscription") not in existing and reward.get(
                     "subscription_months"):
-                inserts.append((season["id"], uid, reward["level"], "subscription",
-                                reward["subscription_months"], now_iso))
-        if inserts:
-            await db.executemany(
-                "INSERT OR IGNORE INTO bibipass_reward_grants "
-                "(season_id,user_id,level,reward_type,amount,earned_at) "
-                "VALUES (?,?,?,?,?,?)", inserts,
-            )
-            await db.commit()
+                await db.execute(
+                    "INSERT OR IGNORE INTO bibipass_reward_grants "
+                    "(season_id,user_id,level,reward_type,amount,earned_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (season["id"], uid, reward["level"], "subscription",
+                     reward["subscription_months"], now_iso),
+                )
+        if inserted_levels:
+            reached = [reward for reward in BIBIPASS_REWARDS
+                       if reward["level"] in inserted_levels]
+            earned = [reward for reward in BIBIPASS_REWARDS
+                      if reward["level"] <= level]
+            user_row = await (await db.execute(
+                "SELECT city_id FROM users WHERE user_id=?", (uid,),
+            )).fetchone()
+            if user_row and user_row[0] is not None:
+                next_reward = next(
+                    (reward for reward in BIBIPASS_REWARDS if reward["level"] > level), None
+                )
+                await _enqueue_crm_notification(
+                    db, int(user_row[0]), uid, "bibipass_level_reached",
+                    _bibipass_campaign_entity_id(season) * 100 + max(inserted_levels),
+                    {
+                        "levels": [{
+                            "level": reward["level"],
+                            "bibibonuses": reward["bibibonuses"],
+                            "subscription_months": reward.get("subscription_months") or 0,
+                        } for reward in reached],
+                        "earned_bibibonuses": sum(r["bibibonuses"] for r in earned),
+                        "earned_subscription_months": sum(
+                            r.get("subscription_months") or 0 for r in earned
+                        ),
+                        "reward_levels": level,
+                        "total_points": total_points,
+                        "next_level": next_reward["level"] if next_reward else None,
+                        "next_cumulative_points": (
+                            next_reward["cumulative_points"] if next_reward else None
+                        ),
+                    },
+                )
+        await _commit_and_wake(db, _notification_wakeup)
+
+
+async def _bibipass_reconcile_user(uid):
+    """Best-effort level reconciliation after a parsed work-message update."""
+    if not BIBIPASS_ENABLED:
+        return
+    season = _bibipass_season()
+    if season["status"] != "active":
+        return
+    participant = await _bibipass_participant(uid, season, create=False)
+    if (not participant or participant.get("membership_status") != "member"
+            or not participant.get("joined_at")):
+        return
+    points = await _bibipass_points(uid, season)
+    level_state = _bibipass_level(points["total"])
+    await _bibipass_sync_level_rewards(
+        uid, season, level_state["level"], points["total"]
+    )
 
 
 async def _bibipass_state_summary(uid):
@@ -6433,7 +6500,9 @@ async def _bibipass_payload(uid, verify=True, force=False):
     scores = await _bibipass_scores(score_ids, season)
     own_points = scores[int(uid)]
     own_level = _bibipass_level(own_points["total"])
-    await _bibipass_sync_level_rewards(uid, season, own_level["level"])
+    await _bibipass_sync_level_rewards(
+        uid, season, own_level["level"], own_points["total"]
+    )
     ranking = []
     for raw in people:
         person = dict(raw)
@@ -6459,16 +6528,21 @@ async def _bibipass_payload(uid, verify=True, force=False):
         reward["subscription_months"] for reward in BIBIPASS_REWARDS
         if reward["subscription_months"] and reward["level"] <= own_level["level"]
     )
+    visible_ranking = ranking[:100]
+    own_ranking = next((item for item in ranking if item["is_me"]), None)
+    if own_ranking and not any(item["is_me"] for item in visible_ranking):
+        visible_ranking.append(own_ranking)
     base.update({
         "progress": dict(own_level, **own_points),
         "earned": {
             "bibibonuses": level_bonuses,
             "level_bibibonuses": level_bonuses,
             "subscription_months": subscription_months,
+            "reward_levels": own_level["level"],
         },
         "position": next((item["position"] for item in ranking if item["is_me"]), None),
         "participants": len(ranking),
-        "ranking": ranking[:100],
+        "ranking": visible_ranking,
     })
     return base
 
@@ -6785,10 +6859,31 @@ async def api_state(request):
             "ORDER BY COALESCE(start_at, created_at) DESC",
             (uid, selected_city_id)
         )).fetchall()
-    month_earned = sum(
+    decade_earned = sum(
         (r["earned"] or 0) for r in closed_rows
         if _shift_in_period(dict(r), periods, city)
     )
+    city_tz = _city_tz(city)
+    month_start = datetime.now(city_tz).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    if month_start.month == 12:
+        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        next_month_start = month_start.replace(month=month_start.month + 1)
+    month_rows = []
+    for row in closed_rows:
+        started_at = _parse_datetime(row["start_at"] or row["created_at"])
+        if not started_at:
+            continue
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=city_tz)
+        else:
+            started_at = started_at.astimezone(city_tz)
+        if month_start <= started_at < next_month_start:
+            month_rows.append(row)
+    month_earned = sum((row["earned"] or 0) for row in month_rows)
+    month_shifts = len(month_rows)
     # Подпись «с даты»: декада группы последней смены сотрудника.
     _last_seg = "day"
     if closed_rows:
@@ -6862,6 +6957,8 @@ async def api_state(request):
         "total_earned": total_earned,
         "lifetime": {"actions": total, "earned": total_earned, "shifts": shifts_count},
         "month_earned": month_earned,
+        "decade_earned": decade_earned,
+        "month_shifts": month_shifts,
         "build_version": BUILD_VERSION,
         "period_started_at": period_start,
         "period_started_label": _fmt_date(period_start),
@@ -8876,6 +8973,7 @@ def _crm_shift_item(shift, city, stats, now=None):
     worked = _shift_worked_min(shift, now)
     actions = stats or {action_type: 0 for action_type in CRM_ACTION_TYPES}
     total = sum(actions.values())
+    moves = max(0, int(actions.get("move") or 0))
     if shift.get("is_active"):
         status = "scheduled" if _shift_is_scheduled(shift, now) else "active"
     else:
@@ -8895,6 +8993,8 @@ def _crm_shift_item(shift, city, stats, now=None):
         "segment": _shift_segment(shift, city), "actions": actions,
         "actions_total": total,
         "actions_per_hour": round(total * 60 / worked, 2) if worked else None,
+        "moves": moves,
+        "moves_per_hour": round(moves * 60 / worked, 2) if worked else None,
     }
 
 
@@ -8916,6 +9016,7 @@ async def api_crm_overview(request):
             action_totals[action_type] += units
     worked = sum(item["worked_minutes"] for item in items)
     actions_total = sum(action_totals.values())
+    moves_total = max(0, int(action_totals.get("move") or 0))
     current = {
         "active": sum(item["status"] == "active" for item in items),
         "scheduled": sum(item["status"] == "scheduled" for item in items),
@@ -8942,7 +9043,8 @@ async def api_crm_overview(request):
             "SELECT COUNT(a.user_id), SUM(CASE WHEN a.status='accepted' THEN 1 ELSE 0 END) "
             "FROM crm_tasks t LEFT JOIN crm_task_assignees a ON a.task_id=t.id "
             "WHERE t.city_id=? AND COALESCE(t.date_to,t.work_date)>=? "
-            "AND COALESCE(t.date_from,t.work_date)<=? AND t.status='published'"
+            "AND COALESCE(t.date_from,t.work_date)<=? AND t.status='published' "
+            "AND t.archived_at IS NULL"
         )
         task_params = [city["id"], date_range["from"], date_range["to"]]
         if scope: task_sql += " AND LOWER(a.role_snap)=LOWER(?)"; task_params.append(scope)
@@ -8958,6 +9060,8 @@ async def api_crm_overview(request):
             "shifts": len(items), "worked_minutes": worked,
             "actions": actions_total,
             "actions_per_hour": round(actions_total * 60 / worked, 2) if worked else None,
+            "moves": moves_total,
+            "moves_per_hour": round(moves_total * 60 / worked, 2) if worked else None,
         },
         "current": current, "actions": action_totals,
         "tasks": {"assignees": int(task_counts[0] or 0),
@@ -9055,6 +9159,11 @@ async def api_crm_employees(request):
             round(item["actions_total"] * 60 / item["worked_minutes"], 2)
             if item["worked_minutes"] else None
         )
+        item["moves_total"] = max(0, int(item["actions"].get("move") or 0))
+        item["moves_per_hour"] = (
+            round(item["moves_total"] * 60 / item["worked_minutes"], 2)
+            if item["worked_minutes"] else None
+        )
         result.append(item)
     result.sort(key=lambda item: (not item["has_open_shift"], item["name"].casefold()))
     limit, offset = paging; total = len(result)
@@ -9096,6 +9205,7 @@ async def api_crm_employee(request):
     items = [_crm_shift_item(row, city, stats_by_shift.get(row["id"])) for row in rows]
     action_totals = {kind: sum(item["actions"][kind] for item in items) for kind in CRM_ACTION_TYPES}
     worked = sum(item["worked_minutes"] for item in items); total_actions = sum(action_totals.values())
+    total_moves = max(0, int(action_totals.get("move") or 0))
     return web.json_response({
         "city": {"id": city["id"], "name": city["name"]},
         "employee": {"user_id": user_id,
@@ -9110,7 +9220,9 @@ async def api_crm_employee(request):
                      "statistics_archived_at": user["statistics_archived_at"] if user else None},
         "range": {"from": date_range["from"], "to": date_range["to"]},
         "totals": {"shifts": len(items), "worked_minutes": worked, "actions": total_actions,
-                   "actions_per_hour": round(total_actions * 60 / worked, 2) if worked else None},
+                   "actions_per_hour": round(total_actions * 60 / worked, 2) if worked else None,
+                   "moves": total_moves,
+                   "moves_per_hour": round(total_moves * 60 / worked, 2) if worked else None},
         "actions": action_totals, "shifts": items,
     })
 
@@ -10615,7 +10727,7 @@ async def api_crm_operational_signals(request):
     shift_params = [city["id"]]
     if role: shift_sql += " AND LOWER(COALESCE(role,''))=LOWER(?)"; shift_params.append(role)
     action_sql = (
-        "SELECT a.shift_id,a.bike_codes,a.quantity," + event_sql + " AS event_at "
+        "SELECT a.shift_id,a.action_type,a.bike_codes,a.quantity," + event_sql + " AS event_at "
         "FROM actions a JOIN shifts s ON s.id=a.shift_id "
         "LEFT JOIN work_message_links w ON w.city_id=a.city_id "
         "AND w.chat_id=COALESCE(a.chat_id,0) AND w.user_id=a.user_id "
@@ -10633,7 +10745,8 @@ async def api_crm_operational_signals(request):
         task_sql = (
             "SELECT a.task_id,a.user_id,a.full_name_snap,a.role_snap,a.updated_at,t.title "
             "FROM crm_task_assignees a JOIN crm_tasks t ON t.id=a.task_id "
-            "WHERE t.city_id=? AND t.status='published' AND a.status='blocked'"
+            "WHERE t.city_id=? AND t.status='published' AND t.archived_at IS NULL "
+            "AND a.status='blocked'"
         )
         task_params = [city["id"]]
         if role: task_sql += " AND LOWER(COALESCE(a.role_snap,''))=LOWER(?)"; task_params.append(role)
@@ -10656,23 +10769,29 @@ async def api_crm_operational_signals(request):
         event_at = _parse_datetime(event["event_at"])
         units = _action_units(event)
         if not event_at or units <= 0: continue
-        by_shift.setdefault(event["shift_id"], []).append((event_at.astimezone(tz), units))
+        by_shift.setdefault(event["shift_id"], []).append(
+            (event_at.astimezone(tz), units, event["action_type"])
+        )
     items = []
     working_now = 0; on_lunch = 0
     actions_last_hour = sum(units for events_for_shift in by_shift.values()
-                            for at, units in events_for_shift if now - timedelta(hours=1) <= at <= now)
+                            for at, units, _ in events_for_shift
+                            if now - timedelta(hours=1) <= at <= now)
+    moves_last_hour = sum(units for events_for_shift in by_shift.values()
+                          for at, units, action_type in events_for_shift
+                          if action_type == "move" and now - timedelta(hours=1) <= at <= now)
     for row in shifts:
         shift = dict(row); start = _parse_datetime(shift.get("start_at") or shift.get("created_at"))
         if not start: continue
         start = start.astimezone(tz); worked = max(0, int((now - start).total_seconds() // 60))
         shift_events = by_shift.get(shift["id"], [])
-        recent = sum(units for at, units in shift_events if now - timedelta(hours=1) <= at <= now)
-        previous = sum(units for at, units in shift_events
+        recent = sum(units for at, units, _ in shift_events if now - timedelta(hours=1) <= at <= now)
+        previous = sum(units for at, units, _ in shift_events
                        if now - timedelta(hours=3) <= at < now - timedelta(hours=1))
         if shift.get("on_lunch"):
             on_lunch += 1; continue
         working_now += 1
-        last_at = max((at for at, _ in shift_events), default=start)
+        last_at = max((at for at, _, _ in shift_events), default=start)
         idle_minutes = max(0, int((now - last_at).total_seconds() // 60))
         base = {"user_id": shift.get("user_id"), "shift_id": shift["id"],
                 "name": shift.get("full_name") or f"Сотрудник #{shift.get('user_id')}",
@@ -10721,7 +10840,8 @@ async def api_crm_operational_signals(request):
     return web.json_response({"city": {"id": city["id"], "name": city["name"]},
         "generated_at": now.isoformat(), "counts": counts, "items": items[:50],
         "summary": {"active": len(shifts), "working_now": working_now,
-                    "on_lunch": on_lunch, "actions_last_hour": actions_last_hour}})
+                    "on_lunch": on_lunch, "actions_last_hour": actions_last_hour,
+                    "moves_last_hour": moves_last_hour}})
 
 
 async def api_crm_data_quality(request):
@@ -12123,10 +12243,14 @@ async def api_crm_tasks(request):
     if error is not None: return error
     paging = _crm_paging(request)
     if not paging: return web.json_response({"error": "paging"}, status=400)
+    await archive_expired_tasks_once()
     clauses = ["city_id=?", "COALESCE(date_to,work_date)>=?", "COALESCE(date_from,work_date)<=?"]
     params = [city["id"], date_range["from"], date_range["to"]]
     status = request.query.get("status")
-    if status: clauses.append("status=?"); params.append(status)
+    if status:
+        clauses.append("status=?"); params.append(status)
+        if status == "published":
+            clauses.append("archived_at IS NULL")
     role_scope = _crm_scope_role(context)
     if role_scope:
         clauses.append("(EXISTS (SELECT 1 FROM crm_task_targets tt LEFT JOIN users u "
@@ -12324,6 +12448,11 @@ async def api_crm_task_update(request):
             recipients = await (await db.execute(
                 "SELECT user_id FROM crm_task_assignees WHERE task_id=?", (task_id,),
             )).fetchall()
+            await db.execute(
+                "UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+                "last_error='task_cancelled' WHERE kind='task_assigned' AND entity_id=? "
+                "AND status IN ('pending','retry')", (task_id,),
+            )
             for recipient in recipients:
                 if int(recipient[0]) != int(context["telegram_user"]["id"]):
                     await _enqueue_crm_notification(
@@ -12427,14 +12556,26 @@ async def archive_expired_tasks_once():
     cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     now_iso = datetime.now(timezone.utc).isoformat()
     async with db_connect() as db:
-        cur = await db.execute(
-            "UPDATE crm_tasks SET archived_at=?,archive_reason='expired' "
-            "WHERE archived_at IS NULL AND status='published' "
-            "AND COALESCE(published_at,created_at)<=?",
-            (now_iso, cutoff),
-        )
+        await db.execute("BEGIN IMMEDIATE")
+        rows = await (await db.execute(
+            "SELECT id FROM crm_tasks WHERE archived_at IS NULL AND status='published' "
+            "AND COALESCE(published_at,created_at)<=?", (cutoff,),
+        )).fetchall()
+        task_ids = [int(row[0]) for row in rows]
+        if task_ids:
+            placeholders = ",".join("?" for _ in task_ids)
+            await db.execute(
+                f"UPDATE crm_tasks SET archived_at=?,archive_reason='expired' "
+                f"WHERE id IN ({placeholders})", [now_iso, *task_ids],
+            )
+            await db.execute(
+                f"UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+                f"last_error='task_expired' WHERE kind='task_assigned' "
+                f"AND status IN ('pending','retry') AND entity_id IN ({placeholders})",
+                task_ids,
+            )
         await db.commit()
-        return max(0, int(cur.rowcount or 0))
+    return len(task_ids)
 
 
 async def api_employee_task_directory(request):
@@ -12813,6 +12954,11 @@ async def api_employee_task_cancel(request):
         recipients = await (await db.execute(
             "SELECT user_id FROM crm_task_assignees WHERE task_id=?", (task_id,),
         )).fetchall()
+        await db.execute(
+            "UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+            "last_error='task_cancelled' WHERE kind='task_assigned' AND entity_id=? "
+            "AND status IN ('pending','retry')", (task_id,),
+        )
         for recipient in recipients:
             if int(recipient[0]) != int(tg_user["id"]):
                 await _enqueue_crm_notification(
@@ -12840,7 +12986,7 @@ async def api_employee_task_comment(request):
         allowed = await (await db.execute(
             "SELECT 1 FROM crm_tasks t LEFT JOIN crm_task_assignees a "
             "ON a.task_id=t.id AND a.user_id=? WHERE t.id=? AND t.status='published' "
-            "AND (a.user_id IS NOT NULL OR t.created_by=?)",
+            "AND t.archived_at IS NULL AND (a.user_id IS NOT NULL OR t.created_by=?)",
             (tg_user["id"], task_id, tg_user["id"]),
         )).fetchone()
         if not allowed: return web.json_response({"error": "not_found"}, status=404)
@@ -12898,6 +13044,43 @@ def _crm_human_date(value):
 def _crm_notification_text(kind, payload):
     details = str(payload.get("description") or payload.get("note") or "").strip()[:1200]
     district = str(payload.get("district") or "").strip()
+    if kind == "bibipass_level_reached":
+        levels = list(payload.get("levels") or [])
+        if not levels:
+            return "🎉 Новый уровень БибиПасса пройден!\n\nОткрой БибиПасс и посмотри награду."
+        last_level = int(levels[-1].get("level") or 0)
+        lines = [
+            f"🎉 Уровень {last_level:02d} пройден!",
+            "",
+            "🎁 Награды:",
+        ]
+        for reward in levels:
+            level_number = int(reward.get("level") or 0)
+            lines.append(
+                f"⭐ Уровень {level_number:02d}: +{int(reward.get('bibibonuses') or 0)} БибиБонусов"
+            )
+            months = int(reward.get("subscription_months") or 0)
+            if months:
+                lines.append(f"📱 Подписка на {months} мес.")
+        lines.extend([
+            "",
+            f"🏦 Заработано в БибиПассе: {int(payload.get('earned_bibibonuses') or 0)} БибиБонусов",
+            f"🏆 Пройдено уровней: {int(payload.get('reward_levels') or last_level)} из {BIBIPASS_LEVEL_COUNT}",
+        ])
+        subscription_months = int(payload.get("earned_subscription_months") or 0)
+        if subscription_months:
+            lines.append(f"📱 Заработано подписок: {subscription_months} мес.")
+        next_level = payload.get("next_level")
+        next_points = payload.get("next_cumulative_points")
+        total_points = payload.get("total_points")
+        if next_level and next_points is not None and total_points is not None:
+            remaining = max(0, float(next_points) - float(total_points))
+            remaining_text = str(int(remaining)) if remaining.is_integer() else str(remaining).replace(".", ",")
+            lines.extend(["", f"🎯 До уровня {int(next_level):02d}: {remaining_text} XP"])
+        elif last_level >= BIBIPASS_LEVEL_COUNT:
+            lines.extend(["", "🏁 Все уровни сезона пройдены!"])
+        lines.extend(["", "Награды записаны в БибиПассе. Открой его, чтобы увидеть весь путь."])
+        return "\n".join(lines)
     if kind == "bibipass_announcement":
         return "\n".join([
             "🏁 Завтра стартует квест сотрудников BibiBike!", "",
@@ -13188,7 +13371,11 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
-        if row["kind"].startswith("bibipass_"):
+        if row["kind"] == "bibipass_level_reached":
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏆 Открыть БибиПасс", url=_bibipass_miniapp_link())],
+            ])
+        elif row["kind"].startswith("bibipass_"):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="1. Открыть канал", url=BIBIPASS_CHANNEL_URL)],
                 [InlineKeyboardButton(text="2. Открыть БибиПасс", url=_bibipass_miniapp_link())],
@@ -13440,7 +13627,8 @@ async def sync_closed_shift_tasks_once(limit=100):
                 tasks = await (await db.execute(
                     "SELECT t.*,a.status AS assignee_status FROM crm_tasks t "
                     "JOIN crm_task_assignees a ON a.task_id=t.id "
-                    "WHERE t.city_id=? AND t.status='published' AND t.completion_mode='shift_end' "
+                    "WHERE t.city_id=? AND t.status='published' AND t.archived_at IS NULL "
+                    "AND t.completion_mode='shift_end' "
                     "AND a.user_id=? AND a.status!='accepted' "
                     "AND COALESCE(t.date_from,t.work_date)<=? AND COALESCE(t.date_to,t.work_date)>=?",
                     (shift["city_id"], shift["user_id"], shift_date, shift_date),
@@ -13776,13 +13964,13 @@ async def api_employee_task_upload(request):
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
-            "SELECT t.city_id,t.status AS task_status,a.status AS assignee_status "
+            "SELECT t.city_id,t.status AS task_status,t.archived_at,a.status AS assignee_status "
             "FROM crm_tasks t LEFT JOIN crm_task_assignees a ON a.task_id=t.id AND a.user_id=? "
             "WHERE t.id=?", (tg_user["id"], task_id),
         )).fetchone()
         if not row or row["assignee_status"] is None or row["city_id"] != user.get("city_id"):
             return web.json_response({"error": "not_assigned"}, status=403)
-        if row["task_status"] != "published" or row["assignee_status"] == "accepted":
+        if row["task_status"] != "published" or row["archived_at"] or row["assignee_status"] == "accepted":
             return web.json_response({"error": "task_locked"}, status=409)
         existing = (await (await db.execute(
             "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='result' "
@@ -13822,13 +14010,13 @@ async def api_employee_task_upload(request):
         async with db_connect() as db:
             db.row_factory = aiosqlite.Row; await db.execute("BEGIN IMMEDIATE")
             row = await (await db.execute(
-                "SELECT t.city_id,t.status AS task_status,a.status AS assignee_status "
+                "SELECT t.city_id,t.status AS task_status,t.archived_at,a.status AS assignee_status "
                 "FROM crm_tasks t JOIN crm_task_assignees a ON a.task_id=t.id "
                 "WHERE t.id=? AND a.user_id=?", (task_id, tg_user["id"]),
             )).fetchone()
             if not row or row["city_id"] != user.get("city_id"):
                 raise PermissionError("Задание больше не назначено сотруднику.")
-            if row["task_status"] != "published" or row["assignee_status"] == "accepted":
+            if row["task_status"] != "published" or row["archived_at"] or row["assignee_status"] == "accepted":
                 raise ValueError("Задание уже закрыто или отменено.")
             count = (await (await db.execute(
                 "SELECT COUNT(*) FROM crm_task_attachments WHERE task_id=? AND kind='result' "

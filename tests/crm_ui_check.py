@@ -39,6 +39,11 @@ REQUIRED = (
     'function closeCrmLayer(element,after)',
     '@media(prefers-reduced-motion:reduce)',
     '--motion-page:220ms',
+    'action_type:"move"',
+    'Перемещения сегодня',
+    '<th>Перемещения</th>',
+    'moves_per_hour',
+    '!task.archived_at&&task.status',
 )
 
 

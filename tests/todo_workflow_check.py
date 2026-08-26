@@ -267,11 +267,22 @@ async def run():
         "SELECT COUNT(*) FROM crm_tasks WHERE id=? AND archived_at IS NOT NULL "
         "AND archive_reason='expired'", (expired_id,),
     ) == 1
+    async with bot.aiosqlite.connect(bot.DB_PATH) as db:
+        expired_notice = await (await db.execute(
+            "SELECT status,last_error FROM crm_notification_outbox "
+            "WHERE kind='task_assigned' AND entity_id=?", (expired_id,),
+        )).fetchone()
+    assert tuple(expired_notice) == ("failed", "task_expired")
     expired_progress = await bot.api_employee_task_progress(Request(
         users["colleague"], method="POST", body={"status": "in_progress"},
         match={"task_id": str(expired_id)},
     ))
     assert expired_progress.status == 404
+    expired_comment = await bot.api_employee_task_comment(Request(
+        users["colleague"], method="POST", body={"body": "Уже поздно"},
+        match={"task_id": str(expired_id)},
+    ))
+    assert expired_comment.status == 404
     history = await bot.api_employee_tasks_mine(Request(
         users["colleague"], query={"scope": "inbox"},
     ))

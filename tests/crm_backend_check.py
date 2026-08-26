@@ -303,6 +303,8 @@ async def run():
         admin_token=scout_token,
     ))
     assert overview.status == 200 and payload(overview)["totals"]["actions"] == 2
+    assert payload(overview)["totals"]["moves"] == 2
+    assert payload(overview)["totals"]["moves_per_hour"] is not None
     hourly = await bot.api_crm_trends(Request(
         900002, query={"city_id": str(city["id"]), "from": today, "to": today,
                        "bucket": "hour"}, admin_token=scout_token,
@@ -311,6 +313,11 @@ async def run():
     assert hourly.status == 200 and len(hourly_payload["series"]) == 24
     assert hourly_payload["series"][8]["types"]["move"] == 2
     assert sum(item["actions"] for item in hourly_payload["series"]) == 2
+    move_hourly = await bot.api_crm_trends(Request(
+        900002, query={"city_id": str(city["id"]), "from": today, "to": today,
+                       "bucket": "hour", "action_type": "move"}, admin_token=scout_token,
+    ))
+    assert sum(item["actions"] for item in payload(move_hourly)["series"]) == 2
     activity = await bot.api_crm_activity(Request(
         900002, query={"city_id": str(city["id"]), "bike_code": "0001", "limit": "20"},
         admin_token=scout_token,
@@ -747,6 +754,9 @@ async def run():
     hidden_employee = next(
         item for item in payload(employee_list)["items"] if item["user_id"] == 910006
     )
+    scout_employee = next(
+        item for item in payload(employee_list)["items"] if item["user_id"] == 910001
+    )
     async with bot.aiosqlite.connect(bot.DB_PATH) as db:
         driver_visibility = (await (await db.execute(
             "SELECT calendar_visible FROM users WHERE user_id=910002"
@@ -754,6 +764,8 @@ async def run():
     assert visibility_response.status == 200
     assert visibility_denied.status == 403
     assert hidden_employee["calendar_visible"] is False and hidden_employee["profile_exists"] is True
+    assert scout_employee["moves_total"] == scout_employee["actions"]["move"]
+    assert "moves_per_hour" in scout_employee
     assert driver_visibility == 1
     restored = await bot.api_crm_calendar_roster_update(Request(
         900001, body={"city_id": city["id"], "role": "Скаут",

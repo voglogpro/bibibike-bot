@@ -276,7 +276,7 @@
   .mini{border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:8px 11px;font-weight:800}
   /* Задания сотрудника: дочерний экран профиля */
   .task-count{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 7px;border-radius:99px;background:var(--red);color:#fff;font-size:11px;font-weight:900}
-  .my-task-list{display:grid;gap:9px}.my-task-card{width:100%;text-align:left;border:1px solid var(--line);border-radius:14px;background:var(--bg);padding:12px;color:var(--ink);font:inherit;cursor:pointer}
+  .my-task-list{display:grid;gap:9px}.my-task-card-wrap{position:relative}.my-task-card{width:100%;text-align:left;border:1px solid var(--line);border-radius:14px;background:var(--bg);padding:12px;color:var(--ink);font:inherit;cursor:pointer}.my-task-card-wrap .my-task-card{padding-right:48px}.my-task-remove{position:absolute;right:10px;top:10px;width:30px;height:30px;border:0;border-radius:10px;background:rgba(255,93,102,.12);color:#ff8b93;font:900 19px/1 Arial;cursor:pointer;display:grid;place-items:center}.my-task-remove:active{transform:scale(.92)}
   .my-task-card:active{transform:scale(.99)}.my-task-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;min-width:0}.my-task-title{font-weight:900;font-size:14px;line-height:1.3;min-width:0;overflow-wrap:anywhere}.my-task-top .formhead{min-width:0;overflow-wrap:anywhere}.my-task-meta{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.4}
   .my-task-status{display:inline-flex;align-items:center;border-radius:99px;padding:4px 8px;background:#E7ECDE;color:var(--muted);font-size:10px;font-weight:900;white-space:nowrap}.my-task-status.work{background:#FFF2CF;color:#815500}.my-task-status.review{background:#E8F1FF;color:#2F65A7}.my-task-status.done{background:#DDF5DE;color:var(--green-deep)}.my-task-status.blocked{background:#FDECEC;color:#B3261E}
   .my-task-desc{white-space:pre-wrap;font-size:13px;line-height:1.55;margin:10px 0;color:var(--ink)}.my-task-required{padding:8px 10px;border-radius:10px;background:#FFF2CF;color:#6D4A00;font-size:11.5px;font-weight:800;margin:9px 0}
@@ -303,6 +303,7 @@
   .pass-gate-mark{width:62px;height:62px;display:grid;place-items:center;margin:0 auto 13px;background:var(--green);color:#071009;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);font-family:'Montserrat';font-size:22px;font-style:italic;font-weight:950;letter-spacing:-.06em}.pass-gate-kicker{display:block;margin-bottom:6px;color:var(--green);font-size:8px;font-weight:900;letter-spacing:.08em}
   /* Упрощённый БибиПасс: один прогресс-бар, остальное раскрывается по запросу. */
   .pass-focus{padding:18px;border:1px solid #26342A;border-radius:22px;background:#0D1710}.pass-focus>header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:14px}.pass-focus>header small{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.pass-focus>header b{display:block;margin-top:3px;font-size:14px}.pass-focus>header time{color:var(--muted);font-size:9px;font-variant-numeric:tabular-nums}.pass-focus-main{display:grid;grid-template-columns:88px minmax(0,1fr);gap:18px;align-items:center;padding:16px 0 18px;border-top:1px solid rgba(255,255,255,.08)}.pass-level-badge small{display:block;color:var(--muted);font-size:8px;text-transform:uppercase}.pass-level-badge b{display:block;margin-top:1px;font-family:'Montserrat';font-size:44px;font-weight:900;line-height:1}.pass-level-badge span{display:block;margin-top:4px;color:var(--muted);font-size:9px}.pass-next-reward{min-width:0;padding-left:17px;border-left:2px solid var(--green)}.pass-next-reward.milestone{border-left-color:var(--orange)}.pass-next-reward small{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.05em}.pass-next-reward b{display:block;margin-top:5px;color:var(--green);font-family:'Manrope';font-size:18px;line-height:1.15}.pass-next-reward.milestone b{color:var(--orange)}.pass-next-reward strong{display:block;margin-top:3px;color:var(--orange);font-size:9px}.pass-next-reward span{display:block;margin-top:5px;color:var(--muted);font-size:8px}.pass-next-reward.complete b{color:var(--ink)}.pass-progress-copy{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:8px}.pass-progress-copy b{font-size:13px}.pass-progress-copy span{color:var(--muted);font-size:9px;text-align:right}.pass-progress-track{position:relative;height:22px;overflow:hidden;border:1px solid #334238;border-radius:12px;background:#18221B;box-shadow:inset 0 1px 3px rgba(0,0,0,.35)}.pass-progress-track>span{position:absolute;inset:0 auto 0 0;min-width:0;border-radius:11px;background:var(--green);transition:width .35s ease}.pass-progress-track>span::after{content:'';position:absolute;right:3px;top:5px;width:10px;height:10px;border:2px solid #0D1710;border-radius:50%;background:#F1F4EA}.pass-progress-track.empty>span::after{display:none}.pass-progress-track>div{position:absolute;inset:0;display:grid;grid-template-columns:repeat(20,1fr);align-items:stretch}.pass-progress-track i{border-right:1px solid rgba(7,16,9,.34)}.pass-progress-track i:last-child{border-right:0}.pass-progress-track i.milestone{border-right:2px solid var(--orange)}.pass-progress-meta{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;margin-top:7px;color:var(--muted);font-size:8px}.pass-progress-meta b{color:var(--ink);font-size:8px;text-align:center}.pass-progress-meta span:last-child{text-align:right}.pass-plain-note{margin:14px 0 0;padding-top:12px;border-top:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:9px;line-height:1.45}.pass-plain-note b:first-child{color:var(--ink)}.pass-plain-note b:last-child{color:var(--green)}
+  .pass-earned-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)}.pass-earned-strip span{min-width:0}.pass-earned-strip small{display:block;color:var(--muted);font-size:7px;text-transform:uppercase;line-height:1.25}.pass-earned-strip b{display:block;margin-top:4px;color:var(--ink);font-size:11px;overflow-wrap:anywhere}.pass-earned-strip span:nth-child(2) b{color:var(--green)}.pass-rival-note{margin:8px 0 0;padding:9px 11px;border-radius:12px;background:#102719;color:var(--green);font-size:9px;font-weight:800}
   .pass-drawers{margin-top:10px;border-top:1px solid var(--line)}.pass-drawer{border-bottom:1px solid var(--line)}.pass-drawer>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 2px;cursor:pointer;list-style:none}.pass-drawer>summary::-webkit-details-marker{display:none}.pass-drawer>summary small{display:block;color:var(--muted);font-size:8px;line-height:1.3}.pass-drawer>summary b{display:block;margin-top:3px;font-size:13px}.pass-drawer>summary em{color:var(--muted);font-size:8px;font-style:normal;white-space:nowrap}.pass-drawer>summary em::after{content:'  +';color:var(--green);font-size:13px}.pass-drawer[open]>summary em::after{content:'  −'}.pass-drawer-body{padding:0 2px 14px}.pass-drawer-body>p{margin:10px 0 0;color:var(--muted);font-size:9px;line-height:1.45}.pass-drawer .pass-level-row{min-height:52px}.pass-drawer .bibipass-rank.me{border-radius:8px;background:#102719}
   .profile-bibipass-card{padding:15px 16px;border:1px solid #29402F;border-radius:18px;background:#101A13;color:var(--ink);box-shadow:none}.profile-bibipass-card::after{display:none}.profile-bibipass-card .pass-kicker{color:var(--green);font-size:8px;opacity:1}.profile-bibipass-card h2{margin:3px 0 2px;font-size:18px}.profile-bibipass-card p{color:var(--muted);font-size:9px;font-weight:650;opacity:1}.profile-bibipass-card .pass-track{width:100%;height:7px;margin-top:11px;border-radius:4px;background:#243129}.profile-bibipass-card .pass-track i{width:0;height:7px;border-radius:4px;background:var(--green);transition:width .35s ease}.profile-bibipass-card .pass-track i::after{display:none}.profile-bibipass-card .pass-meta{margin-top:7px;color:var(--muted);font-size:7px;line-height:1.35;opacity:1}.profile-bibipass-card .pass-open{align-self:center;min-width:70px;padding:0;background:transparent;color:var(--muted);text-align:right}.profile-bibipass-card .pass-open b{color:var(--green);font-size:11px}.profile-bibipass-card .pass-open span{font-size:9px}
   @media(max-width:350px){.pass-stage{padding:14px 12px 12px}.pass-stage-main{grid-template-columns:88px minmax(0,1fr);gap:10px}.pass-level-lockup b{font-size:47px}.pass-level-lockup>span{display:block;margin:2px 0 0;white-space:nowrap}.pass-ticket{padding:10px}.pass-ticket b{font-size:14px}.pass-equation{gap:4px}.pass-equation b{font-size:14px}.pass-equation .total b{font-size:19px}.pass-wallet{gap:9px}.pass-wallet>span+span{padding-left:9px}.pass-cause{font-size:6px}.pass-currency-rule{grid-template-columns:1fr;gap:4px}.pass-currency-rule b{white-space:normal}}
@@ -714,9 +715,9 @@
         </div>
 
         <div class="profile-stats">
-          <div class="profile-stat"><b id="profilePeriodEarned">0 ₽</b><small>За декаду</small></div>
-          <div class="profile-stat"><b id="profileShifts">0</b><small>Смен</small></div>
-          <div class="profile-stat"><b id="profileActions">0</b><small>Действий</small></div>
+          <div class="profile-stat"><b id="profileMonthEarned">0 ₽</b><small>За месяц</small></div>
+          <div class="profile-stat"><b id="profileDecadeEarned">0 ₽</b><small>За декаду</small></div>
+          <div class="profile-stat"><b id="profileMonthShifts">0</b><small>Смен за месяц</small></div>
         </div>
       </div>
 
@@ -750,7 +751,7 @@
       <div class="panel">
         <div class="formhead">История смен</div>
         <p class="hint" style="margin-bottom:10px">Лишнюю смену можно удалить — она исчезнет из статистики, а её отчёт — из темы «Отчёты».</p>
-        <div class="htotal" style="margin-top:0"><span class="l" id="hTotalLabel">Всего заработано</span><span class="r" id="hTotal">0 ₽</span></div>
+        <div class="htotal" style="margin-top:0"><span class="l" id="hTotalLabel">Заработано за декаду</span><span class="r" id="hTotal">0 ₽</span></div>
         <div id="hList"><div class="hempty">Загружаю…</div></div>
       </div>
     </div>
@@ -1320,7 +1321,6 @@ function render(){
   }
 
   /* Профиль: рабочие показатели и отдельный сезонный БибиПасс. */
-  const lt = STATE.lifetime || {};
   const words=String(u.name||'Сотрудник').trim().split(/\s+/).filter(Boolean);
   $('profileInitials').textContent=(words.slice(0,2).map(word=>word[0]).join('')||'С').toUpperCase();
   $('profileName').textContent=u.name||'Сотрудник';
@@ -1331,9 +1331,9 @@ function render(){
   profileState.textContent=on
     ? (scheduledNow()?`Смена начнётся в ${STATE.shift.start_time}`:(STATE.shift.on_lunch?'Сейчас на обеде':'Смена открыта'))
     : 'Смена не открыта';
-  $('profilePeriodEarned').textContent=rub(STATE.month_earned||0)+' ₽';
-  $('profileShifts').textContent=lt.shifts||0;
-  $('profileActions').textContent=lt.actions||0;
+  $('profileMonthEarned').textContent=rub(STATE.month_earned||0)+' ₽';
+  $('profileDecadeEarned').textContent=rub(STATE.decade_earned||0)+' ₽';
+  $('profileMonthShifts').textContent=STATE.month_shifts||0;
   const pass=STATE.bibipass||{};
   $('shiftBibipassPromo').classList.toggle('hidden',!pass.enabled);
   $('profileBibipassOpen').classList.toggle('hidden',!pass.enabled);
@@ -1500,19 +1500,20 @@ function renderBibipass(data){
     root.innerHTML=`${timer}<div class="bibipass-gate"><div class="pass-gate-mark">БП</div><small class="pass-gate-kicker">BIBIPASS / СЕЗОН 01</small><h3>Подтвердите участие</h3><p><b>Сначала подпишитесь на канал команды, затем вернитесь сюда и проверьте подписку.</b></p><div class="pass-gate-rule"><b>Как открыть квест</b><span>1. Откройте канал и нажмите «Подписаться».<br>2. Вернитесь в бот.<br>3. Нажмите «Проверить подписку».</span></div>${data.check_error?'<div class="task-api-error">Проверка временно недоступна из-за ошибки Telegram. Попробуйте ещё раз через минуту.</div>':''}<p>Уже подписаны? Сразу нажмите кнопку проверки. После подтверждения уровни, рейтинг и награды откроются автоматически.</p><div class="bibipass-actions"><button class="save" id="bibipassGateJoin">1. Открыть канал</button><button class="mini" id="bibipassGateCheck">2. Проверить подписку</button></div></div>`;
     $('bibipassGateJoin').onclick=openBibipassChannel;$('bibipassGateCheck').onclick=()=>checkBibipassMembership($('bibipassGateCheck'));tickBibipassCountdowns();return;
   }
-  const p=data.progress||{},actions=(data.rules&&data.rules.actions)||[],rewards=data.rewards||[],ranking=data.ranking||[];
+  const p=data.progress||{},earned=data.earned||{},actions=(data.rules&&data.rules.actions)||[],rewards=data.rewards||[],ranking=data.ranking||[];
   const nextReward=rewards.find(item=>Number(item.level)===Number(p.next_level)),remaining=Math.max(0,Number(p.need||0)-Number(p.current||0));
   const actionLabels={move:'Переместить 1 байк',fix:'Поправить 1 байк',to_sc:'Привезти 1 байк на СЦ',from_sc:'Вывезти 1 байк с СЦ',battery:'Заменить 1 АКБ'};
   const levelCount=Number(data.rules&&data.rules.levels)||20,withinLevel=Number(p.need)>0?Math.min(1,Math.max(0,Number(p.current||0)/Number(p.need))):0;
-  const progressPercent=p.next_level?Math.min(100,Math.max(0,(Number(p.level||0)+withinLevel)/levelCount*100)):100;
+  const progressPercent=p.next_level?withinLevel*100:100;
   const profileProgress=$('profileBibipassProgress');if(profileProgress)profileProgress.style.setProperty('--progress',String(progressPercent/100));
-  const routeStops=Array.from({length:levelCount},(_,index)=>`<i class="${index<Number(p.level||0)?'done':''} ${index===Number(p.level||0)&&p.next_level?'current':''} ${index===9||index===19?'milestone':''}"></i>`).join('');
   const nextRewardLine=nextReward?`<div class="pass-next-reward ${nextReward.subscription_months?'milestone':''}"><small>Награда уровня ${String(nextReward.level).padStart(2,'0')}</small><b>${Number(nextReward.bibibonuses)||0} БибиБонусов</b>${nextReward.subscription_months?`<strong>+ подписка на ${nextReward.subscription_months} ${Number(nextReward.subscription_months)===1?'месяц':'месяца'}</strong>`:''}<span>Валюта для поездок</span></div>`:`<div class="pass-next-reward complete"><small>Маршрут пройден</small><b>Все награды открыты</b><span>20 из 20 уровней</span></div>`;
   const levelRows=rewards.map(item=>{const done=Number(item.level)<=Number(p.level),next=Number(item.level)===Number(p.next_level),months=Number(item.subscription_months)||0,status=done?'заработано':next?'следующая':'',classes=[done?'done':'',next?'current':'',months?'milestone':''].filter(Boolean).join(' ');return `<div class="pass-level-row ${classes}"><span class="pass-level-axis"><i></i></span><span class="pass-level-copy"><small>Уровень ${String(item.level).padStart(2,'0')}</small><b>${Number(item.bibibonuses)||0} БибиБонусов</b>${months?`<em>Подписка на ${months} ${months===1?'месяц':'месяца'}</em>`:''}</span><span class="pass-level-threshold"><b>${bibipassXpText(item.cumulative_points)}</b>${status?`<em>${status}</em>`:''}</span></div>`}).join('');
   const actionRows=actions.map(item=>`<div class="pass-rate-row points"><span>${esc(actionLabels[item.type]||item.label)}</span><b>+${bibipassXpText(item.points)}</b></div>`).join('');
-  const rankingRows=ranking.length?ranking.map(item=>`<div class="bibipass-rank ${item.is_me?'me':''}"><span class="place">${item.position}</span><span><b>${esc(item.name)}</b><small>${esc([item.role,item.city].filter(Boolean).join(' · '))}${item.is_me?' · Вы':''}</small></span><span class="score">Ур. ${item.level}<br>${bibipassXpText(item.points)}</span></div>`).join(''):'<div class="task-api-state">Участников пока нет.</div>';
-  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${bibipassXpText(p.points)}</b><span>${p.next_level?`${bibipassXpText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Маршрут завершён'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" style="--progress:${(progressPercent/100).toFixed(4)}" aria-label="Прогресс БибиПасса ${progressPercent.toFixed(1)}%"><span></span><div>${routeStops}</div></div><div class="pass-progress-meta"><span>Старт</span><b>${Number(p.level)||0} / ${levelCount} уровней</b><span>Финиш</span></div><p class="pass-plain-note"><b>XP</b> — опыт для прохождения уровней. <b>БибиБонусы</b> — награда для поездок.</p></section>
-  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>XP только за действия с байками</small><b>Как получить XP</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details><details class="pass-drawer"><summary><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><b>Рейтинг всех городов</b></span><em>Таблица</em></summary><div class="pass-drawer-body">${rankingRows}</div></details></div>`;
+  const visibleRanking=ranking.slice(0,10),me=ranking.find(item=>item.is_me);if(me&&!visibleRanking.some(item=>item.is_me))visibleRanking.push(me);
+  const medals={1:'🥇',2:'🥈',3:'🥉'},rankingRows=visibleRanking.length?visibleRanking.map(item=>`<div class="bibipass-rank ${item.is_me?'me':''}"><span class="place">${medals[item.position]||item.position}</span><span><b>${esc(item.name)}</b><small>${esc([item.role,item.city].filter(Boolean).join(' · '))}${item.is_me?' · Вы':''}</small></span><span class="score">Ур. ${item.level}<br>${bibipassXpText(item.points)}</span></div>`).join(''):'<div class="task-api-state">Участников пока нет.</div>';
+  const rival=me&&Number(me.position)>1?ranking.find(item=>Number(item.position)===Number(me.position)-1):null,rivalGap=rival?Math.max(.5,Number(rival.points)-Number(me.points)+.5):0,rivalText=me?(Number(me.position)===1?'Вы лидируете — удерживайте первое место 🏆':rival?`До места №${rival.position}: ${bibipassXpText(rivalGap)}`:'Продолжайте набирать XP и подниматься выше'):'Вступите в рейтинг после первых XP';
+  root.innerHTML=`${timer}<section class="pass-focus"><header><span><small>Квест сотрудников</small><b>БибиПасс · сезон 01</b></span><time>26.08—15.09</time></header><div class="pass-focus-main"><div class="pass-level-badge"><small>уровень</small><b>${String(Number(p.level)||0).padStart(2,'0')}</b><span>из ${levelCount}</span></div>${nextRewardLine}</div><div class="pass-progress-copy"><b>${p.next_level?`${bibipassXpText(p.current)} / ${bibipassXpText(p.need)}`:bibipassXpText(p.points)}</b><span>${p.next_level?`${bibipassXpText(remaining)} до уровня ${String(p.next_level).padStart(2,'0')}`:'Все уровни пройдены'}</span></div><div class="pass-progress-track ${progressPercent<=0?'empty':''}" style="--progress:${(progressPercent/100).toFixed(4)}" role="progressbar" aria-valuemin="0" aria-valuemax="${Number(p.need)||100}" aria-valuenow="${Number(p.current)||0}" aria-label="Прогресс текущего уровня: ${bibipassNumber(p.current)} из ${bibipassNumber(p.need)} XP"><span></span></div><div class="pass-progress-meta"><span>Уровень ${String(Number(p.level)||0).padStart(2,'0')}</span><b>${progressPercent.toFixed(0)}%</b><span>${p.next_level?`Уровень ${String(p.next_level).padStart(2,'0')}`:'Финиш'}</span></div><div class="pass-earned-strip"><span><small>Получено наград за уровни</small><b>${Number(earned.reward_levels??p.level)||0} из ${levelCount}</b></span><span><small>Заработано</small><b>${Number(earned.level_bibibonuses)||0} БибиБонусов</b></span><span><small>Подписки</small><b>${Number(earned.subscription_months)||0} мес.</b></span></div><p class="pass-plain-note"><b>XP</b> — опыт для прохождения уровней. <b>БибиБонусы</b> — отдельная награда для поездок.</p></section><section class="pass-ranking"><header><span><small>${Number(data.participants)||0} участников · ваше место №${data.position||'—'}</small><h3>Рейтинг всех городов</h3></span></header><div class="pass-rival-note">${esc(rivalText)}</div>${rankingRows}</section>
+  <div class="pass-drawers"><details class="pass-drawer"><summary><span><small>XP только за действия с байками</small><b>Как получить XP</b></span><em>Открыть</em></summary><div class="pass-drawer-body"><div class="pass-rates">${actionRows}</div><p>Ручные корректировки, ремонт, оклейка и задания в конкурс не входят.</p></div></details><details class="pass-drawer"><summary><span><small>150 БибиБонусов и две подписки</small><b>Все награды</b></span><em>20 уровней</em></summary><div class="pass-drawer-body pass-level-list">${levelRows}</div></details></div>`;
   root.querySelectorAll('.pass-drawer').forEach(drawer=>drawer.addEventListener('toggle',()=>{
     if(!drawer.open)return;root.querySelectorAll('.pass-drawer').forEach(other=>{if(other!==drawer)other.open=false});
   }));
@@ -2160,17 +2161,23 @@ function renderMyTasks(){
   const card=task=>{
     const assignees=Array.isArray(task.assignees)?task.assignees:[],status=taskStatus(effectiveTaskStatus(task)),id=Number(task.task_id||task.id);
     const assigneeLabel=assignees.map(person=>person.full_name_snap).filter(Boolean).join(', ');
-    return `<button class="my-task-card" data-my-task="${id}">
+    const canRemove=todoScope==='created'&&todoFilter!=='history'&&task.is_creator&&task.status==='published'&&!task.archived_at;
+    return `<div class="my-task-card-wrap"><button class="my-task-card" data-my-task="${id}">
       <div class="my-task-top"><span class="my-task-title">${esc(task.title)}</span><span class="my-task-status ${status.cls}">${esc(status.label)}</span></div>
       <div class="my-task-meta">${esc(taskDate(task.due_date||task.work_date))}${task.due_time?' · '+esc(task.due_time):''}${task.requires_photo?' · 📷 нужен фотоотчёт':''}${task.priority==='urgent'?' · Срочно':''}</div>
       <div class="todo-card-owner">${esc(todoScope==='created'?(assigneeLabel||'Исполнитель'):(task.creator_name||'Автор задачи'))}</div>
-    </button>`;
+    </button>${canRemove?`<button class="my-task-remove" type="button" data-remove-task="${id}" aria-label="Удалить задачу">×</button>`:''}</div>`;
   };
   if(todoFilter==='history'){
     const groups=new Map();sorted.forEach(task=>{const day=task.work_date||String(task.created_at||'').slice(0,10)||'Без даты';if(!groups.has(day))groups.set(day,[]);groups.get(day).push(task)});
     list.innerHTML=[...groups].map(([day,tasks])=>`<div class="todo-history-day">${esc(taskDate(day))}</div><div class="my-task-list">${tasks.map(card).join('')}</div>`).join('');
   }else list.innerHTML=`<div class="my-task-list">${sorted.map(card).join('')}</div>`;
   list.querySelectorAll('[data-my-task]').forEach(btn=>btn.onclick=()=>openMyTask(Number(btn.dataset.myTask)));
+  list.querySelectorAll('[data-remove-task]').forEach(btn=>btn.onclick=event=>{
+    event.preventDefault();event.stopPropagation();
+    const task=employeeTasks.find(item=>Number(item.task_id)===Number(btn.dataset.removeTask));
+    if(task)cancelTodoTask(task);
+  });
 }
 async function loadMyTasks(silent=false){
   if(employeeTaskLoading) return;
@@ -2344,9 +2351,9 @@ function todoDialog({title,text='',placeholder='',action='Продолжить',
   });
 }
 async function cancelTodoTask(task){
-  const reason=await todoDialog({title:'Отменить задачу?',text:'Исполнители увидят отмену и больше не смогут отправить результат.',placeholder:'Почему задача отменяется?',action:'Отменить задачу',danger:true,required:true});
+  const reason=await todoDialog({title:'Удалить задачу из активных?',text:'Она останется в истории. Исполнители увидят отмену и больше не смогут отправить результат.',placeholder:'Почему задача отменяется?',action:'Удалить из активных',danger:true,required:true});
   if(reason===null)return;
-  try{await api(EMPLOYEE_TASK_API.cancel(task.task_id),{method:'POST',body:JSON.stringify({reason})});await loadMyTasks(true);showMyTaskList();toast('Задача отменена.')}catch(e){setTasksError(e.message||'Не удалось отменить задачу.')}
+  try{await api(EMPLOYEE_TASK_API.cancel(task.task_id),{method:'POST',body:JSON.stringify({reason})});await loadMyTasks(true);showMyTaskList();toast('Задача удалена из активных.')}catch(e){setTasksError(e.message||'Не удалось удалить задачу из активных.')}
 }
 async function reviewTodoTask(task,userId,action){
   let comment='';if(action==='return'){comment=await todoDialog({title:'Вернуть в работу',text:'Исполнитель получит ваше пояснение.',placeholder:'Что нужно исправить?',action:'Вернуть задачу',required:true});if(comment===null)return}
@@ -2687,9 +2694,7 @@ async function loadHistory(){
       .filter(it => it.in_period)
       .reduce((sum, it) => sum + (Number(it.earned) || 0), 0);
     $('hTotal').textContent = rub(periodSum) + ' ₽';
-    $('hTotalLabel').textContent = data.period_started_at
-      ? 'Заработано за декаду'
-      : 'Всего заработано';
+    $('hTotalLabel').textContent = 'Заработано за декаду';
   }catch(e){
     $('hList').innerHTML = '<div class="hempty">Не удалось загрузить историю.</div>';
   }
@@ -2738,7 +2743,7 @@ function confirmDelete(sid, date){
       box.remove(); row.remove();
       toast('Смена удалена');
       histLoaded = false;
-      await load();          // пересчёт дохода за месяц и статистики
+      await load();          // пересчёт дохода за месяц, декаду и количества смен
       await loadHistory();   // свежая история с новым итогом
     }catch(e){
       toast(e.message || 'Не удалось удалить');

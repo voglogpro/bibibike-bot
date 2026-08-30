@@ -83,6 +83,11 @@ def check_parsers():
     assert_action(bot.parse_message("паправил 7"), "fix", [], 7)
 
     assert_action(bot.parse_npb_message("0001\n0002"), "battery", ["0001", "0002"], 0)
+    mass_codes = [f"{index:04d}" for index in range(120)]
+    assert_action(
+        bot.parse_npb_message("08:05\n" + "\n".join(mass_codes)),
+        "battery", mass_codes, 0,
+    )
     assert_action(bot.parse_moves_message("0010\n0020"), "move", ["0010", "0020"], 0)
     assert_action(bot.parse_bare_repair_message("0011 не заводится"), "repair", ["0011"], 0)
     assert_action(bot.parse_sticker_message("Оклейка 0012"), "sticker", ["0012"], 0)
@@ -281,6 +286,68 @@ async def check_stavropol_processing():
     assert scout_stats["battery"] == 3, scout_stats
 
 
+async def check_charger_close_race():
+    """Закрытие не обгоняет очередь, а запоздавший update сверяется по времени."""
+    city = bot.get_city_by_group(bot.GROUP_ID)
+    bot.schedule_report_update = lambda _shift_id: None
+
+    # Сначала воспроизводим настоящий конфликт: обработчик действия уже держит
+    # очередь, а закрытие запускается параллельно и обязано дождаться записи.
+    uid = 940001
+    shift_id = await insert_shift(uid, city, "Чарджер")
+    event_at = datetime.now(timezone.utc)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_handler = bot._process_work_message_locked
+
+    async def slow_handler(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original_handler(*args, **kwargs)
+
+    message = FakeMessage(
+        uid, bot.GROUP_ID, bot.NPB_THREAD_ID, 8001, "0101", date=event_at,
+    )
+    with patch.object(bot, "_process_work_message_locked", side_effect=slow_handler):
+        action_task = asyncio.create_task(bot.process_work_message(message, city, npb=True))
+        await started.wait()
+        close_task = asyncio.create_task(bot.end_shift(
+            uid, event_at.astimezone(bot._city_tz(city)).strftime("%H:%M"),
+            city_id=city["id"], now=event_at,
+            end_at_override=event_at + timedelta(seconds=1),
+        ))
+        await asyncio.sleep(0)
+        assert not close_task.done(), "закрытие обогнало действие в очереди"
+        release.set()
+        await asyncio.gather(action_task, close_task)
+    assert (await bot.get_stats(shift_id))["battery"] == 1
+
+    # Даже если handler начал работу только после закрытия, Telegram timestamp
+    # до end_at безопасно возвращает действие в правильную закрытую смену.
+    delayed_uid = 940002
+    delayed_shift_id = await insert_shift(delayed_uid, city, "Чарджер")
+    sent_at = datetime.now(timezone.utc)
+    closed_at = sent_at + timedelta(seconds=2)
+    await bot.end_shift(
+        delayed_uid, closed_at.astimezone(bot._city_tz(city)).strftime("%H:%M"),
+        city_id=city["id"], now=closed_at, end_at_override=closed_at,
+    )
+    delayed = FakeMessage(
+        delayed_uid, bot.GROUP_ID, bot.NPB_THREAD_ID, 8002,
+        "\n".join(f"{2000 + index:04d}" for index in range(20)), date=sent_at,
+    )
+    await bot.process_work_message(delayed, city, npb=True)
+    assert (await bot.get_stats(delayed_shift_id))["battery"] == 20
+
+    too_late = FakeMessage(
+        delayed_uid, bot.GROUP_ID, bot.NPB_THREAD_ID, 8003, "2999",
+        date=closed_at + timedelta(seconds=1),
+    )
+    await bot.process_work_message(too_late, city, npb=True)
+    assert (await bot.get_stats(delayed_shift_id))["battery"] == 20
+    assert not bot._work_ingest_locks, bot._work_ingest_locks
+
+
 async def check_report_rendering():
     city = bot.get_city_by_group(bot.KHIMKI_CHARGERS_GROUP_ID)
     shift = {
@@ -437,6 +504,7 @@ async def main():
         await check_configuration_and_routing()
         await check_stavropol_processing()
         await check_database_and_message_burst()
+        await check_charger_close_race()
         await check_report_rendering()
         await check_photo_result_reply()
         await check_photo_caption_priority()

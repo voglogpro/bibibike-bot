@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-26 · совместная карта"
+BUILD_VERSION = "2026-08-30 · надёжный учёт массовых действий"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -471,6 +471,53 @@ def _wake_closed_shift():
     _shift_task_sync_wakeup.set()
     _planned_shift_wakeup.set()
     _auto_close_wakeup.set()
+
+
+# Все события одного сотрудника в одном городе проходят через общую очередь.
+# Aiogram запускает updates параллельно: раньше рабочие сообщения ждали свой
+# lock, а команда завершения смены обходила его и могла закрыть смену раньше
+# последних 15–20 действий из массовой отправки.
+_work_ingest_locks = {}  # (city_id, user_id) -> {lock, users}
+
+
+class _EmployeeEventGuard:
+    def __init__(self, city_id, user_id):
+        self.key = (int(city_id or 0), int(user_id))
+        self.entry = None
+
+    async def __aenter__(self):
+        entry = _work_ingest_locks.get(self.key)
+        if entry is None:
+            entry = {"lock": asyncio.Lock(), "users": 0}
+            _work_ingest_locks[self.key] = entry
+        entry["users"] += 1
+        self.entry = entry
+        try:
+            await entry["lock"].acquire()
+        except BaseException:
+            # __aexit__ не вызывается, если отмена случилась во время
+            # __aenter__. Убираем пользователя очереди здесь, иначе после
+            # перезапуска/отмены альбома останется вечная запись в словаре.
+            entry["users"] -= 1
+            if entry["users"] == 0 and _work_ingest_locks.get(self.key) is entry:
+                _work_ingest_locks.pop(self.key, None)
+            self.entry = None
+            raise
+        return entry
+
+    async def __aexit__(self, exc_type, exc, tb):
+        entry = self.entry
+        if entry is None:
+            return False
+        entry["lock"].release()
+        entry["users"] -= 1
+        if entry["users"] == 0 and _work_ingest_locks.get(self.key) is entry:
+            _work_ingest_locks.pop(self.key, None)
+        return False
+
+
+def _employee_event_guard(city_id, user_id):
+    return _EmployeeEventGuard(city_id, user_id)
 
 # ============================================================
 # ЛОГИРОВАНИЕ  (пишем в stdout, чтобы BotHost точно показывал логи)
@@ -2436,6 +2483,30 @@ async def get_last_shift(uid, city_id=None):
         r = await c.fetchone()
         return dict(r) if r else None
 
+
+async def get_shift_for_work_event(uid, city_id, event_at):
+    """Находит уже закрытую смену, внутри которой сообщение было отправлено.
+
+    Telegram мог отдать updates по порядку, но параллельные handlers завершаются
+    не по порядку. Поэтому сообщение, фактически отправленное ДО конца смены,
+    должно попасть в неё даже если обработчик дошёл до БД уже ПОСЛЕ закрытия.
+    Сообщения, отправленные после end_at, сюда не подходят.
+    """
+    if event_at is None:
+        return None
+    event_iso = _as_aware_datetime(event_at).isoformat()
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM shifts WHERE user_id = ? AND city_id = ? AND is_active = 0 "
+            "AND start_at IS NOT NULL AND end_at IS NOT NULL "
+            "AND julianday(start_at) <= julianday(?) "
+            "AND julianday(end_at) >= julianday(?) "
+            "ORDER BY julianday(end_at) DESC, id DESC LIMIT 1",
+            (uid, city_id, event_iso, event_iso),
+        )).fetchone()
+        return dict(row) if row else None
+
 # === НОВОЕ: смена по id (нужно живому сообщению) ===
 async def get_shift_by_id(sid):
     async with db_connect() as db:
@@ -2649,6 +2720,22 @@ async def freeze_earned(sid):
         )
 
 async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_override=None):
+    """Закрывает смену после всех уже вставших в очередь действий сотрудника."""
+    lock_city_id = city_id
+    if lock_city_id is None:
+        active = await get_active_shift(uid)
+        if not active:
+            return None
+        lock_city_id = active.get("city_id")
+    async with _employee_event_guard(lock_city_id, uid):
+        return await _end_shift_locked(
+            uid, time, comment, city_id=city_id, now=now,
+            end_at_override=end_at_override,
+        )
+
+
+async def _end_shift_locked(uid, time, comment="", city_id=None, now=None,
+                            end_at_override=None):
     shift = await get_active_shift(uid, city_id)
     if not shift:
         return None
@@ -4955,6 +5042,18 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                     shift = candidate
     else:
         shift = await get_active_shift(uid, city["id"])
+        if not shift:
+            shift = await get_shift_for_work_event(
+                uid, city["id"], getattr(message, "date", None)
+            )
+            if shift:
+                logger.warning(
+                    "ВОССТАНОВЛЕНО ПО ВРЕМЕНИ: сообщение было отправлено до "
+                    "закрытия смены, но обработано после. uid=%s город=%s "
+                    "chat=%s тема=%s msg=%s смена=%s",
+                    uid, city.get("name") or city.get("id"), chat_id,
+                    message.message_thread_id, message.message_id, shift["id"],
+                )
     if not shift:
         # Не смешиваем действия разных городов, но явно объясняем ситуацию в
         # логах. Раньше активная смена в Химках и сообщение из краснодарской
@@ -5059,7 +5158,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
             logger.warning("ЭКСПЕРИМЕНТ (скриншоты): сбой, пропускаю: %s", exc)
             photo_actions = []
 
-    if not text or text.startswith('/') or re.match(r'^\d{1,2}:\d{2}\s*', text):
+    if not text or text.startswith('/'):
         # Сообщение без текста, но со скриншотом: засчитываем распознанное.
         if photo_actions:
             await link_work_message(
@@ -5169,14 +5268,6 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         await _reply_with_photo_result(message, actions)
 
 
-# Aiogram обрабатывает несколько входящих обновлений параллельно. Без этой
-# очереди серия сообщений одного сотрудника могла одновременно открыть
-# несколько SQLite-транзакций: одно сообщение записывалось, остальные могли
-# завершиться ошибкой "database is locked". Очередь отдельна для каждого
-# сотрудника и чата, поэтому чужие сообщения друг друга не задерживают.
-_work_ingest_locks = {}  # (city_id, chat_id, user_id) -> {lock, users}
-
-
 async def process_work_message(message: Message, city, npb=False, edited=False,
                                moves=False, repair_topic=False,
                                bare_repair_topic=False, sticker_topic=False):
@@ -5190,14 +5281,11 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
         active_reply_task = album_entry.get("task") if album_entry else None
         if active_reply_task and not active_reply_task.done():
             active_reply_task.cancel()
-    key = (city["id"], message.chat.id, sender.id)
-    entry = _work_ingest_locks.get(key)
-    if entry is None:
-        entry = {"lock": asyncio.Lock(), "users": 0}
-        _work_ingest_locks[key] = entry
-    entry["users"] += 1
     try:
-        async with entry["lock"]:
+        # Общая очередь на сотрудника и город сериализует рабочие сообщения
+        # между разными темами/чатами и разделяется с end_shift(). Закрытие
+        # больше не может обогнать хвост массовой отправки.
+        async with _employee_event_guard(city["id"], sender.id):
             await _process_work_message_locked(
                 message, city, npb=npb, edited=edited, moves=moves,
                 repair_topic=repair_topic,
@@ -5205,9 +5293,6 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
                 sticker_topic=sticker_topic,
             )
     finally:
-        entry["users"] -= 1
-        if entry["users"] == 0 and _work_ingest_locks.get(key) is entry:
-            _work_ingest_locks.pop(key, None)
         if album_key is not None:
             pending = _photo_media_group_pending.get(album_key, 1) - 1
             if pending > 0:

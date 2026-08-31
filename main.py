@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-31 · все действия по часам"
+BUILD_VERSION = "2026-08-31 · рабочие зоны Краснодара"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -412,13 +412,51 @@ def _webapp_button():
 # справочник. Это не влияет на парсер и не ограничивает старые записи.
 CITY_DISTRICTS = {
     "краснодар": [
-        "ЦМР / Красная", "ФМР", "ЮМР", "ГМР", "КМР", "ЧМР", "РМР",
-        "СМР", "ПМР", "ККБ", "Восточка / ВКР", "Ставропольская",
-        "Пашковка", "ЭНКА", "Немецкая деревня", "Западный обход",
-        "Российская", "40 лет Победы",
+        "Восточка", "Красная площадь", "Западный обход", "ФМР",
+        "ЮМР", "ГМР", "Ставрополька", "Красная",
     ],
 }
 DISTRICTS = [value.casefold() for value in CITY_DISTRICTS["краснодар"]]
+
+# Крупные рабочие зоны скаутов Краснодара. Контуры образуют непересекающуюся
+# сетку: мелкие микрорайоны входят в ближайшую крупную зону. Координаты хранятся
+# в формате GeoJSON [долгота, широта] и после первичного добавления редактируются
+# руководителем через CRM, а не перезаписываются при каждом запуске.
+KRASNODAR_WORK_ZONES = (
+    ("Восточка", "#f5a623", [[
+        [39.005, 45.040], [39.130, 45.040], [39.130, 45.140],
+        [39.005, 45.140], [39.005, 45.040],
+    ]]),
+    ("Красная площадь", "#9b51e0", [[
+        [38.940, 45.085], [39.005, 45.085], [39.005, 45.140],
+        [38.940, 45.140], [38.940, 45.085],
+    ]]),
+    ("Западный обход", "#64748b", [[
+        [38.840, 45.040], [38.940, 45.040], [38.940, 45.140],
+        [38.840, 45.140], [38.840, 45.040],
+    ]]),
+    ("ФМР", "#2f80ed", [[
+        [38.940, 45.050], [38.975, 45.050], [38.975, 45.085],
+        [38.940, 45.085], [38.940, 45.050],
+    ]]),
+    ("ЮМР", "#18a999", [[
+        [38.840, 44.975], [38.940, 44.975], [38.940, 45.040],
+        [38.840, 45.040], [38.840, 44.975],
+    ]]),
+    ("ГМР", "#31cf42", [[
+        [39.055, 44.975], [39.130, 44.975], [39.130, 45.040],
+        [39.055, 45.040], [39.055, 44.975],
+    ]]),
+    ("Ставрополька", "#ef5350", [[
+        [38.995, 44.975], [39.055, 44.975], [39.055, 45.040],
+        [38.995, 45.040], [38.995, 44.975],
+    ]]),
+    ("Красная", "#ffca28", [[
+        [38.940, 44.975], [38.995, 44.975], [38.995, 45.040],
+        [39.005, 45.040], [39.005, 45.085], [38.975, 45.085],
+        [38.975, 45.050], [38.940, 45.050], [38.940, 44.975],
+    ]]),
+)
 
 # ============================================================================
 # [02-RUNTIME] TELEGRAM BOT, РОУТЕРЫ, ЛОГИРОВАНИЕ И ОБЩИЕ ПОМОЩНИКИ
@@ -1778,6 +1816,52 @@ async def init_db():
                          json.dumps({"type": "Polygon", "coordinates": coordinates}),
                          sort_order, zone_now, zone_now),
                     )
+
+            work_zone_migration = "krasnodar_work_zones_v1"
+            work_zones_done = await (await db.execute(
+                "SELECT 1 FROM schema_migrations WHERE name=?",
+                (work_zone_migration,),
+            )).fetchone()
+            if not work_zones_done:
+                zone_now = datetime.now(timezone.utc).isoformat()
+                existing_names = {
+                    str(row[0] or "").strip().casefold()
+                    for row in await (await db.execute(
+                        "SELECT name FROM crm_map_zones WHERE city_id=? AND is_active=1",
+                        (krasnodar_row[0],),
+                    )).fetchall()
+                }
+                next_sort = (await (await db.execute(
+                    "SELECT COALESCE(MAX(sort_order),0)+1 FROM crm_map_zones WHERE city_id=?",
+                    (krasnodar_row[0],),
+                )).fetchone())[0]
+                for offset, (name, color, coordinates) in enumerate(KRASNODAR_WORK_ZONES):
+                    if name.casefold() in existing_names:
+                        continue
+                    await db.execute(
+                        "INSERT INTO crm_map_zones "
+                        "(city_id,name,color,geometry_json,is_active,sort_order,created_by,"
+                        "client_request_id,created_at,updated_at) VALUES (?,?,?,?,1,?,0,?,?,?)",
+                        (krasnodar_row[0], name, color,
+                         json.dumps({"type": "Polygon", "coordinates": coordinates}),
+                         int(next_sort) + offset,
+                         f"preset-krasnodar-work-zones-v1-{offset + 1}", zone_now, zone_now),
+                    )
+                city_today = datetime.now(
+                    _city_tz(get_city(int(krasnodar_row[0])))
+                ).date().isoformat()
+                await db.execute(
+                    "UPDATE crm_map_zones AS zone SET is_active=0,updated_at=? "
+                    "WHERE zone.city_id=? AND zone.is_active=1 "
+                    "AND LOWER(zone.name) LIKE LOWER('Тестовая зона:%') "
+                    "AND NOT EXISTS (SELECT 1 FROM crm_map_assignments assignment "
+                    "WHERE assignment.zone_id=zone.id AND assignment.work_date>=?)",
+                    (zone_now, krasnodar_row[0], city_today),
+                )
+                await db.execute(
+                    "INSERT INTO schema_migrations (name,applied_at) VALUES (?,?)",
+                    (work_zone_migration, zone_now),
+                )
         await db.execute("UPDATE users SET city_id = ? WHERE city_id IS NULL", (default_city_id,))
         await db.execute("UPDATE shifts SET city_id = ? WHERE city_id IS NULL", (default_city_id,))
         await db.execute(

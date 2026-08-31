@@ -176,6 +176,19 @@ async def run():
         assert map_data["supported"] is True
         assert map_data["map"]["maptiler_api_key"] == "test-map-key"
         assert len(map_data["zones"]["features"]) >= 3
+        active_zone_names = {
+            item["properties"]["name"] for item in map_data["zones"]["features"]
+        }
+        assert {item[0] for item in bot.KRASNODAR_WORK_ZONES} <= active_zone_names
+        assert not any(name.startswith("Тестовая зона:") for name in active_zone_names)
+        await bot.init_db()
+        async with bot.db_connect() as db:
+            repeated_zone_names = await (await db.execute(
+                "SELECT name,COUNT(*) FROM crm_map_zones WHERE city_id=? AND is_active=1 "
+                "GROUP BY LOWER(name)", (city["id"],),
+            )).fetchall()
+        repeated_zone_counts = {name: count for name, count in repeated_zone_names}
+        assert all(repeated_zone_counts.get(name) == 1 for name, _, _ in bot.KRASNODAR_WORK_ZONES)
         assert map_data["bikes"] == {"type": "FeatureCollection", "features": []}
         assert 910001 not in {item["user_id"] for item in map_data["employees"]}
         assert [item["user_id"] for item in map_data["employees"]] == [910002]

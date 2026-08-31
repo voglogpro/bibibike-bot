@@ -608,7 +608,7 @@ async function loadToday(){
     const results=await withSeq("analysis",()=>Promise.allSettled([
       request(API.overview+query({city_id})),request(API.shifts+query({city_id,from:today,to:today,status:"active",limit:100})),
       request(API.tasks+query({city_id,from:today,to:today,status:"published",limit:100})),request(API.signals+query({city_id})),
-      request(API.trends+query({city_id,from:today,to:today,bucket:"hour",action_type:"move"})),request(API.trends+query({city_id,from,to:today,bucket:"day",action_type:"move"})),
+      request(API.trends+query({city_id,from:today,to:today,bucket:"hour"})),request(API.trends+query({city_id,from,to:today,bucket:"day",action_type:"move"})),
       request(API.activity+query({city_id,limit:30}))
     ]));
     const data={overview:valueOf(results[0]),shifts:valueOf(results[1]),tasks:valueOf(results[2]),signals:valueOf(results[3]),hourly:valueOf(results[4]),trends:valueOf(results[5]),activity:valueOf(results[6])};state.cache[`analysis:${city_id}`]=data;renderToday(data);
@@ -618,8 +618,8 @@ function valueOf(result){return result?.status==="fulfilled"?result.value:null}
 function renderActionLegend(){return `<div class="chart-legend">${Object.entries(ACTION_LABELS).map(([key,label])=>`<span><i style="background:${ACTION_COLORS[key]}"></i>${esc(label)}</span>`).join("")}</div>`}
 function renderHourlyActions(series){
   const rows=series||[],max=Math.max(1,...rows.map(item=>n(item.actions)));
-  if(!rows.length)return stateBlock("Почасовых данных нет","Перемещения за сегодняшний день ещё не найдены.");
-  return `<div class="hourly-chart">${rows.map(item=>{const total=n(item.actions),height=total?Math.max(3,Math.round(total*100/max)):1;return `<div class="hour-column" style="--bar-height:${height}%" title="${esc(item.label)} · ${total} перемещений"><div class="hour-stack" style="height:${height}%"><i class="hour-segment" style="height:100%;background:${ACTION_COLORS.move}"></i></div>${total?`<b class="hour-total">${total}</b>`:""}${n(item.hour)%3===0||n(item.hour)===23?`<span class="hour-label">${String(n(item.hour)).padStart(2,"0")}</span>`:""}</div>`}).join("")}</div>`;
+  if(!rows.length)return stateBlock("Почасовых данных нет","Действия за сегодняшний день ещё не найдены.");
+  return `<div class="hourly-chart">${rows.map(item=>{const total=n(item.actions),height=total?Math.max(3,Math.round(total*100/max)):1,types=item.types||{},details=Object.entries(ACTION_LABELS).filter(([key])=>n(types[key])>0).map(([key,label])=>`${label}: ${n(types[key])}`).join(" · ");return `<div class="hour-column" style="--bar-height:${height}%" title="${esc(item.label)} · ${total} действий${details?` · ${details}`:""}"><div class="hour-stack" style="height:${height}%">${Object.keys(ACTION_LABELS).map(key=>n(types[key])>0?`<i class="hour-segment" style="height:${Math.max(2,n(types[key])*100/Math.max(1,total))}%;background:${ACTION_COLORS[key]}"></i>`:"").join("")}</div>${total?`<b class="hour-total">${total}</b>`:""}${n(item.hour)%3===0||n(item.hour)===23?`<span class="hour-label">${String(n(item.hour)).padStart(2,"0")}</span>`:""}</div>`}).join("")}</div>`;
 }
 function smoothLinePath(points){if(!points.length)return "";let path=`M ${points[0].x} ${points[0].y}`;for(let i=1;i<points.length;i++){const prev=points[i-1],point=points[i],mid=(prev.x+point.x)/2;path+=` C ${mid} ${prev.y}, ${mid} ${point.y}, ${point.x} ${point.y}`}return path}
 function renderTenDayLine(series){
@@ -650,7 +650,7 @@ function renderToday(data){
       ${kpi("Нужна связь",signalItems.length,`${noActivity} без действий · ${rateDrop} снизили темп`,"analysis",signalItems.length>0)}
     </div>
     <div class="ops-chart-grid">
-      <div class="card ops-chart-card"><div class="card-head"><div><h3>Перемещения сегодня по часам</h3><p>Когда команда перемещала байки</p></div></div>${renderHourlyActions(hourly)}</div>
+      <div class="card ops-chart-card"><div class="card-head"><div><h3>Все действия сегодня по часам</h3><p>Когда и какие операции выполняла команда</p></div>${renderActionLegend()}</div>${renderHourlyActions(hourly)}</div>
       <div class="card ops-chart-card clickable-chart" role="button" tabindex="0" data-ten-day-team><div class="card-head"><div><h3>Динамика за 10 дней</h3><p>Нажмите, чтобы увидеть вклад сотрудников</p></div><b>${fmtNum(trend.reduce((sum,item)=>sum+n(item.actions),0))}</b></div>${renderTenDayLine(trend)}</div>
     </div>
     <div class="analysis-grid">

@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-30 · надёжный учёт массовых действий"
+BUILD_VERSION = "2026-08-31 · карта дня без дублей"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1301,6 +1301,7 @@ async def init_db():
                 is_active INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_by INTEGER,
+                client_request_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_by INTEGER,
                 updated_at TEXT NOT NULL
@@ -1620,6 +1621,7 @@ async def init_db():
             "ALTER TABLE crm_map_annotations ADD COLUMN variant TEXT NOT NULL DEFAULT 'attention'",
             "ALTER TABLE crm_map_annotations ADD COLUMN idempotency_key TEXT",
             "ALTER TABLE crm_map_annotations ADD COLUMN role_scope TEXT",
+            "ALTER TABLE crm_map_zones ADD COLUMN client_request_id TEXT",
         ]:
             try:
                 await db.execute(ddl); await db.commit()
@@ -1899,6 +1901,11 @@ async def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_map_annotations_request "
             "ON crm_map_annotations(city_id, created_by, idempotency_key) "
             "WHERE idempotency_key IS NOT NULL"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_map_zones_request "
+            "ON crm_map_zones(city_id, created_by, client_request_id) "
+            "WHERE client_request_id IS NOT NULL"
         )
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_creator_request "
@@ -9829,6 +9836,95 @@ async def api_crm_map(request):
     })
 
 
+async def api_my_map(request):
+    """Employee-facing map: persistent city zones plus today's dated work layer."""
+    tg_user = await _auth_user(request)
+    if not tg_user:
+        return web.json_response({"error": "auth"}, status=401)
+    uid = int(tg_user["id"])
+    user = await get_user(uid)
+    city = get_city((user or {}).get("city_id"))
+    if not user or not city:
+        return web.json_response({
+            "error": "profile", "message": "Сначала заполните профиль сотрудника.",
+        }, status=404)
+    work_date = datetime.now(_city_tz(city)).date()
+    requested_date = _crm_date(request.query.get("date"))
+    if requested_date and requested_date != work_date:
+        return web.json_response({
+            "error": "date", "message": "Сотруднику доступна рабочая карта только на сегодня.",
+        }, status=400)
+    if not _crm_map_supported(city):
+        return web.json_response({
+            "city": {"id": city["id"], "name": city["name"]},
+            "date": work_date.isoformat(), "supported": False,
+            "message": f"Карта города {city['name']} скоро появится.",
+        })
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        zones = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE city_id=? AND is_active=1 "
+            "ORDER BY sort_order,name", (city["id"],),
+        )).fetchall()
+        assignments = await (await db.execute(
+            "SELECT a.*,z.name AS zone_name,z.color AS zone_color "
+            "FROM crm_map_assignments a JOIN crm_map_zones z ON z.id=a.zone_id "
+            "AND z.city_id=a.city_id AND z.is_active=1 "
+            "WHERE a.city_id=? AND a.work_date=? AND a.user_id=? ORDER BY a.id",
+            (city["id"], work_date.isoformat(), uid),
+        )).fetchall()
+        annotations = await (await db.execute(
+            "SELECT a.* FROM crm_map_annotations a WHERE a.city_id=? "
+            "AND a.work_date=? AND a.status='active' "
+            "AND (a.assigned_user_id IS NULL OR a.assigned_user_id=?) ORDER BY a.id",
+            (city["id"], work_date.isoformat(), uid),
+        )).fetchall()
+    features = []
+    for row in zones:
+        try:
+            geometry = json.loads(row["geometry_json"])
+        except (TypeError, ValueError):
+            continue
+        features.append({
+            "type": "Feature", "id": int(row["id"]), "geometry": geometry,
+            "properties": {"id": int(row["id"]), "name": row["name"],
+                           "color": row["color"], "updated_at": row["updated_at"]},
+        })
+    annotation_items = []
+    employee_role = (user.get("role") or "").casefold()
+    for row in annotations:
+        item = dict(row)
+        saved_scope = (item.get("role_scope") or "").casefold()
+        if not item.get("assigned_user_id") and saved_scope and saved_scope != employee_role:
+            continue
+        try:
+            item["geometry"] = json.loads(item.pop("geometry_json"))
+        except (TypeError, ValueError):
+            continue
+        annotation_items.append({
+            key: item.get(key) for key in (
+                "id", "work_date", "kind", "note", "color", "variant",
+                "assigned_user_id", "task_id", "status", "updated_at", "geometry",
+            )
+        })
+    assignment_items = [{
+        key: row[key] for key in (
+            "id", "zone_id", "work_date", "user_id", "task_id", "note",
+            "updated_at", "zone_name", "zone_color",
+        )
+    } for row in assignments]
+    return web.json_response({
+        "city": {"id": city["id"], "name": city["name"]},
+        "date": work_date.isoformat(), "supported": True,
+        "map": {"center": [38.976, 45.035], "zoom": 11,
+                "maptiler_api_key": MAPTILER_API_KEY,
+                "key_configured": bool(MAPTILER_API_KEY)},
+        "zones": {"type": "FeatureCollection", "features": features},
+        "assignments": assignment_items,
+        "annotations": annotation_items,
+    })
+
+
 async def api_crm_map_zone_create(request):
     context, error = await _crm_admin(request, write=True)
     if error is not None: return error
@@ -9841,6 +9937,9 @@ async def api_crm_map_zone_create(request):
     name = " ".join(str(body.get("name") or "").split())[:100]
     color = str(body.get("color") or "#31cf42").strip().lower()
     geometry = _crm_map_polygon(body.get("geometry"))
+    client_request_id = str(body.get("client_request_id") or "").strip() or None
+    if client_request_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", client_request_id):
+        return web.json_response({"error": "client_request_id"}, status=400)
     if not name or not geometry or not re.fullmatch(r"#[0-9a-f]{6}", color):
         return web.json_response({
             "error": "zone", "message": "Укажите название, цвет и минимум три точки зоны.",
@@ -9850,22 +9949,53 @@ async def api_crm_map_zone_create(request):
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
-        duplicate = await (await db.execute(
+        if client_request_id:
+            replay = await (await db.execute(
+                "SELECT * FROM crm_map_zones WHERE city_id=? AND created_by=? "
+                "AND client_request_id=? ORDER BY id LIMIT 1",
+                (city["id"], admin_uid, client_request_id),
+            )).fetchone()
+            if replay:
+                await db.rollback()
+                try:
+                    replay_geometry = json.loads(replay["geometry_json"])
+                except (TypeError, ValueError):
+                    replay_geometry = None
+                if (replay_geometry != geometry or replay["name"] != name
+                        or (replay["color"] or "").lower() != color):
+                    return web.json_response({
+                        "error": "idempotency_conflict",
+                        "message": "Этот запрос уже использован для другого района.",
+                    }, status=409)
+                return web.json_response({
+                    "ok": True, "reused": True,
+                    "zone": {"type": "Feature", "id": replay["id"],
+                             "geometry": replay_geometry,
+                             "properties": {"id": replay["id"], "name": replay["name"],
+                                            "color": replay["color"],
+                                            "updated_at": replay["updated_at"]}},
+                })
+        candidates = await (await db.execute(
             "SELECT * FROM crm_map_zones WHERE city_id=? AND is_active=1 "
-            "AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1",
-            (city["id"], name),
-        )).fetchone()
+            "ORDER BY id", (city["id"],),
+        )).fetchall()
+        duplicate = None
+        duplicate_geometry = None
+        name_conflict = None
+        for candidate in candidates:
+            try:
+                candidate_geometry = json.loads(candidate["geometry_json"])
+            except (TypeError, ValueError):
+                candidate_geometry = None
+            if (candidate["name"] or "").casefold() == name.casefold():
+                name_conflict = candidate
+            if (candidate_geometry == geometry
+                    and (candidate["color"] or "").lower() == color):
+                duplicate = candidate
+                duplicate_geometry = candidate_geometry
+                break
         if duplicate:
             await db.rollback()
-            try:
-                duplicate_geometry = json.loads(duplicate["geometry_json"])
-            except (TypeError, ValueError):
-                duplicate_geometry = None
-            if duplicate_geometry != geometry or (duplicate["color"] or "").lower() != color:
-                return web.json_response({
-                    "error": "zone_name_conflict",
-                    "message": "Район с таким названием уже существует. Выберите его в списке или задайте другое название.",
-                }, status=409)
             return web.json_response({
                 "ok": True, "reused": True,
                 "zone": {"type": "Feature", "id": duplicate["id"],
@@ -9874,16 +10004,22 @@ async def api_crm_map_zone_create(request):
                                         "color": duplicate["color"],
                                         "updated_at": duplicate["updated_at"]}},
             })
+        if name_conflict:
+            await db.rollback()
+            return web.json_response({
+                "error": "zone_name_conflict",
+                "message": "Район с таким названием уже существует. Выберите его в списке или задайте другое название.",
+            }, status=409)
         sort_order = (await (await db.execute(
             "SELECT COALESCE(MAX(sort_order),0)+1 FROM crm_map_zones WHERE city_id=?",
             (city["id"],),
         )).fetchone())[0]
         cursor = await db.execute(
             "INSERT INTO crm_map_zones "
-            "(city_id,name,color,geometry_json,is_active,sort_order,created_by,created_at,updated_by,updated_at) "
-            "VALUES (?,?,?,?,1,?,?,?,?,?)",
+            "(city_id,name,color,geometry_json,is_active,sort_order,created_by,client_request_id,"
+            "created_at,updated_by,updated_at) VALUES (?,?,?,?,1,?,?,?,?,?,?)",
             (city["id"], name, color, json.dumps(geometry, ensure_ascii=False), sort_order,
-             admin_uid, now_iso, admin_uid, now_iso),
+             admin_uid, client_request_id, now_iso, admin_uid, now_iso),
         )
         row = await (await db.execute(
             "SELECT * FROM crm_map_zones WHERE id=?", (cursor.lastrowid,)
@@ -9985,6 +10121,58 @@ async def api_crm_map_zone_update(request):
                  "properties": {"id": zone_id, "name": name, "color": color,
                                 "updated_at": updated["updated_at"]}},
     })
+
+
+async def api_crm_map_zone_delete(request):
+    """Soft-delete an unused zone, preserving history and audit records."""
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    try:
+        zone_id = int(request.match_info["zone_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "zone_id"}, status=400)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        current = await (await db.execute(
+            "SELECT * FROM crm_map_zones WHERE id=? AND is_active=1",
+            (zone_id,),
+        )).fetchone()
+        if not current or current["city_id"] not in context["allowed_city_ids"]:
+            await db.rollback()
+            return web.json_response({"error": "not_found"}, status=404)
+        if _crm_scope_role(context):
+            await db.rollback()
+            return web.json_response({
+                "error": "scope",
+                "message": "Удалять постоянные районы может администратор города без ограничения по роли.",
+            }, status=403)
+        city_today = datetime.now(_city_tz(get_city(current["city_id"]))).date().isoformat()
+        active_assignment = await (await db.execute(
+            "SELECT a.id,a.work_date,u.full_name FROM crm_map_assignments a "
+            "LEFT JOIN users u ON u.user_id=a.user_id AND u.city_id=a.city_id "
+            "WHERE a.zone_id=? AND a.work_date>=? "
+            "ORDER BY a.work_date DESC,a.id DESC LIMIT 1",
+            (zone_id, city_today),
+        )).fetchone()
+        if active_assignment:
+            await db.rollback()
+            return web.json_response({
+                "error": "zone_in_use",
+                "message": "Сначала снимите сотрудников с этого района. История назначений останется сохранённой.",
+                "assignment": dict(active_assignment),
+            }, status=409)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE crm_map_zones SET is_active=0,updated_by=?,updated_at=? WHERE id=?",
+            (context["telegram_user"]["id"], now_iso, zone_id),
+        )
+        await _crm_audit(
+            db, context, "map.zone.archive", "map_zone", zone_id,
+            current["city_id"], before=dict(current), after={"is_active": 0},
+        )
+        await db.commit()
+    return web.json_response({"ok": True, "zone_id": zone_id})
 
 
 async def api_crm_map_assignment_create(request):
@@ -10098,12 +10286,6 @@ async def api_crm_map_assignment_create(request):
                 )
                 if actual_update.rowcount:
                     refresh_shift_ids.append(int(plan["actual_shift_id"]))
-            updated_plan = dict(plan)
-            updated_plan.update({"district": zone["name"], "updated_by": admin_uid,
-                                 "updated_at": now_iso})
-            await _enqueue_plan_change(
-                db, city["id"], user_id, plan["id"], ["district"], updated_plan,
-            )
         saved = await (await db.execute(
             "SELECT a.*,u.full_name,u.role,t.title AS task_title FROM crm_map_assignments a "
             "JOIN users u ON u.user_id=a.user_id AND u.city_id=a.city_id "
@@ -10111,6 +10293,13 @@ async def api_crm_map_assignment_create(request):
             "WHERE a.zone_id=? AND a.work_date=? AND a.user_id=?",
             (zone_id, work_date.isoformat(), user_id),
         )).fetchone()
+        if not current or int(current["zone_id"]) != zone_id:
+            await _enqueue_crm_notification(
+                db, city["id"], user_id, "map_assignment", saved["id"],
+                {"assignment_id": saved["id"], "work_date": work_date.isoformat(),
+                 "district": zone["name"], "start_time": plans[0]["start_time"],
+                 "end_time": plans[0]["end_time"]},
+            )
         await _crm_audit(
             db, context, "map.assignment.upsert", "map_assignment", saved["id"], city["id"],
             before=dict(current) if current else None, after=dict(saved),
@@ -13406,10 +13595,16 @@ async def _crm_task_event(db, task_id, actor_user_id, event_type, payload=None):
     return cursor.lastrowid
 
 
-def _crm_miniapp_link(task_id=None):
+def _crm_miniapp_link(task_id=None, start_param=None):
     username = (BOT_USERNAME or "").lstrip("@")
     base = f"https://t.me/{username}/{WEBAPP_SHORTNAME}" if username else WEBAPP_URL
-    return f"{base}?startapp=task_{task_id}" if task_id is not None else base
+    param = f"task_{task_id}" if task_id is not None else start_param
+    if not param:
+        return base
+    if username:
+        return f"{base}?startapp={param}"
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}tgWebAppStartParam={param}"
 
 
 def _bibipass_miniapp_link():
@@ -13432,6 +13627,14 @@ def _crm_human_date(value):
 def _crm_notification_text(kind, payload):
     details = str(payload.get("description") or payload.get("note") or "").strip()[:1200]
     district = str(payload.get("district") or "").strip()
+    if kind == "map_assignment":
+        return "\n".join([
+            "🗺 Вам назначен район на карте", "",
+            f"📅 {_crm_human_date(payload.get('work_date'))}",
+            f"🕒 {payload.get('start_time') or '—'}–{payload.get('end_time') or '—'}",
+            f"📍 {district or 'Район не указан'}", "",
+            "Откройте «Карту дня»: там видны границы района, рисунки, стрелки и задачи руководителя.",
+        ])
     if kind == "bibipass_level_reached":
         levels = list(payload.get("levels") or [])
         if not levels:
@@ -13759,6 +13962,8 @@ async def deliver_crm_notifications_once(limit=50):
         task_id = payload.get("task_id") if row["kind"] in {
             "task_assigned", "task_submitted", "task_blocked", "task_reviewed", "task_cancelled"
         } else None
+        app_link = (_crm_miniapp_link(start_param="map")
+                    if row["kind"] == "map_assignment" else _crm_miniapp_link(task_id))
         if row["kind"] == "bibipass_level_reached":
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🏆 Открыть БибиПасс", url=_bibipass_miniapp_link())],
@@ -13773,11 +13978,13 @@ async def deliver_crm_notifications_once(limit=50):
         elif row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
                              "shift_auto_started", "shift_plan_changed", "shift_extended_by_admin"}:
             button_text = "⚡ Открыть смену"
+        elif row["kind"] == "map_assignment":
+            button_text = "🗺 Открыть карту дня"
         else:
             button_text = "🗓 Открыть приложение"
         if not row["kind"].startswith("bibipass_"):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=button_text, url=_crm_miniapp_link(task_id))
+                InlineKeyboardButton(text=button_text, url=app_link)
             ]])
         try:
             sent_messages = []
@@ -14975,6 +15182,7 @@ async def start_api_server():
         app.router.add_post("/api/bibipass/check-membership", api_bibipass_check_membership)
         app.router.add_post("/api/bibipass/intro-seen", api_bibipass_intro_seen)
         app.router.add_get("/api/my-schedule", api_my_schedule)
+        app.router.add_get("/api/my-map", api_my_map)
         app.router.add_post("/api/settings", api_settings)
         app.router.add_patch(
             "/api/planned-shifts/{plan_id}", api_employee_planned_shift_update
@@ -15007,6 +15215,7 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/map", api_crm_map)
         app.router.add_post("/api/admin/crm/map/zones", api_crm_map_zone_create)
         app.router.add_patch("/api/admin/crm/map/zones/{zone_id}", api_crm_map_zone_update)
+        app.router.add_delete("/api/admin/crm/map/zones/{zone_id}", api_crm_map_zone_delete)
         app.router.add_post("/api/admin/crm/map/assignments", api_crm_map_assignment_create)
         app.router.add_delete(
             "/api/admin/crm/map/assignments/{assignment_id}", api_crm_map_assignment_delete

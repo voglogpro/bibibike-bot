@@ -466,6 +466,7 @@
     }
     .status.on .dot::after{display:none}.spin{animation:none!important}
   }
+  .employee-map-card{padding:0;overflow:hidden}.employee-map-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px}.employee-map-summary{margin:0 14px 12px;padding:11px 12px;border:1px solid rgba(49,216,67,.28);border-radius:14px;background:#102719}.employee-map-summary b,.employee-map-summary span{display:block}.employee-map-summary b{font-size:14px}.employee-map-summary span{margin-top:4px;color:var(--muted);font-size:10px;line-height:1.4}.employee-map-canvas{height:min(62dvh,560px);min-height:420px;background:#101a13}.employee-map-canvas.leaflet-container{font-family:Inter,sans-serif}.employee-map-canvas .leaflet-control-attribution{font-size:8px}.employee-map-legend{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px;color:var(--muted);font-size:9px}.employee-map-legend span{display:flex;align-items:center;gap:5px}.employee-map-legend i{width:10px;height:10px;border-radius:3px;background:var(--legend-color,#31d843)}.employee-map-pin{width:28px;height:28px;border:2px solid #fff;border-radius:50% 50% 50% 7px;background:var(--pin-color,#ff5d66);color:#fff;display:grid;place-items:center;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,.42)}.employee-map-pin b{transform:rotate(45deg);font-size:12px}.employee-map-state{padding:24px 16px;text-align:center;color:var(--muted);font-size:12px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -702,6 +703,18 @@
       </div>
     </div>
 
+    <!-- Рабочая карта сотрудника: постоянные зоны и оперативный слой текущего дня. -->
+    <div id="tab-map" class="page hidden">
+      <div class="panel employee-map-card">
+        <div class="employee-map-head">
+          <button class="mini" id="myMapBack">← Профиль</button>
+          <div class="formhead">Карта дня</div>
+          <button class="mini" id="myMapReload">Обновить</button>
+        </div>
+        <div id="myMapRoot"><div class="employee-map-state">Загружаю районы и отметки…</div></div>
+      </div>
+    </div>
+
     <!-- ================= ВКЛАДКА: ПРОФИЛЬ ================= -->
     <div id="tab-profile" class="page hidden">
       <div class="panel">
@@ -743,6 +756,11 @@
           <button class="profile-link" id="profileScheduleOpen">
             <span class="profile-link-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4m8-4v4M3 10h18"/></svg></span>
             <span class="profile-link-copy"><b>Мой календарь</b><small>Плановые смены, подработки и районы</small></span>
+            <span class="profile-link-end"><span class="chev">›</span></span>
+          </button>
+          <button class="profile-link" id="profileMapOpen">
+            <span class="profile-link-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15m6-12v15"/></svg></span>
+            <span class="profile-link-copy"><b>Карта дня</b><small>Ваш район, задачи, стрелки и рисунки руководителя на сегодня</small></span>
             <span class="profile-link-end"><span class="chev">›</span></span>
           </button>
         </div>
@@ -1430,6 +1448,7 @@ function hidePages(){
   document.querySelectorAll('.page').forEach(page=>{MOTION_IN_CLASSES.forEach(name=>page.classList.remove(name));page.classList.add('hidden')});
 }
 function openProfile(){
+  destroyEmployeeMap();
   selectBottomTab('profile');
   showPage('tab-profile','back');
   if(!histLoaded)loadHistory();
@@ -1448,6 +1467,16 @@ function openMySchedule(){
   showPage('tab-more','forward');
   loadMySchedule();
 }
+let employeeMapInstance=null,employeeMapLayers=[],employeeLeafletPromise=null;
+function ensureEmployeeLeaflet(){
+  if(window.L)return Promise.resolve(window.L);if(employeeLeafletPromise)return employeeLeafletPromise;
+  employeeLeafletPromise=new Promise((resolve,reject)=>{let link=document.querySelector('link[data-employee-leaflet]');if(!link){link=document.createElement('link');link.rel='stylesheet';link.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';link.dataset.employeeLeaflet='1';document.head.appendChild(link)}let script=document.querySelector('script[data-employee-leaflet]');if(script){script.addEventListener('load',()=>window.L?resolve(window.L):reject(new Error('Карта не запустилась.')),{once:true});script.addEventListener('error',()=>reject(new Error('Не удалось загрузить карту.')),{once:true});return}script=document.createElement('script');script.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';script.async=true;script.dataset.employeeLeaflet='1';script.onload=()=>window.L?resolve(window.L):reject(new Error('Карта не запустилась.'));script.onerror=()=>reject(new Error('Не удалось загрузить карту.'));document.head.appendChild(script)});return employeeLeafletPromise.catch(error=>{employeeLeafletPromise=null;throw error})
+}
+function destroyEmployeeMap(){employeeMapLayers.forEach(layer=>{try{layer.remove()}catch(_){}});employeeMapLayers=[];if(employeeMapInstance){try{employeeMapInstance.remove()}catch(_){}employeeMapInstance=null}}
+function employeeMapAnnotationLabel(item){const labels={attention:'Важно',empty_parking:'Пустая парковка',pickup:'Забрать байки',service:'Нужен сервис',direction:'Направление',drawing:'Рисунок'};return item.note||labels[item.variant]||'Отметка руководителя'}
+function openMyMap(){selectBottomTab('profile');showPage('tab-map','forward');loadMyMap()}
+async function loadMyMap(){destroyEmployeeMap();const root=$('myMapRoot');root.innerHTML='<div class="employee-map-state">Загружаю районы и отметки…</div>';try{const data=await api('/api/my-map');if(!data.supported){root.innerHTML=`<div class="employee-map-state">${esc(data.message||'Карта этого города скоро появится.')}</div>`;return}const assignment=(data.assignments||[])[0],zoneCount=(data.zones?.features||[]).length,markCount=(data.annotations||[]).length;root.innerHTML=`<div class="employee-map-summary"><b>${assignment?`Ваш район: ${esc(assignment.zone_name)}`:'Район на сегодня ещё не назначен'}</b><span>${esc(data.city?.name||'')} · ${esc(taskDate(data.date))} · ${zoneCount} районов · ${markCount} отметок. Рисунки и задания обновляются руководителем в течение дня.</span></div><div class="employee-map-canvas" id="myMapCanvas" aria-label="Рабочая карта на сегодня"></div><div class="employee-map-legend"><span><i></i>районы города</span><span><i style="--legend-color:#fff"></i>ваш район</span><span><i style="--legend-color:#ff5d66"></i>задачи и отметки</span></div>`;await initEmployeeMap(data)}catch(error){root.innerHTML=`<div class="employee-map-state">${esc(error.message||'Не удалось загрузить карту.')}<br>Попробуйте обновить экран.</div>`}}
+async function initEmployeeMap(data){const L=await ensureEmployeeLeaflet(),container=$('myMapCanvas');if(!container)return;const center=data.map?.center||[38.976,45.035],map=L.map(container,{zoomControl:true,preferCanvas:true}).setView([Number(center[1]),Number(center[0])],Number(data.map?.zoom||11));employeeMapInstance=map;const key=data.map?.maptiler_api_key,tiles=key?L.tileLayer(`https://api.maptiler.com/maps/streets-v4/{z}/{x}/{y}.png?key=${encodeURIComponent(key)}`,{tileSize:512,zoomOffset:-1,maxZoom:20,attribution:'&copy; MapTiler &copy; OpenStreetMap contributors'}):L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});tiles.addTo(map);employeeMapLayers.push(tiles);const assignedZoneIds=new Set((data.assignments||[]).map(item=>Number(item.zone_id))),zoneLayer=L.geoJSON(data.zones,{style:feature=>{const mine=assignedZoneIds.has(Number(feature.properties?.id));return {color:mine?'#ffffff':feature.properties?.color||'#31d843',weight:mine?5:2.5,fillColor:feature.properties?.color||'#31d843',fillOpacity:mine?.34:.17}},onEachFeature:(feature,layer)=>layer.bindPopup(`<b>${esc(feature.properties?.name||'Район')}</b>${assignedZoneIds.has(Number(feature.properties?.id))?'<br>Ваш район на сегодня':''}`)}).addTo(map);employeeMapLayers.push(zoneLayer);for(const item of data.annotations||[]){const geometry=item.geometry||{},label=employeeMapAnnotationLabel(item),color=item.color||'#ff5d66';if(item.kind==='marker'&&geometry.coordinates){const icon=L.divIcon({className:'',html:`<div class="employee-map-pin" style="--pin-color:${esc(color)}"><b>!</b></div>`,iconSize:[30,34],iconAnchor:[15,31]}),marker=L.marker([geometry.coordinates[1],geometry.coordinates[0]],{icon}).addTo(map).bindPopup(`<b>${esc(label)}</b>`);employeeMapLayers.push(marker)}else if(item.kind==='arrow'&&geometry.coordinates?.length>=2){const line=L.polyline(geometry.coordinates.map(point=>[point[1],point[0]]),{color,weight:item.variant==='drawing'?6:5,opacity:.95,dashArray:item.variant==='drawing'?null:'10 6'}).addTo(map).bindPopup(`<b>${esc(label)}</b>`);employeeMapLayers.push(line)}}requestAnimationFrame(()=>map.invalidateSize());setTimeout(()=>{if(employeeMapInstance===map)map.invalidateSize()},250)}
 function bibipassNumber(value){
   const number=Number(value||0);return Number.isInteger(number)?String(number):number.toFixed(1).replace('.',',');
 }
@@ -2412,6 +2441,9 @@ $('todoAdd').onclick=openTodoCreate;$('todoCreateBack').onclick=showTodoMain;$('
 $('todoProfileBack').onclick=openProfile;
 $('profileTasksOpen').onclick=()=>openTasks();
 $('profileScheduleOpen').onclick=openMySchedule;
+$('profileMapOpen').onclick=openMyMap;
+$('myMapBack').onclick=openProfile;
+$('myMapReload').onclick=loadMyMap;
 $('profileBibipassOpen').onclick=openBibipass;
 $('shiftBibipassPromo').onclick=openBibipass;
 $('bibipassBack').onclick=openProfile;
@@ -2797,6 +2829,7 @@ load().then(async ok=>{
   await loadMyTasks(true);
   const startParam=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.start_param)||new URLSearchParams(location.search).get('tgWebAppStartParam')||'';
   if(String(startParam)==='bibipass')openBibipass();
+  if(String(startParam)==='map')openMyMap();
   const match=String(startParam).match(/^task_(\d+)$/);
   if(match){
     const taskId=Number(match[1]);

@@ -241,6 +241,50 @@ async def run():
         }, admin_uid=900002))
         assert duplicate_zone.status == 200 and payload(duplicate_zone)["reused"] is True
         assert payload(duplicate_zone)["zone"]["properties"]["id"] == south_zone_id
+        request_zone_body = {
+            "city_id": city["id"], "name": "Тестовый дубль", "color": "#48b7ff",
+            "client_request_id": "zone-request-0001",
+            "geometry": {"type": "Polygon", "coordinates": [[
+                [39.03, 45.01], [39.05, 45.01], [39.05, 45.03],
+                [39.03, 45.03], [39.03, 45.01],
+            ]]},
+        }
+        request_zone = await bot.api_crm_map_zone_create(Request(body=request_zone_body))
+        replay_zone = await bot.api_crm_map_zone_create(Request(body=request_zone_body))
+        assert request_zone.status == 201 and replay_zone.status == 200
+        assert payload(request_zone)["zone"]["id"] == payload(replay_zone)["zone"]["id"]
+        duplicate_geometry_zone = await bot.api_crm_map_zone_create(Request(
+            body=dict(request_zone_body, name="Другое имя", client_request_id="zone-request-0002"),
+            admin_uid=900002,
+        ))
+        assert duplicate_geometry_zone.status == 200
+        assert payload(duplicate_geometry_zone)["zone"]["id"] == payload(request_zone)["zone"]["id"]
+        removed_duplicate_zone = await bot.api_crm_map_zone_delete(Request(
+            match={"zone_id": str(payload(request_zone)["zone"]["id"])},
+        ))
+        assert removed_duplicate_zone.status == 200
+        concurrent_zone_geometry = {"type": "Polygon", "coordinates": [[
+            [39.06, 45.01], [39.08, 45.01], [39.08, 45.03],
+            [39.06, 45.03], [39.06, 45.01],
+        ]]}
+        concurrent_zones = await asyncio.gather(
+            bot.api_crm_map_zone_create(Request(body={
+                "city_id": city["id"], "name": "Одновременный район",
+                "color": "#ffb32c", "geometry": concurrent_zone_geometry,
+                "client_request_id": "zone-concurrent-0001",
+            }, admin_uid=900001)),
+            bot.api_crm_map_zone_create(Request(body={
+                "city_id": city["id"], "name": "Одновременный район",
+                "color": "#ffb32c", "geometry": concurrent_zone_geometry,
+                "client_request_id": "zone-concurrent-0002",
+            }, admin_uid=900002)),
+        )
+        assert sorted(response.status for response in concurrent_zones) == [200, 201]
+        concurrent_zone_ids = {payload(response)["zone"]["id"] for response in concurrent_zones}
+        assert len(concurrent_zone_ids) == 1
+        await bot.api_crm_map_zone_delete(Request(
+            match={"zone_id": str(concurrent_zone_ids.pop())},
+        ))
         assigned = await bot.api_crm_map_assignment_create(Request(body={
             "city_id": city["id"], "date": today, "zone_id": zone_id,
             "user_id": 910002, "note": "Проверить зону",
@@ -335,6 +379,18 @@ async def run():
         })))
         assert clean_tomorrow["assignments"] == [] and clean_tomorrow["annotations"] == []
         assert clean_tomorrow["zones"] == annotated["zones"]
+        async def fake_employee_auth(_request):
+            return {"id": 910002, "username": "map_worker"}
+        bot._auth_user = fake_employee_auth
+        employee_map = payload(await bot.api_my_map(Request()))
+        assert employee_map["date"] == today and employee_map["supported"] is True
+        assert employee_map["zones"] == annotated["zones"]
+        assert [item["user_id"] for item in employee_map["assignments"]] == [910002]
+        assert {item["variant"] for item in employee_map["annotations"]} == {
+            "empty_parking", "direction", "drawing",
+        }
+        employee_wrong_day = await bot.api_my_map(Request(query={"date": tomorrow}))
+        assert employee_wrong_day.status == 400
         async with bot.db_connect() as db:
             map_tasks = (await (await db.execute(
                 "SELECT COUNT(*) FROM crm_tasks WHERE created_via='map' AND status='published'"
@@ -343,7 +399,16 @@ async def run():
                 "SELECT COUNT(*) FROM crm_notification_outbox "
                 "WHERE kind='task_assigned' AND user_id=910002"
             )).fetchone())[0]
-        assert map_tasks == 2 and map_alerts == 2
+            district_alerts = (await (await db.execute(
+                "SELECT COUNT(*) FROM crm_notification_outbox "
+                "WHERE kind='map_assignment' AND user_id=910002"
+            )).fetchone())[0]
+        assert map_tasks == 2 and map_alerts == 2 and district_alerts == 2
+        assert "Карту дня" in bot._crm_notification_text(
+            "map_assignment", {"work_date": today, "district": "Юг 2",
+                               "start_time": "09:00", "end_time": "19:00"},
+        )
+        assert "startapp=map" in bot._crm_miniapp_link(start_param="map")
         concurrent_body = {
             "city_id": city["id"], "date": today, "kind": "marker",
             "variant": "service",
@@ -407,6 +472,10 @@ async def run():
             match={"assignment_id": str(assignment_id)}
         ))
         assert removed.status == 200
+        archived_south = await bot.api_crm_map_zone_delete(Request(
+            match={"zone_id": str(south_zone_id)},
+        ))
+        assert archived_south.status == 200
         async with bot.db_connect() as db:
             cleared_district = (await (await db.execute(
                 "SELECT district FROM crm_planned_shifts WHERE user_id=910002 AND work_date=?",

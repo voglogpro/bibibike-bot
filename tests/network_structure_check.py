@@ -101,20 +101,47 @@ async def main():
         assert admin_payload["admin"]["user_id"] == 900003
         assert admin_payload["admin"]["telegram_username"] == "new_manager"
         assert admin_payload["admin"]["has_web_password"] is True
+        assert admin_payload["admin"]["web_password"] == "manager-site-password"
+        assert admin_payload["admin"]["web_password_recoverable"] is True
+        assert admin_saved.headers["Cache-Control"] == "no-store"
         assert admin_payload["notification_queued"] is True
         async with bot.db_connect() as db:
             credential = await (await db.execute(
-                "SELECT password_digest FROM crm_web_credentials WHERE user_id=?", (900003,)
+                "SELECT password_digest,password_ciphertext FROM crm_web_credentials WHERE user_id=?",
+                (900003,),
             )).fetchone()
         assert credential and credential[0] != "manager-site-password"
+        assert credential[1] != "manager-site-password"
+        assert bot._crm_web_password_decrypt(credential[1]) == "manager-site-password"
+        owner_after_password = await bot.api_crm_network_structure(Request(900001))
+        owner_admin = next(
+            item for item in json.loads(owner_after_password.text)["admins"]
+            if item["user_id"] == 900003
+        )
+        assert owner_admin["web_password"] == "manager-site-password"
+        assert owner_after_password.headers["Cache-Control"] == "no-store"
+        viewer_after_password = await bot.api_crm_network_structure(Request(900002))
+        viewer_admin = next(
+            item for item in json.loads(viewer_after_password.text)["admins"]
+            if item["user_id"] == 900003
+        )
+        assert "web_password" not in viewer_admin
         web_login = await bot.api_admin_login(WebRequest({
             "password": "manager-site-password",
         }))
         web_payload = json.loads(web_login.text)
         assert web_login.status == 200 and web_payload["role"] == "city_manager"
         assert [item["id"] for item in web_payload["cities"]] == [krasnodar["id"]]
+        assert web_payload["remembered"] is True
+        assert web_payload["expires_at"] is None
+        remembered_payload = bot._verify_admin_token(web_payload["token"])
+        assert remembered_payload["uid"] == 900003
+        assert remembered_payload["remember"] is True and remembered_payload["exp"] == 0
         web_user = await bot._admin_user(WebRequest(token=web_payload["token"]))
         assert web_user["id"] == 900003 and web_user["web_login"] is True
+        await bot.init_db()
+        remembered_after_restart = await bot._admin_user(WebRequest(token=web_payload["token"]))
+        assert remembered_after_restart["id"] == 900003
         async with bot.db_connect() as db:
             notice = await (await db.execute(
                 "SELECT kind,payload_json FROM crm_notification_outbox WHERE user_id=?",
@@ -137,6 +164,7 @@ async def main():
         }))
         assert cleared.status == 200
         assert json.loads(cleared.text)["admin"]["has_web_password"] is False
+        assert await bot._admin_user(WebRequest(token=web_payload["token"])) is None
         denied_web_login = await bot.api_admin_login(WebRequest({
             "password": "manager-site-password",
         }))

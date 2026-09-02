@@ -53,6 +53,7 @@ from aiogram.types import (
     WebAppInfo, FSInputFile, InputMediaPhoto,
 )
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from cryptography.fernet import Fernet, InvalidToken
 
 # Необязательно: подхватываем .env, если он есть (на BotHost переменные и так заданы).
 try:
@@ -253,7 +254,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-09-02 · сайт и Mini App синхронизированы"
+BUILD_VERSION = "2026-09-02 · Telegram-вход и пароли сайта"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1095,12 +1096,13 @@ async def init_db():
             )
         """)
         # Отдельные пароли позволяют открыть CRM в обычном браузере без
-        # Telegram. В БД хранится только HMAC-отпечаток; один пароль всегда
-        # соответствует одному администратору и его серверным правам.
+        # Telegram. HMAC-отпечаток проверяет вход, зашифрованная копия доступна
+        # для просмотра только владельцу; пароль связан с серверными правами.
         await db.execute("""
             CREATE TABLE IF NOT EXISTS crm_web_credentials (
                 user_id INTEGER PRIMARY KEY,
                 password_digest TEXT NOT NULL UNIQUE,
+                password_ciphertext TEXT,
                 updated_at TEXT NOT NULL,
                 updated_by INTEGER NOT NULL
             )
@@ -1646,6 +1648,7 @@ async def init_db():
             "ALTER TABLE manual_reports ADD COLUMN pay_amount_snap REAL",
             "ALTER TABLE work_message_links ADD COLUMN last_event_version REAL",
             "ALTER TABLE admin_accounts ADD COLUMN role_scope TEXT",
+            "ALTER TABLE crm_web_credentials ADD COLUMN password_ciphertext TEXT",
             "ALTER TABLE crm_tasks ADD COLUMN requires_photo INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE crm_task_attachments ADD COLUMN kind TEXT NOT NULL DEFAULT 'brief'",
             "ALTER TABLE crm_task_attachments ADD COLUMN assignee_user_id INTEGER",
@@ -8171,10 +8174,30 @@ def _crm_web_password_digest(password):
     return hmac.new(key, str(password).encode(), hashlib.sha256).hexdigest()
 
 
-def _issue_admin_token(uid, session_version=1):
-    expires = int(datetime.now(timezone.utc).timestamp()) + ADMIN_SESSION_TTL_SEC
+def _crm_web_password_cipher():
+    """Шифр для показа личного пароля исключительно владельцу CRM."""
+    material = (ADMIN_SESSION_SECRET or BOT_TOKEN or ADMIN_PASSWORD).encode()
+    key = hashlib.sha256(material + b"\0crm-web-password-display").digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def _crm_web_password_encrypt(password):
+    return _crm_web_password_cipher().encrypt(str(password).encode()).decode()
+
+
+def _crm_web_password_decrypt(ciphertext):
+    if not ciphertext:
+        return None
+    try:
+        return _crm_web_password_cipher().decrypt(str(ciphertext).encode()).decode()
+    except (InvalidToken, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _issue_admin_token(uid, session_version=1, persistent=False):
+    expires = 0 if persistent else int(datetime.now(timezone.utc).timestamp()) + ADMIN_SESSION_TTL_SEC
     payload = json.dumps(
-        {"uid": uid, "exp": expires, "ver": int(session_version)},
+        {"uid": uid, "exp": expires, "ver": int(session_version), "remember": bool(persistent)},
         separators=(",", ":"),
     ).encode()
     encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
@@ -8192,9 +8215,10 @@ def _verify_admin_token(token, uid=None):
     try:
         padding = "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
-        if (uid is not None and int(payload.get("uid", 0)) != int(uid)) or int(payload.get("exp", 0)) < int(
-            datetime.now(timezone.utc).timestamp()
-        ):
+        expires = int(payload.get("exp", 0))
+        if (expires <= 0 and not payload.get("remember")) or (
+            uid is not None and int(payload.get("uid", 0)) != int(uid)
+        ) or (expires > 0 and expires < int(datetime.now(timezone.utc).timestamp())):
             return None
         return payload
     except Exception:
@@ -8206,9 +8230,14 @@ _admin_login_failures = {}
 
 async def _admin_user(request):
     tg_user = await _auth_user(request)
+    if tg_user:
+        # Внутри Telegram личность уже подтверждена подписанным initData.
+        # Доступ получают только явно активные записи admin_accounts.
+        account = await _admin_account(tg_user["id"])
+        return tg_user if account else None
     token_payload = _verify_admin_token(
         request.headers.get("X-Admin-Token", ""),
-        tg_user["id"] if tg_user else None,
+        None,
     )
     if not token_payload:
         return None
@@ -8220,8 +8249,6 @@ async def _admin_user(request):
         )).fetchone()
     if not account or int(account["session_version"] or 1) != int(token_payload.get("ver", 0)):
         return None
-    if tg_user:
-        return tg_user
     user = await get_user(uid) or {}
     return {
         "id": uid,
@@ -8380,14 +8407,14 @@ async def api_admin_login(request):
     password = body.get("password")
     account = None
     uid = int(tg_user["id"]) if tg_user else None
+    personal_password_login = False
     global_password = bool(
         isinstance(password, str) and hmac.compare_digest(password, ADMIN_PASSWORD)
     )
     if global_password and tg_user:
-        account, access_error = await _password_crm_account(uid)
-        if access_error is not None:
-            error_code, message = access_error
-            return web.json_response({"error": error_code, "message": message}, status=409)
+        # Общий пароль больше не создаёт права. В Mini App достаточно Telegram,
+        # но пользователь уже должен быть добавлен владельцем в CRM.
+        account = await _admin_account(uid)
     elif global_password and CRM_OWNER_USER_ID:
         uid = int(CRM_OWNER_USER_ID)
         account = await _admin_account(uid)
@@ -8395,6 +8422,7 @@ async def api_admin_login(request):
         account = await _crm_personal_password_account(password, uid)
         if account:
             uid = int(account["user_id"])
+            personal_password_login = True
     if not account or uid is None:
         failures.append(now_ts)
         _admin_login_failures[login_key] = failures
@@ -8409,12 +8437,16 @@ async def api_admin_login(request):
             status=409,
         )
     _admin_login_failures.pop(login_key, None)
-    token, expires = _issue_admin_token(uid, account["session_version"])
+    remember = personal_password_login and body.get("remember", True) is not False
+    token, expires = _issue_admin_token(
+        uid, account["session_version"], persistent=remember,
+    )
     city_ids = sorted(CITIES_BY_ID) if account["role"] == "network_admin" else account["city_ids"]
-    return web.json_response({
+    response = web.json_response({
         "ok": True,
         "token": token,
-        "expires_at": expires,
+        "expires_at": expires or None,
+        "remembered": remember,
         "role": account["role"],
         "role_scope": account.get("role_scope"),
         "can_manage_network": _crm_can_manage_network(uid),
@@ -8427,6 +8459,8 @@ async def api_admin_login(request):
             for item_id in city_ids if get_city(item_id)
         ],
     })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def approve_manual_report(report_id, start_time, end_time, expected_updated_at=None,
@@ -14918,7 +14952,9 @@ async def api_crm_network_structure(request):
         admin_rows = await (await db.execute(
             "SELECT a.*,u.full_name,u.telegram_username,"
             "EXISTS(SELECT 1 FROM crm_web_credentials c WHERE c.user_id=a.user_id) "
-            "AS has_web_password FROM admin_accounts a "
+            "AS has_web_password,"
+            "(SELECT c.password_ciphertext FROM crm_web_credentials c WHERE c.user_id=a.user_id) "
+            "AS password_ciphertext FROM admin_accounts a "
             "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.role,a.user_id"
         )).fetchall()
         permission_rows = await (await db.execute(
@@ -14946,17 +14982,25 @@ async def api_crm_network_structure(request):
     for row in permission_rows:
         permissions.setdefault(row["user_id"], []).append(row["city_id"])
     admins = []
+    can_manage = _crm_can_manage_network(context["telegram_user"]["id"])
     for row in admin_rows:
-        item = dict(row); item["city_ids"] = permissions.get(item["user_id"], [])
+        item = dict(row); ciphertext = item.pop("password_ciphertext", None)
+        item["city_ids"] = permissions.get(item["user_id"], [])
         item["is_owner"] = item["user_id"] == CRM_OWNER_USER_ID
+        if can_manage:
+            item["web_password"] = _crm_web_password_decrypt(ciphertext)
+            item["web_password_recoverable"] = bool(item["web_password"])
         admins.append(item)
-    return web.json_response({
+    response = web.json_response({
         "ok": True,
         "can_manage": _crm_can_manage_network(context["telegram_user"]["id"]),
         "owner_configured": bool(CRM_OWNER_USER_ID),
         "cities": cities,
         "admins": admins,
     })
+    if can_manage:
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def api_crm_network_structure_save(request):
@@ -15242,6 +15286,7 @@ async def api_crm_admin_upsert(request):
             await db.execute("DELETE FROM crm_web_credentials WHERE user_id=?", (user_id,))
         elif web_password:
             password_digest = _crm_web_password_digest(web_password)
+            password_ciphertext = _crm_web_password_encrypt(web_password)
             collision = await (await db.execute(
                 "SELECT user_id FROM crm_web_credentials WHERE password_digest=? AND user_id<>?",
                 (password_digest, user_id),
@@ -15253,11 +15298,14 @@ async def api_crm_admin_upsert(request):
                     "message": "Этот пароль уже назначен другому администратору.",
                 }, status=409)
             await db.execute(
-                "INSERT INTO crm_web_credentials (user_id,password_digest,updated_at,updated_by) "
-                "VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
-                "password_digest=excluded.password_digest,updated_at=excluded.updated_at,"
-                "updated_by=excluded.updated_by",
-                (user_id, password_digest, now_iso, context["telegram_user"]["id"]),
+                "INSERT INTO crm_web_credentials "
+                "(user_id,password_digest,password_ciphertext,updated_at,updated_by) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+                "password_digest=excluded.password_digest,"
+                "password_ciphertext=excluded.password_ciphertext,"
+                "updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+                (user_id, password_digest, password_ciphertext, now_iso,
+                 context["telegram_user"]["id"]),
             )
         after_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
         after = dict(after_row); after["city_ids"] = sorted(set(city_ids))
@@ -15267,6 +15315,10 @@ async def api_crm_admin_upsert(request):
         after["has_web_password"] = bool(await (await db.execute(
             "SELECT 1 FROM crm_web_credentials WHERE user_id=?", (user_id,)
         )).fetchone())
+        password_row = await (await db.execute(
+            "SELECT password_ciphertext FROM crm_web_credentials WHERE user_id=?", (user_id,)
+        )).fetchone()
+        display_password = _crm_web_password_decrypt(password_row[0] if password_row else None)
         before_signature = None if before is None else (
             before.get("role"), before.get("role_scope"), int(before.get("is_active", 1)),
             tuple(before.get("city_ids") or []),
@@ -15292,8 +15344,17 @@ async def api_crm_admin_upsert(request):
             await _commit_and_wake(db, _notification_wakeup)
         else:
             await db.commit()
-    return web.json_response({"ok": True, "admin": after,
-                              "notification_queued": notification_queued})
+    response_admin = {
+        **after, "web_password": display_password,
+        "web_password_recoverable": bool(display_password),
+    }
+    response = web.json_response({
+        "ok": True,
+        "admin": response_admin,
+        "notification_queued": notification_queued,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def api_shift_comment(request):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""BibiBike Bot — единый структурированный файл приложения.
+"""Бот бибибайк — единый структурированный файл приложения.
 
 КАРТА ФАЙЛА — ищи метку через Ctrl+F:
 
@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-08-31 · рабочие зоны Краснодара"
+BUILD_VERSION = "2026-09-02 · карта без перезагрузки"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -570,7 +570,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
-print("== BibiBike Bot: процесс стартовал, читаю настройки ==", flush=True)
+print("== Бот бибибайк: процесс стартовал, читаю настройки ==", flush=True)
 
 # Проверка наличия токена перед запуском
 if not BOT_TOKEN:
@@ -4468,7 +4468,7 @@ async def post_app_button(message: Message):
         return
     m = await bot.send_message(
         message.chat.id,
-        "💰 <b>BibiBike</b> — смена, заработок и рейтинг в приложении.",
+        "💰 <b>бибибайк</b> — смена, заработок и рейтинг в приложении.",
         message_thread_id=message.message_thread_id,
         parse_mode="HTML",
         reply_markup=markup,
@@ -5973,7 +5973,7 @@ async def cmd_chat(message: Message, city):
         except:
             pass
         msg = await message.answer(
-            "BibiBike - команды:\n\n"
+            "бибибайк — команды:\n\n"
             "Начать смену (район — любое слово или без него):\n"
             "/09:00 фмр\n/09:00 весь город, загрузил 35\n/09:00\n\n"
             "Закончить смену:\n/18:00\n/18:00 Комментарий\n\n"
@@ -6725,7 +6725,7 @@ async def _bibipass_payload(uid, verify=True, force=False):
         "channel": {
             "chat": BIBIPASS_CHANNEL_CHAT,
             "url": BIBIPASS_CHANNEL_URL,
-            "title": "Общий канал команды BibiBike",
+            "title": "Общий канал команды бибибайк",
         },
         "member": bool(member),
         "joined": bool(participant.get("joined_at")),
@@ -13758,7 +13758,7 @@ def _crm_notification_text(kind, payload):
         return "\n".join(lines)
     if kind == "bibipass_announcement":
         return "\n".join([
-            "🏁 Завтра стартует квест сотрудников BibiBike!", "",
+            "🏁 Завтра стартует квест сотрудников бибибайк!", "",
             f"🕘 Старт: {payload.get('start_label') or '26.08.2026 в 09:00 МСК'}",
             f"⏳ Продолжительность: {payload.get('duration_days') or 20} дней", "",
             "Выполняй привычные рабочие действия, набирай XP, проходи 20 уровней "
@@ -13771,7 +13771,7 @@ def _crm_notification_text(kind, payload):
         ])
     if kind == "bibipass_started":
         return "\n".join([
-            "🚀 Квест сотрудников BibiBike начался!", "",
+            "🚀 Квест сотрудников бибибайк начался!", "",
             "У тебя есть 20 дней, чтобы пройти БибиПасс и заработать награды.",
             f"🏁 Дедлайн: {payload.get('end_label') or '15.09.2026 в 09:00 МСК'}", "",
             "Первые XP уже можно набирать. Если участие подтверждено — просто открой "
@@ -13818,7 +13818,7 @@ def _crm_notification_text(kind, payload):
         if not payload.get("is_active", True):
             return (
                 "🔒 Доступ к CRM отключён\n\n"
-                "Ваш административный доступ к BibiBike CRM был отключён владельцем сети."
+                "Ваш административный доступ к CRM бибибайк был отключён владельцем сети."
             )
         role_labels = {
             "city_viewer": "Наблюдатель — только просмотр",
@@ -13826,7 +13826,7 @@ def _crm_notification_text(kind, payload):
             "network_admin": "Администратор сети",
         }
         lines = [
-            "🔑 Вам открыт доступ к BibiBike CRM", "",
+            "🔑 Вам открыт доступ к CRM бибибайк", "",
             f"👤 Роль: {role_labels.get(payload.get('role'), payload.get('role') or 'Администратор')}",
         ]
         cities = [str(value) for value in payload.get("cities") or [] if value]
@@ -15235,7 +15235,7 @@ async def serve_index(request):
             "Pragma": "no-cache",
             "Expires": "0",
         })
-    return web.Response(text="BibiBike API ok")
+    return web.Response(text="API бибибайк работает")
 
 
 async def serve_crm(request):
@@ -15244,7 +15244,7 @@ async def serve_crm(request):
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache", "Expires": "0",
         })
-    return web.Response(text="BibiBike CRM frontend is not installed", status=404)
+    return web.Response(text="Интерфейс CRM бибибайк не установлен", status=404)
 
 async def api_health(request):
     return web.json_response({
@@ -15450,7 +15450,7 @@ async def main():
     dp.include_router(work_router)
 
     logger.info("=" * 50)
-    logger.info("BibiBike Bot запущен! (живое сообщение + NPB + роль Чарджер)")
+    logger.info("Бот бибибайк запущен! (живое сообщение + NPB + роль Чарджер)")
     logger.info(f"Версия сборки: {BUILD_VERSION}")
     for city in CITIES_BY_ID.values():
         logger.info(

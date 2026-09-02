@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Регрессионная проверка BibiBike без обращения к Telegram и BotHost.
+"""Регрессионная проверка бибибайк без обращения к Telegram и BotHost.
 
 Запуск:
     python tests/regression_check.py main-4.py

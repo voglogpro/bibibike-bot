@@ -40,6 +40,15 @@ REQUIRED = (
     'function renderMapZoneLayer(',
     'function mapZoneRevision(',
     'function mapSharedRevision(',
+    'function applyMapZoneLive(',
+    'function applyMapAssignmentLive(',
+    'function applyMapAnnotationLive(',
+    'function redrawMapLive(',
+    'clearMapEditor();applyMapZoneLive(result.zone)',
+    'clearMapEditor();applyMapAnnotationLive(result.annotation)',
+    'removeMapAssignmentLive(id)',
+    'removeMapZoneLive(id)',
+    'removeMapAnnotationLive(id)',
     "data.bike_provider?.configured?Math.max(5,n(data.bike_provider.refresh_seconds)||15):10",
     "result.deduplicated?'Такая отметка уже есть на карте.'",
     "body.base_updated_at=state.mapZoneVersion",
@@ -95,6 +104,10 @@ def main():
         'answer=prompt(',
         "confirm('Убрать сотрудника из этого района",
         "confirm('Убрать эту отметку с карты",
+        "toast('Район закреплён за сменой сотрудника.');state.mapZoneId=Number(zoneId);await loadMap()",
+        "toast('Район снят со смены.');await loadMap()",
+        "toast('Отметка убрана.');await loadMap()",
+        "clearMapEditor();await loadMap()",
     )
     for value in forbidden:
         if value in source:

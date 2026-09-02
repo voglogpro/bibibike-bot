@@ -21,6 +21,16 @@ class Request:
         return self._body
 
 
+class WebRequest:
+    def __init__(self, body=None, token=None):
+        self._body = body or {}
+        self.headers = {"X-Admin-Token": token} if token else {}
+        self.remote = "127.0.0.42"
+
+    async def json(self):
+        return self._body
+
+
 async def main():
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["DATA_DIR"] = tmp
@@ -84,13 +94,27 @@ async def main():
             await db.commit()
         admin_saved = await bot.api_crm_admin_upsert(Request(900001, {
             "username": "@new_manager", "role": "city_manager", "city_ids": [krasnodar["id"]],
-            "is_active": True,
+            "is_active": True, "web_password": "manager-site-password",
         }))
         assert admin_saved.status == 200, admin_saved.text
         admin_payload = json.loads(admin_saved.text)
         assert admin_payload["admin"]["user_id"] == 900003
         assert admin_payload["admin"]["telegram_username"] == "new_manager"
+        assert admin_payload["admin"]["has_web_password"] is True
         assert admin_payload["notification_queued"] is True
+        async with bot.db_connect() as db:
+            credential = await (await db.execute(
+                "SELECT password_digest FROM crm_web_credentials WHERE user_id=?", (900003,)
+            )).fetchone()
+        assert credential and credential[0] != "manager-site-password"
+        web_login = await bot.api_admin_login(WebRequest({
+            "password": "manager-site-password",
+        }))
+        web_payload = json.loads(web_login.text)
+        assert web_login.status == 200 and web_payload["role"] == "city_manager"
+        assert [item["id"] for item in web_payload["cities"]] == [krasnodar["id"]]
+        web_user = await bot._admin_user(WebRequest(token=web_payload["token"]))
+        assert web_user["id"] == 900003 and web_user["web_login"] is True
         async with bot.db_connect() as db:
             notice = await (await db.execute(
                 "SELECT kind,payload_json FROM crm_notification_outbox WHERE user_id=?",
@@ -105,6 +129,18 @@ async def main():
             assert await bot.deliver_crm_notifications_once() == 1
             assert send_message.await_args.args[0] == 900003
             assert "CRM бибибайк" in send_message.await_args.args[1]
+
+        cleared = await bot.api_crm_admin_upsert(Request(900001, {
+            "username": "@new_manager", "role": "city_manager",
+            "city_ids": [krasnodar["id"]], "is_active": True,
+            "clear_web_password": True,
+        }))
+        assert cleared.status == 200
+        assert json.loads(cleared.text)["admin"]["has_web_password"] is False
+        denied_web_login = await bot.api_admin_login(WebRequest({
+            "password": "manager-site-password",
+        }))
+        assert denied_web_login.status == 403
 
         # A restart must keep CRM-owned configuration instead of restoring code/env.
         await bot.init_db()

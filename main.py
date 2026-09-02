@@ -253,7 +253,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-09-02 · карта без перезагрузки"
+BUILD_VERSION = "2026-09-02 · серия рисунков и вход на сайт"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1092,6 +1092,17 @@ async def init_db():
                 user_id INTEGER NOT NULL,
                 city_id INTEGER NOT NULL,
                 PRIMARY KEY (user_id, city_id)
+            )
+        """)
+        # Отдельные пароли позволяют открыть CRM в обычном браузере без
+        # Telegram. В БД хранится только HMAC-отпечаток; один пароль всегда
+        # соответствует одному администратору и его серверным правам.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_web_credentials (
+                user_id INTEGER PRIMARY KEY,
+                password_digest TEXT NOT NULL UNIQUE,
+                updated_at TEXT NOT NULL,
+                updated_by INTEGER NOT NULL
             )
         """)
         await db.execute("""
@@ -8153,6 +8164,13 @@ def _admin_key():
     return hashlib.sha256(material.encode()).digest()
 
 
+def _crm_web_password_digest(password):
+    """Необратимый серверный отпечаток персонального пароля CRM."""
+    material = (ADMIN_SESSION_SECRET or BOT_TOKEN or ADMIN_PASSWORD).encode()
+    key = hashlib.sha256(material + b"\0crm-web-credential").digest()
+    return hmac.new(key, str(password).encode(), hashlib.sha256).hexdigest()
+
+
 def _issue_admin_token(uid, session_version=1):
     expires = int(datetime.now(timezone.utc).timestamp()) + ADMIN_SESSION_TTL_SEC
     payload = json.dumps(
@@ -8164,7 +8182,7 @@ def _issue_admin_token(uid, session_version=1):
     return f"{encoded}.{signature}", expires
 
 
-def _verify_admin_token(token, uid):
+def _verify_admin_token(token, uid=None):
     if not token or "." not in token or not ADMIN_PASSWORD:
         return False
     encoded, received = token.rsplit(".", 1)
@@ -8174,7 +8192,7 @@ def _verify_admin_token(token, uid):
     try:
         padding = "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
-        if payload.get("uid") != uid or int(payload.get("exp", 0)) < int(
+        if (uid is not None and int(payload.get("uid", 0)) != int(uid)) or int(payload.get("exp", 0)) < int(
             datetime.now(timezone.utc).timestamp()
         ):
             return None
@@ -8188,12 +8206,13 @@ _admin_login_failures = {}
 
 async def _admin_user(request):
     tg_user = await _auth_user(request)
-    if not tg_user:
-        return None
-    uid = tg_user["id"]
-    token_payload = _verify_admin_token(request.headers.get("X-Admin-Token", ""), uid)
+    token_payload = _verify_admin_token(
+        request.headers.get("X-Admin-Token", ""),
+        tg_user["id"] if tg_user else None,
+    )
     if not token_payload:
         return None
+    uid = int(token_payload["uid"])
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         account = await (await db.execute(
@@ -8201,7 +8220,15 @@ async def _admin_user(request):
         )).fetchone()
     if not account or int(account["session_version"] or 1) != int(token_payload.get("ver", 0)):
         return None
-    return tg_user
+    if tg_user:
+        return tg_user
+    user = await get_user(uid) or {}
+    return {
+        "id": uid,
+        "first_name": user.get("full_name") or "Администратор CRM",
+        "username": user.get("telegram_username"),
+        "web_login": True,
+    }
 
 
 async def _admin_account(uid):
@@ -8261,6 +8288,28 @@ async def _password_crm_account(uid):
     return await _admin_account(uid), None
 
 
+async def _crm_personal_password_account(password, expected_uid=None):
+    """Находит активный CRM-аккаунт по персональному паролю сайта."""
+    digest = _crm_web_password_digest(password)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT a.user_id FROM crm_web_credentials c "
+            "JOIN admin_accounts a ON a.user_id=c.user_id "
+            "WHERE c.password_digest=? AND a.is_active=1",
+            (digest,),
+        )).fetchone()
+    if not row:
+        return None
+    uid = int(row["user_id"])
+    if expected_uid is not None and uid != int(expected_uid):
+        return None
+    account = await _admin_account(uid)
+    if not account or (account["role"] != "network_admin" and not account["city_ids"]):
+        return None
+    return account
+
+
 async def _admin_city(uid, bind_if_missing=False):
     """Совместимый город старой админки, выбранный только из явных CRM-прав."""
     account = await _admin_account(uid)
@@ -8310,15 +8359,16 @@ def _legacy_admin_scope_error(context):
 
 async def api_admin_login(request):
     tg_user = await _auth_user(request)
-    if not tg_user:
-        return web.json_response({"error": "auth"}, status=401)
-    uid = tg_user["id"]
     if not ADMIN_PASSWORD:
         return web.json_response(
             {"error": "admin_disabled", "message": "ADMIN_PASSWORD не настроен."}, status=503
         )
+    login_key = (
+        int(tg_user["id"]) if tg_user
+        else "web:" + str(getattr(request, "remote", None) or "unknown")
+    )
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    failures = [stamp for stamp in _admin_login_failures.get(uid, []) if now_ts - stamp < 600]
+    failures = [stamp for stamp in _admin_login_failures.get(login_key, []) if now_ts - stamp < 600]
     if len(failures) >= 5:
         return web.json_response(
             {"error": "rate_limit", "message": "Слишком много попыток. Повтори через 10 минут."},
@@ -8328,14 +8378,27 @@ async def api_admin_login(request):
     if body is None:
         return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
     password = body.get("password")
-    if not isinstance(password, str) or not hmac.compare_digest(password, ADMIN_PASSWORD):
+    account = None
+    uid = int(tg_user["id"]) if tg_user else None
+    global_password = bool(
+        isinstance(password, str) and hmac.compare_digest(password, ADMIN_PASSWORD)
+    )
+    if global_password and tg_user:
+        account, access_error = await _password_crm_account(uid)
+        if access_error is not None:
+            error_code, message = access_error
+            return web.json_response({"error": error_code, "message": message}, status=409)
+    elif global_password and CRM_OWNER_USER_ID:
+        uid = int(CRM_OWNER_USER_ID)
+        account = await _admin_account(uid)
+    elif isinstance(password, str):
+        account = await _crm_personal_password_account(password, uid)
+        if account:
+            uid = int(account["user_id"])
+    if not account or uid is None:
         failures.append(now_ts)
-        _admin_login_failures[uid] = failures
+        _admin_login_failures[login_key] = failures
         return web.json_response({"error": "password", "message": "Неверный пароль."}, status=403)
-    account, access_error = await _password_crm_account(uid)
-    if access_error is not None:
-        error_code, message = access_error
-        return web.json_response({"error": error_code, "message": message}, status=409)
     city = await _admin_city(uid)
     if not city:
         return web.json_response(
@@ -8345,7 +8408,7 @@ async def api_admin_login(request):
             },
             status=409,
         )
-    _admin_login_failures.pop(uid, None)
+    _admin_login_failures.pop(login_key, None)
     token, expires = _issue_admin_token(uid, account["session_version"])
     city_ids = sorted(CITIES_BY_ID) if account["role"] == "network_admin" else account["city_ids"]
     return web.json_response({
@@ -14853,7 +14916,9 @@ async def api_crm_network_structure(request):
             "SELECT route_id,username FROM task_chat_route_authors ORDER BY username"
         )).fetchall()
         admin_rows = await (await db.execute(
-            "SELECT a.*,u.full_name,u.telegram_username FROM admin_accounts a "
+            "SELECT a.*,u.full_name,u.telegram_username,"
+            "EXISTS(SELECT 1 FROM crm_web_credentials c WHERE c.user_id=a.user_id) "
+            "AS has_web_password FROM admin_accounts a "
             "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.role,a.user_id"
         )).fetchall()
         permission_rows = await (await db.execute(
@@ -15057,7 +15122,9 @@ async def api_crm_admins(request):
     async with db_connect() as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            "SELECT a.*,u.full_name,u.telegram_username FROM admin_accounts a "
+            "SELECT a.*,u.full_name,u.telegram_username,"
+            "EXISTS(SELECT 1 FROM crm_web_credentials c WHERE c.user_id=a.user_id) "
+            "AS has_web_password FROM admin_accounts a "
             "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.role,a.user_id"
         )).fetchall()
         items = []
@@ -15119,8 +15186,20 @@ async def api_crm_admin_upsert(request):
             }, status=400)
     role = body.get("role"); role_scope = str(body.get("role_scope") or "").strip() or None
     is_active = 1 if body.get("is_active", True) else 0
+    web_password = str(body.get("web_password") or "")
+    clear_web_password = bool(body.get("clear_web_password"))
     if role not in {"city_viewer", "city_manager", "network_admin"} or user_id <= 0:
         return web.json_response({"error": "role"}, status=400)
+    if web_password and (len(web_password) < 10 or len(web_password) > 128):
+        return web.json_response({
+            "error": "web_password",
+            "message": "Пароль для сайта должен содержать от 10 до 128 символов.",
+        }, status=400)
+    if web_password and hmac.compare_digest(web_password, ADMIN_PASSWORD):
+        return web.json_response({
+            "error": "web_password",
+            "message": "Персональный пароль не должен совпадать с паролем владельца.",
+        }, status=400)
     if user_id == CRM_OWNER_USER_ID and (role != "network_admin" or not is_active):
         return web.json_response(
             {"error": "owner", "message": "Нельзя отключить или понизить владельца CRM."}, status=400
@@ -15159,11 +15238,35 @@ async def api_crm_admin_upsert(request):
             "INSERT INTO admin_city_permissions (user_id,city_id) VALUES (?,?)",
             [(user_id, city_id) for city_id in sorted(set(city_ids))],
         )
+        if clear_web_password:
+            await db.execute("DELETE FROM crm_web_credentials WHERE user_id=?", (user_id,))
+        elif web_password:
+            password_digest = _crm_web_password_digest(web_password)
+            collision = await (await db.execute(
+                "SELECT user_id FROM crm_web_credentials WHERE password_digest=? AND user_id<>?",
+                (password_digest, user_id),
+            )).fetchone()
+            if collision:
+                await db.rollback()
+                return web.json_response({
+                    "error": "web_password_conflict",
+                    "message": "Этот пароль уже назначен другому администратору.",
+                }, status=409)
+            await db.execute(
+                "INSERT INTO crm_web_credentials (user_id,password_digest,updated_at,updated_by) "
+                "VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+                "password_digest=excluded.password_digest,updated_at=excluded.updated_at,"
+                "updated_by=excluded.updated_by",
+                (user_id, password_digest, now_iso, context["telegram_user"]["id"]),
+            )
         after_row = await (await db.execute("SELECT * FROM admin_accounts WHERE user_id=?", (user_id,))).fetchone()
         after = dict(after_row); after["city_ids"] = sorted(set(city_ids))
         after["full_name"] = target_user["full_name"] if target_user else None
         after["telegram_username"] = target_user["telegram_username"] if target_user else username or None
         after["is_owner"] = user_id == CRM_OWNER_USER_ID
+        after["has_web_password"] = bool(await (await db.execute(
+            "SELECT 1 FROM crm_web_credentials WHERE user_id=?", (user_id,)
+        )).fetchone())
         before_signature = None if before is None else (
             before.get("role"), before.get("role_scope"), int(before.get("is_active", 1)),
             tuple(before.get("city_ids") or []),
@@ -15358,6 +15461,8 @@ async def start_api_server():
         app.router.add_post("/api/crm/tasks/{task_id}/comments", api_employee_task_comment)
         app.router.add_get("/api/crm/task-attachments/{attachment_id}", api_crm_attachment)
         app.router.add_get("/health", api_health)
+        app.router.add_get("/crm", serve_crm)
+        app.router.add_get("/crm/", serve_crm)
         app.router.add_get("/crm.html", serve_crm)
         app.router.add_get("/index.html", serve_index)
         app.router.add_get("/", serve_index)

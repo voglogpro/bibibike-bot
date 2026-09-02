@@ -23,6 +23,12 @@ CRM_PATH = os.path.join(ROOT, "crm.html")
 REQUIRED = (
     'data-route="map"',
     'id="page-map"',
+    'const isTelegramMiniApp =',
+    'document.documentElement.classList.toggle("standalone-crm",!isTelegramMiniApp)',
+    'function syncHostMode()',
+    'if(!isTelegramMiniApp||storageGet(RELEASE_KEY)===CRM_RELEASE)return',
+    'if(!isTelegramMiniApp||state.desktopFullscreenTried',
+    "document.addEventListener('visibilitychange'",
     'if(state.route==="map"&&route!=="map")destroyMap()',
     "/statistics-visibility",
     'data-calendar-guide',

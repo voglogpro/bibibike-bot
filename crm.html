@@ -335,10 +335,13 @@ html,body{font-family:'Manrope',Inter,ui-sans-serif,system-ui,-apple-system,"Seg
 <script>
 "use strict";
 const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-if(tg){
+const isTelegramMiniApp = !!(tg && String(tg.initData||"").trim());
+document.documentElement.classList.toggle("telegram-mini-app",isTelegramMiniApp);
+document.documentElement.classList.toggle("standalone-crm",!isTelegramMiniApp);
+if(isTelegramMiniApp){
   try{tg.ready();tg.expand();}catch(_){}
 }
-const initData = tg ? tg.initData : "";
+const initData = isTelegramMiniApp ? tg.initData : "";
 const $ = id => document.getElementById(id);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
 const TOKEN_KEY = "bb_crm_admin_token";
@@ -488,9 +491,10 @@ function showApp(){
   $("bootScreen").classList.add("hidden");$("authScreen").classList.add("hidden");$("crmApp").classList.remove("hidden");
   const name=state.context?.user?.name||state.context?.admin?.name||state.context?.admin?.full_name||"Администратор";
   $("sideUser").textContent=name;$("sideRole").textContent=ROLE_LABELS[state.context?.role]||state.context?.role||"—";
-  renderScopes();setRoute(state.route,true);attemptInitialFullscreen();showReleaseNotes();
+  syncHostMode();renderScopes();setRoute(state.route,true);attemptInitialFullscreen();showReleaseNotes();
 }
-function showReleaseNotes(){if(storageGet(RELEASE_KEY)===CRM_RELEASE)return;openCrmLayer($('releaseModal'))}
+function syncHostMode(){if(isTelegramMiniApp)return;['fullscreenButton','sideFullscreenButton'].forEach(id=>$(id)?.classList.add('hidden'));closeModal('releaseModal')}
+function showReleaseNotes(){if(!isTelegramMiniApp||storageGet(RELEASE_KEY)===CRM_RELEASE)return;openCrmLayer($('releaseModal'))}
 function renderScopes(){
   const select=$("scopeSelect"),cities=state.context?.cities||[];select.innerHTML=cities.map(c=>`<option value="${Number(c.id)}">${esc(c.name)}</option>`).join("");
   select.value=String(state.cityId||"");select.classList.toggle("hidden",cities.length<2);syncCalendarRole();updateDistrictSuggestions();
@@ -505,7 +509,7 @@ function setRoute(route,force=false){
   if(force||previousRoute!==route)motionPageIn(targetPage);
   $$("[data-route]").forEach(b=>b.classList.toggle("active",b.dataset.route===route));
   $("pageTitle").textContent=ROUTES[route][0];$("pageSubtitle").textContent=ROUTES[route][1];
-  const cacheKey=route==="calendar"?calendarCacheKey():`${route}:${state.cityId}`;closeMore();if(force||!state.cache[cacheKey])loadRoute(route);else renderRoute(route,state.cache[cacheKey]);
+  const cacheKey=route==="calendar"?calendarCacheKey():`${route}:${state.cityId}`;closeMore();if(force||!state.cache[cacheKey])loadRoute(route);else{renderRoute(route,state.cache[cacheKey]);if(previousRoute!==route)loadRoute(route)}
 }
 async function loadRoute(route=state.route){
   if(route==="analysis")return loadToday();if(route==="map")return loadMap();if(route==="calendar")return loadCalendar();if(route==="tasks")return loadTasks();if(route==="team")return loadTeam();return loadMore();
@@ -944,7 +948,7 @@ function renderMore(data){
     <div class="card"><div class="card-head"><div><h3>Оперативные сигналы</h3><p>Простой, падение темпа и длинные смены</p></div><span class="badge ${(signals.items||[]).length?'danger':'active'}">${(signals.items||[]).length}</span></div>${renderSignals(signals.items||[])}</div>
     <div class="card"><div class="card-head"><div><h3>Расчёт зарплаты</h3><p>Суммы и смены сотрудников за выбранную декаду</p></div></div><div class="form-grid"><div class="field"><label for="payrollMonth">Месяц</label><input class="input" id="payrollMonth" type="month" value="${esc(state.payrollMonth)}"></div><div class="field"><label>Декада</label><div class="seg" id="payrollDecade">${[1,2,3].map(value=>`<button type="button" class="${state.payrollDecade===value?'active':''}" data-payroll-decade="${value}">${value===1?'1–10':value===2?'11–20':'21–конец'}</button>`).join('')}</div></div></div><button class="btn btn-primary btn-block" id="payrollCalculate">Рассчитать зарплату</button><div id="payrollResult">${renderPayroll(state.payrollData)}</div></div>
     <div class="card"><div class="card-head"><div><h3>Уведомления от бота</h3><p>Личные сообщения о сотрудниках доступных вам городов и ролей</p></div></div><div class="stack">${notificationSetting('notify_shift_end','Завершение смены','Когда сотрудник закончил рабочую смену.',settings,!eligible)}${notificationSetting('notify_lunch_start','Начало обеда','Когда сотрудник вышел на обед.',settings,!eligible)}${notificationSetting('notify_lunch_end','Окончание обеда','Когда сотрудник вернулся с обеда.',settings,!eligible)}</div>${eligible?'<button class="btn btn-primary btn-block" id="notificationSettingsSave" style="margin-top:12px">Сохранить уведомления</button>':'<div class="form-hint" style="margin-top:10px">Уведомления доступны старшим и администраторам.</div>'}</div>
-    <div class="card"><div class="card-head"><div><h3>Доступ</h3><p>${esc(ROLE_LABELS[state.context?.role]||state.context?.role||'Администратор')} · ${esc(selectedCity()?.name||'')}</p></div></div><div class="stack"><button class="more-item" id="moreStructure">${icon('i-team')}Структура сети <span class="row-meta">${state.context?.can_manage_network?'управление':'просмотр'}</span></button><button class="more-item" id="moreRefresh">${icon('i-refresh')}Обновить данные</button><button class="more-item" id="moreEmployeeApp">${icon('i-today')}Вернуться к моей смене</button><button class="more-item" id="moreFullscreen">${icon('i-fullscreen')}<span id="moreFullscreenLabel">${fullscreenActive()?'Вернуть прежний размер':'Открыть на весь экран'}</span></button><button class="more-item" id="moreLogout">${icon('i-close')}Выйти из CRM</button></div></div>
+    <div class="card"><div class="card-head"><div><h3>Доступ</h3><p>${esc(ROLE_LABELS[state.context?.role]||state.context?.role||'Администратор')} · ${esc(selectedCity()?.name||'')}</p></div></div><div class="stack"><button class="more-item" id="moreStructure">${icon('i-team')}Структура сети <span class="row-meta">${state.context?.can_manage_network?'управление':'просмотр'}</span></button><button class="more-item" id="moreRefresh">${icon('i-refresh')}Обновить данные</button><button class="more-item" id="moreEmployeeApp">${icon('i-today')}Вернуться к моей смене</button>${isTelegramMiniApp?`<button class="more-item" id="moreFullscreen">${icon('i-fullscreen')}<span id="moreFullscreenLabel">${fullscreenActive()?'Вернуть прежний размер':'Открыть на весь экран'}</span></button>`:''}<button class="more-item" id="moreLogout">${icon('i-close')}Выйти из CRM</button></div></div>
   </div>`;
   $$('[data-payroll-decade]',root).forEach(button=>button.onclick=()=>{state.payrollDecade=Number(button.dataset.payrollDecade);$$('[data-payroll-decade]',root).forEach(item=>item.classList.toggle('active',item===button))});
   $('payrollMonth').onchange=e=>state.payrollMonth=e.target.value;$('payrollCalculate').onclick=calculatePayroll;
@@ -993,7 +997,7 @@ function syncFullscreenButton(){
   ['fullscreenButton','sideFullscreenButton'].forEach(id=>{const button=$(id);if(!button)return;button.title=label;button.setAttribute('aria-label',label);button.classList.toggle('active',active);if(id==='sideFullscreenButton')button.textContent=active?'Вернуть размер':'Полный экран'});const more=$('moreFullscreenLabel');if(more)more.textContent=active?'Вернуть прежний размер':'Открыть на весь экран';state.fullscreenPending=false
 }
 async function requestFullscreen(){
-  if(state.fullscreenPending)return;state.fullscreenPending=true;
+  if(!isTelegramMiniApp||state.fullscreenPending)return;state.fullscreenPending=true;
   const root=document.documentElement;
   if(tg&&tg.isFullscreen&&typeof tg.exitFullscreen==='function'){
     try{tg.exitFullscreen();setTimeout(()=>{state.fullscreenPending=false;syncFullscreenButton()},1200);return}catch(_){state.fullscreenPending=false}
@@ -1011,7 +1015,7 @@ async function requestFullscreen(){
   toast('Полный экран недоступен. Обновите Telegram Desktop или откройте CRM в браузере.')
 }
 function desktopClient(){const platform=String(tg?.platform||'').toLowerCase();return ['tdesktop','macos','unigram','web','weba'].includes(platform)||(innerWidth>=900&&matchMedia('(pointer:fine)').matches)}
-function attemptInitialFullscreen(){if(state.desktopFullscreenTried||!desktopClient()||!tg||typeof tg.requestFullscreen!=='function')return;state.desktopFullscreenTried=true;setTimeout(()=>{if(!fullscreenActive())requestFullscreen()},250)}
+function attemptInitialFullscreen(){if(!isTelegramMiniApp||state.desktopFullscreenTried||!desktopClient()||typeof tg.requestFullscreen!=='function')return;state.desktopFullscreenTried=true;setTimeout(()=>{if(!fullscreenActive())requestFullscreen()},250)}
 function wireCommon(root){
   $$('[data-go]',root).forEach(b=>b.onclick=()=>setRoute(b.dataset.go));$$('[data-create-task]',root).forEach(b=>b.onclick=()=>openTaskModal(state.route==='calendar'?state.selectedDate:state.taskDate));$$('[data-task]',root).forEach(b=>b.onclick=()=>openTaskDetail(Number(b.dataset.task)));$$('[data-employee]',root).forEach(b=>b.onclick=()=>openEmployee(Number(b.dataset.employee)));$$('[data-retry]',root).forEach(b=>b.onclick=()=>loadRoute(b.dataset.retry));wireCloseShift(root);wireExtendShift(root)
 }
@@ -1070,6 +1074,7 @@ $$('#batchShiftPreset button').forEach(b=>b.onclick=()=>{$('batchStart').value=b
 $$('#batchDecadePreset button').forEach(b=>b.onclick=()=>setBatchDecade(Number(b.dataset.decade)));
 $('batchFrom').onchange=()=>{$$('#batchDecadePreset button').forEach(b=>b.classList.remove('active'));updateBatchPreview()};$('batchTo').onchange=()=>{$$('#batchDecadePreset button').forEach(b=>b.classList.remove('active'));updateBatchPreview()};$('batchStart').onchange=$('batchEnd').onchange=()=>{$$('#batchShiftPreset button').forEach(b=>b.classList.toggle('active',b.dataset.start===$('batchStart').value&&b.dataset.end===$('batchEnd').value));updateBatchPreview()};
 window.addEventListener("online",()=>{state.online=true;paintConnectivity();loadRoute()});window.addEventListener("offline",()=>{state.online=false;paintConnectivity()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden||!state.context)return;const key=state.route==='calendar'?calendarCacheKey():`${state.route}:${state.cityId}`;delete state.cache[key];loadRoute(state.route)});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(state.route==='map'&&state.mapDrawMode)clearMapEditor();$$('.modal-backdrop.open').forEach(m=>closeModal(m.id));closeMore()}});
 window.addEventListener('beforeunload',event=>{if(state.calendarDraft.size){event.preventDefault();event.returnValue=''}});
 restoreSession();

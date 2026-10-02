@@ -254,7 +254,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-09-02 · Telegram-вход и пароли сайта"
+BUILD_VERSION = "2026-10-02 · Рассылка сотрудникам из CRM"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -1307,6 +1307,23 @@ async def init_db():
                 UNIQUE(user_id, message_id)
             )
         """)
+        # Рассылка руководителя: сам текст и его адресаты. Доставка идёт
+        # через crm_notification_outbox, поэтому ретраи и защита от дублей
+        # уже работают — здесь хранится только что и кому отправили.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS crm_broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                author_name TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                audience_role TEXT NOT NULL DEFAULT '',
+                include_archived INTEGER NOT NULL DEFAULT 0,
+                recipients_total INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS crm_planning_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1961,6 +1978,10 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_outbox_delivery "
             "ON crm_notification_outbox(status, next_attempt_at, id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crm_broadcasts_city "
+            "ON crm_broadcasts(city_id, id)"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_crm_plans_batch "
@@ -12575,6 +12596,181 @@ async def api_crm_notification_settings(request):
     return web.json_response({"ok": True, "settings": after})
 
 
+CRM_BROADCAST_TITLE_LIMIT = 120
+CRM_BROADCAST_BODY_LIMIT = 3000
+CRM_BROADCAST_HISTORY_LIMIT = 20
+
+
+async def _crm_broadcast_recipients(db, city_id, role=None, include_archived=False):
+    """Адресаты рассылки: активные сотрудники города.
+
+    Активность определяем так же, как в заданиях CRM — по statistics_visible,
+    чтобы рассылка и задания видели одну и ту же команду.
+    """
+    db.row_factory = aiosqlite.Row
+    sql = "SELECT user_id, full_name, role FROM users WHERE city_id=?"
+    params = [city_id]
+    if not include_archived:
+        sql += " AND COALESCE(statistics_visible,1)=1"
+    if role:
+        sql += " AND LOWER(role)=LOWER(?)"
+        params.append(role)
+    sql += " ORDER BY full_name"
+    rows = await (await db.execute(sql, params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def _crm_broadcast_stats(db, broadcast_ids):
+    """Доставка по каждой рассылке — считаем прямо по очереди отправки."""
+    if not broadcast_ids:
+        return {}
+    placeholders = ",".join("?" for _ in broadcast_ids)
+    rows = await (await db.execute(
+        f"SELECT entity_id, status, COUNT(*) AS total FROM crm_notification_outbox "
+        f"WHERE kind='broadcast' AND entity_id IN ({placeholders}) "
+        f"GROUP BY entity_id, status",
+        [int(value) for value in broadcast_ids],
+    )).fetchall()
+    stats = {}
+    for row in rows:
+        bucket = stats.setdefault(int(row["entity_id"]),
+                                  {"sent": 0, "pending": 0, "failed": 0})
+        status, total = row["status"], int(row["total"])
+        if status == "sent":
+            bucket["sent"] += total
+        elif status == "failed":
+            bucket["failed"] += total
+        else:
+            bucket["pending"] += total
+    return stats
+
+
+async def api_crm_broadcasts(request):
+    """Кого затронет рассылка и чем закончились прошлые."""
+    context, error = await _crm_admin(request)
+    if error is not None: return error
+    city, error = _crm_city(context, request=request)
+    if error is not None: return error
+    role, error = _crm_scoped_role(context, request.query.get("role"))
+    if error is not None: return error
+    include_archived = request.query.get("include_archived") == "1"
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        recipients = await _crm_broadcast_recipients(
+            db, city["id"], role=role or None, include_archived=include_archived
+        )
+        role_rows = await (await db.execute(
+            "SELECT COALESCE(NULLIF(TRIM(role),''),'Без роли') AS role, COUNT(*) AS total "
+            "FROM users WHERE city_id=? AND COALESCE(statistics_visible,1)=1 "
+            "GROUP BY 1 ORDER BY 2 DESC", (city["id"],),
+        )).fetchall()
+        history = await (await db.execute(
+            "SELECT * FROM crm_broadcasts WHERE city_id=? ORDER BY id DESC LIMIT ?",
+            (city["id"], CRM_BROADCAST_HISTORY_LIMIT),
+        )).fetchall()
+        stats = await _crm_broadcast_stats(db, [row["id"] for row in history])
+    scope = _crm_scope_role(context)
+    return web.json_response({
+        "ok": True,
+        "can_send": context["admin"]["role"] in CRM_ADMIN_WRITE_ROLES,
+        "role_scope": scope,
+        "limits": {"title": CRM_BROADCAST_TITLE_LIMIT, "body": CRM_BROADCAST_BODY_LIMIT},
+        "recipients": {
+            "total": len(recipients),
+            "items": [{"user_id": item["user_id"],
+                       "name": item.get("full_name") or "Сотрудник",
+                       "role": item.get("role") or ""} for item in recipients],
+        },
+        "roles": [{"role": row["role"], "total": int(row["total"])} for row in role_rows
+                  if not scope or str(row["role"]).casefold() == scope.casefold()],
+        "history": [{
+            **{key: row[key] for key in (
+                "id", "title", "body", "audience_role", "author_name",
+                "recipients_total", "created_at")},
+            "include_archived": bool(row["include_archived"]),
+            "delivery": stats.get(int(row["id"]), {"sent": 0, "pending": 0, "failed": 0}),
+        } for row in history],
+    })
+
+
+async def api_crm_broadcast_create(request):
+    """Ставит рассылку в общую очередь: по одному сообщению на сотрудника.
+
+    Сама отправка идёт фоновым воркером очереди, поэтому долгий Telegram
+    не держит HTTP-запрос, а повторы безопасны: UNIQUE(user_id, kind,
+    entity_id) не даст отправить одному человеку одну рассылку дважды.
+    """
+    context, error = await _crm_admin(request, write=True)
+    if error is not None: return error
+    body_json = await _request_json_object(request)
+    if body_json is None:
+        return web.json_response(
+            {"error": "json", "message": "Ожидается JSON-объект."}, status=400
+        )
+    city, error = _crm_city(context, body=body_json)
+    if error is not None: return error
+    role, error = _crm_scoped_role(context, body_json.get("role"))
+    if error is not None: return error
+    title = str(body_json.get("title") or "").strip()[:CRM_BROADCAST_TITLE_LIMIT]
+    text = str(body_json.get("body") or "").strip()
+    if len(text) < 3:
+        return web.json_response(
+            {"error": "body", "message": "Напишите текст сообщения."}, status=400
+        )
+    if len(text) > CRM_BROADCAST_BODY_LIMIT:
+        return web.json_response(
+            {"error": "body_too_long",
+             "message": f"Текст длиннее {CRM_BROADCAST_BODY_LIMIT} символов."}, status=400
+        )
+    include_archived = bool(body_json.get("include_archived"))
+    author_id = context["telegram_user"]["id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        recipients = await _crm_broadcast_recipients(
+            db, city["id"], role=role or None, include_archived=include_archived
+        )
+        if not recipients:
+            return web.json_response(
+                {"error": "recipients", "message": "В этом городе некому отправлять."},
+                status=400,
+            )
+        author = await (await db.execute(
+            "SELECT full_name FROM users WHERE user_id=?", (author_id,)
+        )).fetchone()
+        author_name = (author["full_name"] if author and author["full_name"] else "") or str(
+            context["telegram_user"].get("first_name") or "Руководитель"
+        )
+        cursor = await db.execute(
+            "INSERT INTO crm_broadcasts (city_id,author_id,author_name,title,body,"
+            "audience_role,include_archived,recipients_total,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (city["id"], author_id, author_name, title, text, role or "",
+             int(include_archived), len(recipients), now_iso),
+        )
+        broadcast_id = cursor.lastrowid
+        payload = {"title": title, "body": text, "author_name": author_name,
+                   "city_id": city["id"], "broadcast_id": broadcast_id}
+        for item in recipients:
+            await _enqueue_crm_notification(
+                db, city["id"], item["user_id"], "broadcast", broadcast_id, payload
+            )
+        await _crm_audit(
+            db, context, "broadcast.send", "crm_broadcast", broadcast_id, city["id"],
+            after={"title": title, "role": role or "", "recipients": len(recipients),
+                   "include_archived": include_archived},
+        )
+        await db.commit()
+    logger.info(
+        "CRM рассылка %s: город %s, адресатов %s, автор %s",
+        broadcast_id, city["id"], len(recipients), author_id,
+    )
+    return web.json_response({
+        "ok": True, "broadcast_id": broadcast_id, "recipients_total": len(recipients),
+        "message": f"Рассылка поставлена в очередь: {len(recipients)} получателей.",
+    })
+
+
 async def _crm_target_users(db, city_id, target_type, user_id=None, role=None, role_scope=None):
     db.row_factory = aiosqlite.Row
     if target_type == "user":
@@ -13808,6 +14004,14 @@ def _crm_human_date(value):
 def _crm_notification_text(kind, payload):
     details = str(payload.get("description") or payload.get("note") or "").strip()[:1200]
     district = str(payload.get("district") or "").strip()
+    if kind == "broadcast":
+        title = str(payload.get("title") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        author = str(payload.get("author_name") or "").strip()
+        lines = [f"📣 {title}" if title else "📣 Сообщение от руководителя", "", body]
+        if author:
+            lines += ["", f"— {author}"]
+        return "\n".join(lines)
     if kind == "map_assignment":
         return "\n".join([
             "🗺 Вам назначен район на карте", "",
@@ -15457,6 +15661,8 @@ async def start_api_server():
         app.router.add_patch(
             "/api/admin/crm/notification-settings", api_crm_notification_settings
         )
+        app.router.add_get("/api/admin/crm/broadcasts", api_crm_broadcasts)
+        app.router.add_post("/api/admin/crm/broadcasts", api_crm_broadcast_create)
         app.router.add_get("/api/admin/crm/overview", api_crm_overview)
         app.router.add_get("/api/admin/crm/employees", api_crm_employees)
         app.router.add_get("/api/admin/crm/payroll", api_crm_payroll)

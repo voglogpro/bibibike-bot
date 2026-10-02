@@ -364,7 +364,8 @@ const API = {
   trends:"/api/admin/crm/trends", activity:"/api/admin/crm/activity", payroll:"/api/admin/crm/payroll",
   signals:"/api/admin/crm/operational-signals", structure:"/api/admin/crm/network-structure",
   admins:"/api/admin/crm/admins", map:"/api/admin/crm/map",
-  notificationSettings:"/api/admin/crm/notification-settings"
+  notificationSettings:"/api/admin/crm/notification-settings",
+  broadcasts:"/api/admin/crm/broadcasts"
 };
 const ROUTES = {
   analysis:["Сегодня","Что происходит в городе прямо сейчас"],
@@ -381,7 +382,7 @@ const TASK_STATUS={draft:"Черновик",published:"Активно",cancelled
 const state={
   token:storageGet(TOKEN_KEY), context:null, route:"analysis", cityId:null,
   cache:{}, month:startOfMonth(new Date()), selectedDate:isoDate(new Date()),
-  taskFilter:"open", taskDate:isoDate(new Date()), teamQuery:"", teamRole:"", teamShowHidden:false, taskFiles:[], targetMode:"role",
+  taskFilter:"open", taskDate:isoDate(new Date()), teamQuery:"", teamRole:"", teamShowHidden:false, taskFiles:[], targetMode:"role", broadcastRole:"",
   taskCompletion:"manual", editTaskId:null, planMode:"single", planWorkKind:"regular",
   batchWork:2, batchRest:1, batchKey:"", calendarDecade:Math.min(3,Math.floor((new Date().getDate()-1)/10)+1),calendarRole:"Скаут",
   calendarEditMode:true,calendarTool:"details",calendarDraft:new Map(),calendarConflicts:new Set(),calendarSaving:false,calendarCommitKey:"",
@@ -944,11 +945,38 @@ function renderShiftHistory(items){if(!items.length)return stateBlock("Смен 
 function issueText(issue){const labels={long_open_shift:["Длинная открытая смена","Открыта больше 14 часов"],missing_start_at:["Нет точного начала","Нужно проверить данные смены"],missing_end_at:["Нет точного окончания","Закрытая смена требует проверки"],unknown_role:["Неизвестная роль","Роль не соответствует настройкам города"],manual_report_waiting:["Ручной отчёт","Ожидает проверки руководителем"],attachment_missing:["Фото недоступно","Файл задания отсутствует в хранилище"]};return labels[issue.type]||[issue.type,"Событие качества данных"]}
 function renderIssueCards(items){if(!items||!items.length)return stateBlock("Всё спокойно","Проверяемых событий за период нет.");return `<div class="list">${items.map(issue=>{const [title,sub]=issueText(issue),shift=issue.shift||{};return `<div class="row-card"><div><div class="row-title">${esc(title)}</div><div class="row-meta">${esc(shift.name||issue.report?.sender_name||sub)}${shift.shift_id?` · смена #${shift.shift_id}`:""}</div></div><div>${badge(issue.severity,issue.severity==="high"?"Важно":"Проверить")}</div></div>`}).join("")}</div>`}
 
-async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const [signals,notificationSettings]=await withSeq("more",()=>Promise.all([request(API.signals+query({city_id:state.cityId})),request(API.notificationSettings)])),data={signals,notificationSettings};state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Раздел пока недоступен",err.message,"more")}}
+async function loadMore(){const root=$("moreRoot");root.innerHTML=loadingCards();try{const [signals,notificationSettings,broadcasts]=await withSeq("more",()=>Promise.all([request(API.signals+query({city_id:state.cityId})),request(API.notificationSettings),request(API.broadcasts+query({city_id:state.cityId}))])),data={signals,notificationSettings,broadcasts};state.cache[`more:${state.cityId}`]=data;renderMore(data)}catch(err){if(!err.stale)root.innerHTML=stateBlock("Раздел пока недоступен",err.message,"more")}}
 function notificationSetting(field,title,description,settings,disabled){return `<label class="notification-setting"><span><b>${esc(title)}</b><span>${esc(description)}</span></span><input type="checkbox" data-notification-setting="${field}" ${settings[field]!==false?'checked':''} ${disabled?'disabled':''}></label>`}
+function broadcastRecipients(broadcasts,role){const roles=broadcasts.roles||[];if(!role)return roles.reduce((sum,item)=>sum+Number(item.total||0),0);const found=roles.find(item=>String(item.role).toLowerCase()===String(role).toLowerCase());return found?Number(found.total||0):0}
+function renderBroadcastHistory(items){if(!items||!items.length)return stateBlock("Рассылок пока не было","Первое сообщение команде появится здесь.");return `<div class="list">${items.map(item=>{const d=item.delivery||{},parts=[`доставлено ${d.sent||0}`];if(d.pending)parts.push(`в очереди ${d.pending}`);if(d.failed)parts.push(`не дошло ${d.failed}`);return `<div class="row-card"><div class="row-main"><div class="row-title">${esc(item.title||"Без заголовка")}</div><div class="row-meta">${esc(String(item.body||"").slice(0,120))}${String(item.body||"").length>120?"…":""}</div><div class="row-meta">${esc(item.author_name||"")} · ${esc(item.audience_role||"все роли")} · ${fmtDate(item.created_at,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div></div><div class="row-side"><b>${item.recipients_total||0}</b><span>${esc(parts.join(" · "))}</span></div></div>`}).join("")}</div>`}
+function renderBroadcastCard(broadcasts){
+  const canSend=broadcasts.can_send!==false,scope=broadcasts.role_scope||"",roles=broadcasts.roles||[],limit=(broadcasts.limits||{}).body||3000;
+  const total=broadcastRecipients(broadcasts,state.broadcastRole);
+  return `<div class="card"><div class="card-head"><div><h3>Рассылка сотрудникам</h3><p>Личное сообщение от бота каждому сотруднику города</p></div><span class="badge ${total?'active':''}">${total}</span></div>
+    ${canSend?`<div class="field"><label for="broadcastTitle">Заголовок — необязательно</label><input class="input" id="broadcastTitle" maxlength="120" placeholder="Например: Смены на выходные"></div>
+    <div class="field"><label for="broadcastBody">Текст сообщения</label><textarea class="textarea" id="broadcastBody" maxlength="${limit}" placeholder="Что нужно сообщить команде"></textarea><div class="form-hint" id="broadcastCounter">0 из ${limit}</div></div>
+    <div class="field"><label for="broadcastRole">Кому</label><select class="select" id="broadcastRole" ${scope?'disabled':''}>${scope?`<option value="${esc(scope)}">${esc(scope)}</option>`:`<option value="">Все роли — ${broadcastRecipients(broadcasts,"")} чел.</option>${roles.map(item=>`<option value="${esc(item.role)}" ${state.broadcastRole===item.role?'selected':''}>${esc(item.role)} — ${item.total} чел.</option>`).join("")}`}</select></div>
+    <div class="form-hint" id="broadcastSummary" style="margin-bottom:10px">Получателей: <b>${total}</b>. Сообщение уйдёт сразу после подтверждения.</div>
+    <button class="btn btn-primary btn-block" id="broadcastSend" ${total?'':'disabled'}>Отправить рассылку</button>`
+    :'<div class="form-hint">Рассылку отправляют руководитель города и администратор сети.</div>'}
+    <div class="card-head" style="margin-top:16px"><div><h3 style="font-size:13px">Последние рассылки</h3></div></div>${renderBroadcastHistory(broadcasts.history)}</div>`;
+}
+async function sendBroadcast(button,broadcasts){
+  const title=($('broadcastTitle')?.value||'').trim(),body=($('broadcastBody')?.value||'').trim(),role=state.broadcastRole||'';
+  if(body.length<3){toast('Напишите текст сообщения.');return}
+  const total=broadcastRecipients(broadcasts,role);
+  if(!confirm(`Отправить рассылку?\n\nПолучателей: ${total}${role?` (роль: ${role})`:''}.\nСообщение придёт каждому личным сообщением от бота и его нельзя отозвать.`))return;
+  button.disabled=true;button.textContent='Отправляю…';
+  try{
+    const result=await request(API.broadcasts,{method:'POST',body:JSON.stringify({city_id:state.cityId,title,body,role})});
+    toast(result.message||'Рассылка поставлена в очередь.');
+    state.cache={};state.broadcastRole='';loadMore();
+  }catch(err){toast(err.message);button.disabled=false;button.textContent='Отправить рассылку'}
+}
 function renderMore(data){
-  const root=$("moreRoot"),signals=data.signals||{},notificationData=data.notificationSettings||{},settings=notificationData.settings||{},eligible=notificationData.eligible!==false;
+  const root=$("moreRoot"),signals=data.signals||{},notificationData=data.notificationSettings||{},settings=notificationData.settings||{},eligible=notificationData.eligible!==false,broadcasts=data.broadcasts||{};
   root.innerHTML=`<div class="more-grid">
+    ${renderBroadcastCard(broadcasts)}
     <div class="card"><div class="card-head"><div><h3>Оперативные сигналы</h3><p>Простой, падение темпа и длинные смены</p></div><span class="badge ${(signals.items||[]).length?'danger':'active'}">${(signals.items||[]).length}</span></div>${renderSignals(signals.items||[])}</div>
     <div class="card"><div class="card-head"><div><h3>Расчёт зарплаты</h3><p>Суммы и смены сотрудников за выбранную декаду</p></div></div><div class="form-grid"><div class="field"><label for="payrollMonth">Месяц</label><input class="input" id="payrollMonth" type="month" value="${esc(state.payrollMonth)}"></div><div class="field"><label>Декада</label><div class="seg" id="payrollDecade">${[1,2,3].map(value=>`<button type="button" class="${state.payrollDecade===value?'active':''}" data-payroll-decade="${value}">${value===1?'1–10':value===2?'11–20':'21–конец'}</button>`).join('')}</div></div></div><button class="btn btn-primary btn-block" id="payrollCalculate">Рассчитать зарплату</button><div id="payrollResult">${renderPayroll(state.payrollData)}</div></div>
     <div class="card"><div class="card-head"><div><h3>Уведомления от бота</h3><p>Личные сообщения о сотрудниках доступных вам городов и ролей</p></div></div><div class="stack">${notificationSetting('notify_shift_end','Завершение смены','Когда сотрудник закончил рабочую смену.',settings,!eligible)}${notificationSetting('notify_lunch_start','Начало обеда','Когда сотрудник вышел на обед.',settings,!eligible)}${notificationSetting('notify_lunch_end','Окончание обеда','Когда сотрудник вернулся с обеда.',settings,!eligible)}</div>${eligible?'<button class="btn btn-primary btn-block" id="notificationSettingsSave" style="margin-top:12px">Сохранить уведомления</button>':'<div class="form-hint" style="margin-top:10px">Уведомления доступны старшим и администраторам.</div>'}</div>
@@ -957,7 +985,12 @@ function renderMore(data){
   $$('[data-payroll-decade]',root).forEach(button=>button.onclick=()=>{state.payrollDecade=Number(button.dataset.payrollDecade);$$('[data-payroll-decade]',root).forEach(item=>item.classList.toggle('active',item===button))});
   $('payrollMonth').onchange=e=>state.payrollMonth=e.target.value;$('payrollCalculate').onclick=calculatePayroll;
   const notificationSave=$('notificationSettingsSave'),structure=$('moreStructure'),refresh=$('moreRefresh'),back=$('moreEmployeeApp'),full=$('moreFullscreen'),out=$('moreLogout');
-  if(notificationSave)notificationSave.onclick=()=>saveNotificationSettings(notificationSave);if(structure)structure.onclick=openNetworkStructure;if(refresh)refresh.onclick=()=>{state.cache={};state.payrollData=null;loadMore()};if(back)back.onclick=()=>location.href='/';if(full)full.onclick=requestFullscreen;if(out)out.onclick=()=>logout();wireCommon(root);wirePayroll(root)
+  if(notificationSave)notificationSave.onclick=()=>saveNotificationSettings(notificationSave);if(structure)structure.onclick=openNetworkStructure;if(refresh)refresh.onclick=()=>{state.cache={};state.payrollData=null;loadMore()};if(back)back.onclick=()=>location.href='/';if(full)full.onclick=requestFullscreen;if(out)out.onclick=()=>logout();
+  const bBody=$('broadcastBody'),bRole=$('broadcastRole'),bSend=$('broadcastSend'),bCounter=$('broadcastCounter'),bSummary=$('broadcastSummary');
+  if(bBody&&bCounter)bBody.oninput=()=>{bCounter.textContent=`${bBody.value.length} из ${bBody.maxLength}`};
+  if(bRole)bRole.onchange=()=>{state.broadcastRole=bRole.value;const total=broadcastRecipients(broadcasts,state.broadcastRole);if(bSummary)bSummary.innerHTML=`Получателей: <b>${total}</b>. Сообщение уйдёт сразу после подтверждения.`;if(bSend)bSend.disabled=!total};
+  if(bSend)bSend.onclick=()=>sendBroadcast(bSend,broadcasts);
+  wireCommon(root);wirePayroll(root)
 }
 async function saveNotificationSettings(button){const payload={};$$('[data-notification-setting]',$('moreRoot')).forEach(input=>payload[input.dataset.notificationSetting]=input.checked);button.disabled=true;button.textContent='Сохраняю…';try{const result=await request(API.notificationSettings,{method:'PATCH',body:JSON.stringify(payload)});const key=`more:${state.cityId}`;if(state.cache[key])state.cache[key].notificationSettings={...(state.cache[key].notificationSettings||{}),settings:result.settings};toast('Настройки уведомлений сохранены.')}catch(err){toast(err.message)}finally{button.disabled=false;button.textContent='Сохранить уведомления'}}
 

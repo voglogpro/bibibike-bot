@@ -138,6 +138,7 @@ crm.html                        CRM руководителя
 requirements.txt                зависимости Python
 tests/regression_check.py        регрессия парсера и Telegram-маршрутизации
 tests/crm_backend_check.py       интеграционные проверки CRM и прав доступа
+tests/broadcast_check.py         рассылка руководителя: адресаты, права и очередь
 ```
 
 `main.py` остаётся одним запускаемым файлом, но разбит на размеченные разделы. Быстрая навигация через `Ctrl+F`:
@@ -274,6 +275,7 @@ python tests\crm_backend_check.py
 python tests\crm_automation_check.py
 python tests\map_archive_check.py
 python tests\crm_ui_check.py
+python tests\broadcast_check.py
 git diff --check
 ```
 

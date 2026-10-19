@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import tempfile
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -230,7 +231,43 @@ async def run():
     assert any("Завтра выходим по обычному графику." in text for text in broadcast_texts), \
         broadcast_texts
 
-    print("PASS рассылка: адресаты, права, роль, очередь, текст и доставка")
+    # 12. Новая рассылка будит уже простаивающий worker без ожидания 15 минут.
+    idle = asyncio.Event()
+    processed = asyncio.Event()
+    original_wait = bot._wait_worker
+
+    async def observe_wait(event, timeout):
+        if idle.is_set():
+            processed.set()
+        else:
+            assert timeout == 900.0, timeout
+            idle.set()
+        await original_wait(event, timeout)
+
+    with patch.object(bot.bot, "send_message", AsyncMock(side_effect=fake_send)), \
+            patch.object(bot, "_wait_worker", side_effect=observe_wait):
+        worker = asyncio.create_task(bot.crm_notification_worker())
+        try:
+            await asyncio.wait_for(idle.wait(), timeout=2)
+            with as_admin(city_admin):
+                response = await bot.api_crm_broadcast_create(Request({
+                    "body": "Сообщение после простоя очереди.",
+                }))
+            assert response.status == 200, response.text
+            new_id = json.loads(response.text)["broadcast_id"]
+            await asyncio.wait_for(processed.wait(), timeout=2)
+            deliveries = await rows(
+                "SELECT status FROM crm_notification_outbox "
+                "WHERE kind='broadcast' AND entity_id=?", (new_id,)
+            )
+            assert len(deliveries) == 6, deliveries
+            assert all(item["status"] == "sent" for item in deliveries), deliveries
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+
+    print("PASS рассылка: адресаты, права, роль, очередь, текст, доставка и пробуждение worker")
 
 
 if __name__ == "__main__":

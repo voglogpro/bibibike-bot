@@ -254,7 +254,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-10-02 · Рассылка сотрудникам из CRM"
+BUILD_VERSION = "2026-10-19 · Отправка рассылки без ожидания после простоя"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -12760,7 +12760,7 @@ async def api_crm_broadcast_create(request):
             after={"title": title, "role": role or "", "recipients": len(recipients),
                    "include_archived": include_archived},
         )
-        await db.commit()
+        await _commit_and_wake(db, _notification_wakeup)
     logger.info(
         "CRM рассылка %s: город %s, адресатов %s, автор %s",
         broadcast_id, city["id"], len(recipients), author_id,

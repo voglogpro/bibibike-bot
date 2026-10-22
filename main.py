@@ -43,6 +43,12 @@ import uuid
 import time
 import shutil
 import aiosqlite
+# Проверки загружают main.py через importlib из каталога tests/.
+# Локальные модули должны находиться и при таком запуске.
+_project_dir = os.path.dirname(os.path.abspath(__file__))
+if _project_dir not in sys.path:
+    sys.path.insert(0, _project_dir)
+import city_billing
 from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qsl
 from aiohttp import web, ClientSession, ClientTimeout
@@ -254,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-10-19 · Отправка рассылки без ожидания после простоя"
+BUILD_VERSION = "2026-10-22 · Подписка города и недельное предупреждение"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -917,6 +923,7 @@ async def init_db():
     _kpi_refreshed_hours.clear()
     repair_shift_ids = []
     async with db_connect() as db:
+        await city_billing.init_schema(db)
         await db.execute("PRAGMA foreign_keys = ON")
         # WAL и увеличенное ожидание записи защищают от потери действий, когда
         # сотрудники подряд отправляют много сообщений с номерами байков.
@@ -2189,6 +2196,24 @@ def db_connect():
     return aiosqlite.connect(DB_PATH, timeout=30)
 
 
+class CitySubscriptionRequired(Exception):
+    def __init__(self, subscription):
+        self.subscription = subscription
+        super().__init__(subscription["message"])
+
+
+async def _city_subscription(city_id):
+    async with db_connect() as db:
+        return await city_billing.status(db, city_id)
+
+
+async def _require_city_subscription(city_id):
+    subscription = await _city_subscription(city_id)
+    if not subscription["allowed"]:
+        raise CitySubscriptionRequired(subscription)
+    return subscription
+
+
 async def _prepare_connection(db):
     """Настройки, которые действуют на уровне соединения, а не файла."""
     await db.execute("PRAGMA busy_timeout = 15000")
@@ -2732,6 +2757,7 @@ def _shift_is_scheduled(shift, now=None):
 async def start_shift(uid, name, role, time, district, city_id, source="bot",
                       source_message_id=None, now=None, auto_close=None,
                       auto_close_hours=None):
+    await _require_city_subscription(city_id)
     city = get_city(city_id)
     if not city:
         raise ValueError("Неизвестный город")
@@ -2900,6 +2926,7 @@ async def add_action(uid, sid, mid, atype, codes=None, qty=0, city_id=None):
     if city_id is None:
         shift = await get_shift_by_id(sid)
         city_id = shift.get("city_id") if shift else None
+    await _require_city_subscription(city_id)
     async with db_connect() as db:
         await db.execute(
             "INSERT INTO actions (user_id, shift_id, message_id, action_type, bike_codes, "
@@ -2943,6 +2970,7 @@ async def replace_message_actions(uid, mid, city_id, shift_id, actions, event_ve
     из разных чатов совпадают, и без chat_id привязка из чужой группы
     приводила к тихому отказу записи.
     """
+    await _require_city_subscription(city_id)
     async with db_connect() as db:
         await db.execute("PRAGMA busy_timeout = 15000")
         await db.execute("BEGIN IMMEDIATE")
@@ -3962,6 +3990,8 @@ async def _start_manual_signal_shift(message, city, event_time, name=None, role=
     Если имя передано (форма «Смену начал Иванов И.И. скаут») — обновляем
     профиль сотрудника этими имя+роль и открываем смену под ними.
     """
+    if not (await _city_subscription(city["id"]))["allowed"]:
+        return None
     uid = message.from_user.id
     await remember_telegram_username(uid, getattr(message.from_user, "username", None))
     message_id = message.message_id
@@ -4047,6 +4077,8 @@ async def handle_manual_shift_signal(message, city):
 
 async def capture_manual_report(message: Message, city):
     """Молча сохраняет ручной отчёт, не отвечая сотруднику в теме."""
+    if not (await _city_subscription(city["id"]))["allowed"]:
+        return
     if not message.from_user or getattr(message.from_user, "is_bot", False):
         return
     text = (message.text or message.caption or "").strip()
@@ -5135,6 +5167,8 @@ async def _reply_with_photo_result(message: Message, actions):
 async def _process_work_message_locked(message: Message, city, npb=False, edited=False,
                                        moves=False, repair_topic=False,
                                        bare_repair_topic=False, sticker_topic=False):
+    if not (await _city_subscription(city["id"]))["allowed"]:
+        return
     text = message.text or message.caption or ""
     if not message.from_user or getattr(message.from_user, "is_bot", False):
         return
@@ -5566,6 +5600,8 @@ async def _create_task_from_chat(messages, route, raw_text):
     city = await _task_chat_city(route)
     if not sender or not city:
         return
+    if not (await _city_subscription(city["id"]))["allowed"]:
+        return
     usernames = set()
     mentioned_ids = set()
     for item in messages:
@@ -5815,6 +5851,17 @@ async def _private_manager_context(user_id):
             "allowed_city_ids": sorted(CITIES_BY_ID) if account["role"] == "network_admin" else account["city_ids"]}
 
 
+@private_router.message(Command("start", "subscription"), F.chat.type == "private")
+async def private_subscription_start(message: Message):
+    user = await get_user(message.from_user.id) or {}
+    city = get_city(user.get("city_id")) or get_default_city()
+    subscription = await _city_subscription(city["id"])
+    text = subscription["message"] if subscription["enabled"] else "Откройте приложение бота."
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Открыть приложение", url=_crm_miniapp_link())
+    ]]))
+
+
 @private_router.message(Command("tasks"), F.chat.type == "private")
 async def private_tasks_start(message: Message):
     await remember_telegram_username(message.from_user.id, message.from_user.username)
@@ -5853,6 +5900,10 @@ async def private_task_photo(message: Message):
     await remember_telegram_username(message.from_user.id, message.from_user.username)
     context = await _private_manager_context(message.from_user.id)
     if not context:
+        return
+    subscription = await _city_subscription(context["city"]["id"])
+    if not subscription["allowed"]:
+        await message.answer(subscription["message"])
         return
     work_date = _private_task_dates.get(message.from_user.id)
     if not work_date:
@@ -6144,6 +6195,9 @@ async def cmd_chat(message: Message, city):
                 sid = await start_shift(
                     user_id, full_name, role_for_shift, time_str, district, city["id"]
                 )
+            except CitySubscriptionRequired as exc:
+                await message.answer(str(exc))
+                return
             except ActiveShiftExists:
                 msg = await message.answer("У вас уже открыта смена.")
                 asyncio.create_task(auto_delete(msg))
@@ -6986,6 +7040,86 @@ async def api_bibipass_intro_seen(request):
     return web.json_response({"ok": True})
 
 @web.middleware
+async def city_subscription_mw(request, handler):
+    """Read-only после срока. Проверяем реальный город сущности, а не только JSON."""
+    path = request.path
+    exempt = {
+        "/api/settings", "/api/admin/login", "/api/shift/stop",
+        "/api/shift/lunch", "/api/admin/force-close",
+        "/api/admin/crm/network-structure", "/api/admin/crm/admins",
+        "/api/admin/crm/notification-settings",
+    }
+    if (request.method in {"GET", "HEAD", "OPTIONS"} or not path.startswith("/api/")
+            or path in exempt or path.startswith("/api/admin/crm/subscriptions")
+            or re.fullmatch(r"/api/admin/crm/shifts/\d+/close", path)):
+        return await handler(request)
+    context = await _admin_context(request) if path.startswith("/api/admin/") else None
+    tg_user = context["telegram_user"] if context else await _auth_user(request)
+    if not tg_user:
+        return await handler(request)  # Авторизацию и её ошибку обрабатывает endpoint.
+    body = await _request_json_object(request) if request.content_type == "application/json" else {}
+    body = body or {}
+    city_ids = set()
+    user = await get_user(tg_user["id"]) or {}
+    fallback = (context or {}).get("city") or get_city(user.get("city_id")) or get_default_city()
+    raw_city = body.get("city_id") or request.query.get("city_id")
+    try:
+        if raw_city:
+            city_ids.add(int(raw_city))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "city_id"}, status=400)
+    # У операций над существующими сущностями city_id клиента не является доказательством.
+    async with db_connect() as db:
+        for key, table in (("task_id", "crm_tasks"), ("shift_id", "shifts"),
+                           ("plan_id", "crm_planned_shifts"), ("report_id", "manual_reports"),
+                           ("zone_id", "crm_map_zones"),
+                           ("annotation_id", "crm_map_annotations")):
+            value = request.match_info.get(key) or body.get(key)
+            if not value:
+                continue
+            row = await (await db.execute(
+                f"SELECT city_id FROM {table} WHERE id=?", (value,),
+            )).fetchone()
+            if row:
+                city_ids.add(row[0])
+        if request.match_info.get("assignment_id"):
+            row = await (await db.execute(
+                "SELECT z.city_id FROM crm_map_assignments a "
+                "JOIN crm_map_zones z ON z.id=a.zone_id WHERE a.id=?",
+                (request.match_info["assignment_id"],),
+            )).fetchone()
+            if row:
+                city_ids.add(row[0])
+        if "/employees/" in path and request.match_info.get("user_id"):
+            row = await (await db.execute(
+                "SELECT city_id FROM users WHERE user_id=?", (request.match_info["user_id"],),
+            )).fetchone()
+            if row:
+                city_ids.add(row[0])
+        if path in {"/api/action/add", "/api/shift/comment", "/api/shift/delete"}:
+            row = await (await db.execute(
+                "SELECT city_id FROM shifts WHERE user_id=? AND is_active=1 LIMIT 1",
+                (tg_user["id"],),
+            )).fetchone()
+            if row:
+                city_ids.add(row[0])
+    if not city_ids and fallback:
+        city_ids.add(fallback["id"])
+    for city_id in city_ids:
+        # Не выдаём информацию о цене/составе недоступного администратору города.
+        if context and city_id not in context["allowed_city_ids"]:
+            return web.json_response({"error": "admin_scope"}, status=403)
+        subscription = await _city_subscription(city_id)
+        if not subscription["allowed"]:
+            return web.json_response({"error": "subscription_required",
+                                      "message": subscription["message"]}, status=402)
+    try:
+        return await handler(request)
+    except CitySubscriptionRequired as exc:
+        return web.json_response({"error": "subscription_required", "message": str(exc)}, status=402)
+
+
+@web.middleware
 async def cors_mw(request, handler):
     if request.method == "OPTIONS":
         resp = web.Response(status=204)
@@ -7211,6 +7345,7 @@ async def api_state(request):
             # Город по умолчанию не подменяется городом активной смены.
             "city_id": user_city_id,
         },
+        "subscription": await _city_subscription(selected_city_id),
         "registered": bool(user and name and role and user_city_id),
         "cities": [
             {"id": item["id"], "key": item["city_key"], "name": item["name"],
@@ -7570,6 +7705,8 @@ async def api_shift_start(request):
             uid, user["full_name"], user.get("role") or "", time_str, district, city_id,
             auto_close=auto_close, auto_close_hours=auto_close_hours
         )
+    except CitySubscriptionRequired as exc:
+        return web.json_response({"error": "subscription_required", "message": str(exc)}, status=402)
     except ActiveShiftExists:
         return web.json_response(
             {"error": "already_active", "message": "Смена уже открыта."}, status=400)
@@ -12596,6 +12733,87 @@ async def api_crm_notification_settings(request):
     return web.json_response({"ok": True, "settings": after})
 
 
+async def api_city_subscriptions(request):
+    context, error = await _crm_admin(request)
+    if error is not None:
+        return error
+    owner = _crm_can_manage_network(context["telegram_user"]["id"])
+    city, error = _crm_city(context, request=request)
+    if error is not None:
+        return error
+    city_ids = sorted(CITIES_BY_ID) if owner else [city["id"]]
+    items = []
+    async with db_connect() as db:
+        for city_id in city_ids:
+            item = await city_billing.status(db, city_id)
+            item["city_name"] = get_city(city_id)["name"]
+            if owner:
+                db.row_factory = aiosqlite.Row
+                history = await (await db.execute(
+                    "SELECT created_at,access_until,months,employees,amount_rub,reason,granted_by "
+                    "FROM city_billing_grants WHERE city_id=? ORDER BY id DESC LIMIT 10", (city_id,),
+                )).fetchall()
+                item["history"] = [dict(row) for row in history]
+            items.append(item)
+    owner_profile = await get_user(CRM_OWNER_USER_ID) or {}
+    username = str(owner_profile.get("telegram_username") or "").lstrip("@")
+    contact = (f"https://t.me/{username}" if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username)
+               else f"tg://user?id={CRM_OWNER_USER_ID}" if CRM_OWNER_USER_ID else None)
+    return web.json_response({"ok": True, "can_manage": owner,
+                              "owner_configured": bool(CRM_OWNER_USER_ID),
+                              "contact_url": contact, "items": items,
+                              "company_amount_rub": sum(item["amount_rub"] for item in items) if owner else None})
+
+
+async def _billing_owner(request):
+    context, error = await _crm_admin(request, write=True)
+    if error is not None:
+        return None, error
+    if not _crm_can_manage_network(context["telegram_user"]["id"]):
+        return None, web.json_response(
+            {"error": "owner_only", "message": "Только владелец бота может управлять подпиской."},
+            status=403,
+        )
+    return context, None
+
+
+async def api_city_subscription_launch(request):
+    context, error = await _billing_owner(request)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if not body or body.get("confirm") is not True:
+        return web.json_response({"error": "confirmation", "message": "Подтвердите запуск недели предупреждения."}, status=400)
+    async with db_connect() as db:
+        await city_billing.launch(db, context["telegram_user"]["id"])
+    return web.json_response({"ok": True})
+
+
+async def api_city_subscription_grant(request):
+    context, error = await _billing_owner(request)
+    if error is not None:
+        return error
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json"}, status=400)
+    # ID и срок принимаются только числами, без bool и дробных значений.
+    city_id = body.get("city_id")
+    if type(city_id) is not int or not get_city(city_id):
+        return web.json_response({"error": "city_id"}, status=400)
+    if body.get("confirm") is not True:
+        return web.json_response({"error": "confirmation"}, status=400)
+    try:
+        async with db_connect() as db:
+            until = await city_billing.grant(
+                db, city_id, context["telegram_user"]["id"], body.get("months"),
+                body.get("request_id"), body.get("reason"),
+            )
+    except ValueError as exc:
+        return web.json_response({"error": "grant", "message": str(exc)}, status=400)
+    _planned_shift_wakeup.set()
+    return web.json_response({"ok": True, "access_until": until})
+
+
 CRM_BROADCAST_TITLE_LIMIT = 120
 CRM_BROADCAST_BODY_LIMIT = 3000
 CRM_BROADCAST_HISTORY_LIMIT = 20
@@ -14684,6 +14902,10 @@ async def process_planned_shifts_once():
         plan = dict(raw); city = get_city(plan["city_id"])
         if not city:
             continue
+        # Уже открытую смену можно завершить, но новую после срока не запускаем.
+        if (not plan.get("actual_shift_id")
+                and not (await _city_subscription(city["id"]))["allowed"]):
+            continue
         start_at, end_at = _planned_shift_times(plan, city)
         if not start_at or not end_at:
             continue
@@ -14750,7 +14972,7 @@ async def process_planned_shifts_once():
                 plan.get("role") or "", plan["start_time"], plan.get("district") or "",
                 plan["city_id"], source="crm_plan", now=start_at, auto_close=False,
             )
-        except ActiveShiftExists:
+        except (ActiveShiftExists, CitySubscriptionRequired):
             continue
         except EmployeeArchived:
             logger.info(
@@ -15626,10 +15848,13 @@ async def api_health(request):
 async def start_api_server():
     try:
         app = web.Application(
-            middlewares=[cors_mw],
+            middlewares=[cors_mw, city_subscription_mw],
             client_max_size=CRM_UPLOAD_MAX_FILES * CRM_UPLOAD_MAX_BYTES + 1024 * 1024,
         )
         app.router.add_get("/api/state", api_state)
+        app.router.add_get("/api/admin/crm/subscriptions", api_city_subscriptions)
+        app.router.add_post("/api/admin/crm/subscriptions/launch", api_city_subscription_launch)
+        app.router.add_post("/api/admin/crm/subscriptions/grant", api_city_subscription_grant)
         app.router.add_get("/api/bibipass", api_bibipass)
         app.router.add_post("/api/bibipass/check-membership", api_bibipass_check_membership)
         app.router.add_post("/api/bibipass/intro-seen", api_bibipass_intro_seen)

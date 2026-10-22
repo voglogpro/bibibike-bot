@@ -517,6 +517,7 @@
   </div>
 
   <div id="app" class="hidden">
+    <div id="subscriptionNotice" class="panel hidden" role="status" aria-live="polite" style="border:1px solid #d8ab47;margin-bottom:12px;padding:14px;font-size:12px;line-height:1.6;white-space:pre-line"></div>
 
     <!-- ================= ВКЛАДКА: СМЕНА ================= -->
     <div id="tab-shift" class="page">
@@ -1405,6 +1406,11 @@ async function load({background=false}={}){
     const cityChanged = previousCity != null && Number(previousCity) !== Number(nextState.city.id);
     if(cityChanged) histLoaded = false;
     STATE = nextState;
+    const subscription=STATE.subscription,subscriptionNotice=$('subscriptionNotice');
+    subscriptionNotice.classList.toggle('hidden',!subscription?.enabled);
+    subscriptionNotice.textContent=subscription?.enabled?subscription.message:'';
+    $('btnStartForm').disabled=subscription?.allowed===false;
+    $('btnStart').disabled=subscription?.allowed===false;
     stateLoadedAt = Date.now();
     populateCitySelectors();
     if(cityChanged && !$('tab-profile').classList.contains('hidden')) await loadHistory();

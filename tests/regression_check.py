@@ -474,7 +474,8 @@ async def check_photo_repost(city):
     }
     sent = []
 
-    async def send_photo(chat_id, photo, caption=None, message_thread_id=None):
+    async def send_photo(chat_id, photo, caption=None, message_thread_id=None, parse_mode=None):
+        assert parse_mode == "HTML"
         sent.append((chat_id, photo, caption, message_thread_id))
         return SimpleNamespace(message_id=9001)
 
@@ -491,9 +492,13 @@ async def check_photo_repost(city):
     assert len(sent) == 1, sent
     chat_id, photo, caption, thread = sent[0]
     assert photo == "photo-7203" and thread == bot.STAVROPOL_DRIVERS_TOPIC_WORK
-    assert caption.startswith("👤 Иван Петров"), caption
-    assert "🚚 Переместил: 0537" in caption and "🏭 Привёз на СЦ: 0612" in caption, caption
-    assert "🛠 Поправил: 3" in caption and "💬 поправил 3" in caption, caption
+    assert caption.splitlines()[0] == (
+        f'<a href="tg://user?id={uid}"><b>Иван Петров</b></a>'
+    ), caption
+    assert caption.splitlines()[1].startswith("🕒 "), caption
+    assert "<code>0537</code> · перемещён" in caption, caption
+    assert "<code>0612</code> · на складе" in caption, caption
+    assert "🛠 Поправлено: 3" in caption and "💬 <i>поправил 3</i>" in caption, caption
     deleted = sorted(call.args[1] for call in delete.await_args_list)
     assert deleted == [7201, 7202, 7203], deleted
     assert bot._photo_packets == {}
@@ -653,6 +658,32 @@ def check_screenshot_recognition():
     assert bot.analyze_bike_photo(buffer.getvalue()) == {"kind": "street"}
 
 
+def check_photo_post_caption():
+    actions = [
+        {"action_type": "move", "bike_codes": "0537", "quantity": 0},
+        {"action_type": "repair", "bike_codes": "0537", "quantity": 0},
+        {"action_type": "to_sc", "bike_codes": "0612", "quantity": 0},
+        {"action_type": "fix", "bike_codes": "", "quantity": 2},
+    ]
+    caption = bot._photo_post_caption(
+        "Анна <Тест>", "09:05", actions, ["коммент & ещё"],
+        bot._photo_post_author_link(1, "@anna_scout"),
+    )
+    assert caption == (
+        '<a href="https://t.me/anna_scout"><b>Анна &lt;Тест&gt;</b></a>\n'
+        "🕒 09:05\n\n"
+        "<code>0537</code> · перемещён, требует ремонта\n"
+        "<code>0612</code> · на складе\n"
+        "🛠 Поправлено: 2\n"
+        "💬 <i>коммент &amp; ещё</i>"
+    ), caption
+    many = [{"action_type": "move", "bike_codes": f"{index:04d}", "quantity": 0}
+            for index in range(300)]
+    long_caption = bot._photo_post_caption("Имя", "10:00", many, [], None)
+    visible = __import__("re").sub(r"<[^>]+>", "", long_caption)
+    assert len(visible) <= 1024 and "… и ещё" in long_caption, len(visible)
+
+
 def bot_numpy():
     import numpy
     return numpy
@@ -670,6 +701,7 @@ async def main():
         await check_photo_result_reply()
         await check_photo_parking_rule()
         check_screenshot_recognition()
+        check_photo_post_caption()
         print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo rules, screenshots")
     finally:
         await bot.bot.session.close()

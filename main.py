@@ -260,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-02 · Аккуратный пост по фото, СЦ и ремонт со скриншота"
+BUILD_VERSION = "2026-11-02 · Пост по фото: список байков и имя-ссылка"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -5423,15 +5423,27 @@ PHOTO_REPOST_DELAY_SEC = 6          # тишина после последнег
 _photo_packets = {}                 # (chat_id, uid) -> {"messages": {...}, "task": ...}
 _photo_repost_rights_warned = set()
 
-PHOTO_POST_LABELS = (
-    ("move", "🚚 Переместил"),
-    ("to_sc", "🏭 Привёз на СЦ"),
-    ("from_sc", "📤 Вывез с СЦ"),
-    ("repair", "🔧 Ремонт"),
-    ("fix", "🛠 Поправил"),
-    ("battery", "🔋 Заменил АКБ"),
-    ("sticker", "🏷 Оклеил"),
+# Состояние байка в посте: «0537 · перемещён».
+PHOTO_POST_BIKE_LABELS = {
+    "move": "перемещён",
+    "to_sc": "на складе",
+    "from_sc": "вывезен с СЦ",
+    "repair": "требует ремонта",
+    "fix": "поправлен",
+    "battery": "заменён АКБ",
+    "sticker": "оклеен",
+}
+# Действия без номеров, только количеством: «🛠 Поправлено: 3».
+PHOTO_POST_QUANTITY_LABELS = (
+    ("move", "🚚 Перемещено"),
+    ("fix", "🛠 Поправлено"),
+    ("battery", "🔋 Заменено АКБ"),
+    ("repair", "🔧 В ремонт"),
+    ("to_sc", "🏭 На склад"),
+    ("from_sc", "📤 Вывезено с СЦ"),
+    ("sticker", "🏷 Оклеено"),
 )
+PHOTO_POST_ORDER = ("move", "to_sc", "from_sc", "repair", "fix", "battery", "sticker")
 
 
 def _photo_packet_add(chat_id, uid, message, city, kind, ts):
@@ -5480,26 +5492,53 @@ async def _flush_photo_packet(key):
         logger.warning("ФОТО-ПОСТ: сбой, оригиналы оставлены: %s", exc)
 
 
-def _photo_post_caption(name, when, actions, comments):
-    lines = [f"👤 {name}" + (f" · {when}" if when else "")]
-    for action_type, label in PHOTO_POST_LABELS:
-        codes, quantity = [], 0
-        for action in actions:
-            if action["action_type"] != action_type:
-                continue
-            row_codes = [code for code in str(action["bike_codes"] or "").split(",") if code]
-            codes.extend(code for code in row_codes if code not in codes)
-            if not row_codes:
-                quantity += int(action["quantity"] or 0)
-        parts = list(codes)
-        if quantity:
-            parts.append(f"{quantity} шт." if codes else str(quantity))
-        if parts:
-            lines.append(f"{label}: {', '.join(parts)}")
-    for comment in comments:
-        lines.append(f"💬 {comment[:300]}")
-    caption = "\n".join(lines)
-    return caption if len(caption) <= 1024 else caption[:1020] + "…"
+def _photo_post_author_link(uid, username):
+    """Ссылка на сотрудника: по нику — без уведомления, иначе по ID."""
+    username = _telegram_username(username)
+    return f"https://t.me/{username}" if username else f"tg://user?id={int(uid)}"
+
+
+def _photo_post_caption(name, when, actions, comments, author_url=None):
+    """HTML-подпись поста: имя-ссылка, время и список «номер · состояние»."""
+    title = f"<b>{html.escape(name)}</b>"
+    lines = [f'<a href="{html.escape(author_url, quote=True)}">{title}</a>' if author_url else title]
+    if when:
+        lines.append(f"🕒 {html.escape(when)}")
+    states, quantities = {}, {}
+    for action in actions:
+        action_type = action["action_type"]
+        row_codes = [code for code in str(action["bike_codes"] or "").split(",") if code]
+        if not row_codes:
+            quantities[action_type] = quantities.get(action_type, 0) + int(action["quantity"] or 0)
+        for code in row_codes:
+            kinds = states.setdefault(code, [])
+            if action_type not in kinds:
+                kinds.append(action_type)
+    bike_lines = []
+    for code, kinds in states.items():
+        labels = [PHOTO_POST_BIKE_LABELS.get(kind, kind)
+                  for kind in sorted(kinds, key=lambda kind: PHOTO_POST_ORDER.index(kind)
+                                     if kind in PHOTO_POST_ORDER else 99)]
+        bike_lines.append(f"<code>{html.escape(code)}</code> · {', '.join(labels)}")
+    extra = [f"{label}: {quantities[kind]}" for kind, label in PHOTO_POST_QUANTITY_LABELS
+             if quantities.get(kind)]
+    notes = [f"💬 <i>{html.escape(comment[:300])}</i>" for comment in comments]
+
+    def visible(parts):
+        return len(re.sub(r"<[^>]+>", "", html.unescape("\n".join(parts))))
+
+    body = []
+    for index, line in enumerate(bike_lines):
+        if visible(lines + body + [line] + extra + notes) > 1000:
+            body.append(f"… и ещё {len(bike_lines) - index}")
+            break
+        body.append(line)
+    tail = list(extra)
+    for note in notes:
+        if visible(lines + [""] + body + tail + [note]) > 1020:
+            break
+        tail.append(note)
+    return "\n".join(lines + ([""] if body or tail else []) + body + tail)
 
 
 async def _repost_photo_packet(key):
@@ -5544,6 +5583,9 @@ async def _repost_photo_packet(key):
     first = used[0]["message"]
     user = await get_user(uid) or {}
     name = (user.get("full_name") or getattr(first.from_user, "full_name", "") or "Сотрудник").strip()
+    author_url = _photo_post_author_link(
+        uid, user.get("telegram_username") or getattr(first.from_user, "username", None),
+    )
     when = ""
     try:
         last_date = used[-1]["message"].date
@@ -5552,20 +5594,23 @@ async def _repost_photo_packet(key):
         pass
     comments = [str(entry["message"].caption or entry["message"].text or "").strip()
                 for entry in used]
-    caption = _photo_post_caption(name, when, actions, [text for text in comments if text])
+    caption = _photo_post_caption(name, when, actions, [text for text in comments if text],
+                                  author_url)
     thread_id = getattr(first, "message_thread_id", None)
     photos = [entry["message"].photo[-1].file_id for entry in used
               if entry["kind"] == "street" and getattr(entry["message"], "photo", None)][:10]
     try:
         if len(photos) > 1:
-            media = [InputMediaPhoto(media=file_id, caption=caption if index == 0 else None)
+            media = [InputMediaPhoto(media=file_id, caption=caption if index == 0 else None,
+                                     parse_mode="HTML" if index == 0 else None)
                      for index, file_id in enumerate(photos)]
             posted = await bot.send_media_group(chat_id, media, message_thread_id=thread_id)
         elif photos:
             posted = [await bot.send_photo(chat_id, photos[0], caption=caption,
-                                           message_thread_id=thread_id)]
+                                           message_thread_id=thread_id, parse_mode="HTML")]
         else:
-            posted = [await bot.send_message(chat_id, caption, message_thread_id=thread_id)]
+            posted = [await bot.send_message(chat_id, caption, message_thread_id=thread_id,
+                                             parse_mode="HTML")]
     except Exception as exc:
         logger.warning("ФОТО-ПОСТ НЕ ОТПРАВЛЕН: chat=%s uid=%s ошибка=%s — оригиналы оставлены",
                        chat_id, uid, exc)

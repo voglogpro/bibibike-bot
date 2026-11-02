@@ -260,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-10-22 · Подписка города и недельное предупреждение"
+BUILD_VERSION = "2026-11-02 · Распознавание фото и без БибиПасса"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -295,6 +295,13 @@ CRM_OWNER_USER_ID = (
     else 0
 )
 
+# Создатель бота — показывается сотрудникам в профиле Mini App.
+# CREATOR_TELEGRAM — ник (@name) или ссылка t.me/name. Если не задан,
+# берётся Telegram-ник владельца CRM из таблицы users.
+CREATOR_NAME = os.getenv("CREATOR_NAME", "Кирилл Понамарев").strip() or "Кирилл Понамарев"
+CREATOR_TELEGRAM = os.getenv("CREATOR_TELEGRAM", "").strip()
+KIRA_KONSTRUKTOR_URL = "https://kirakonstruktor.ru"
+
 
 def _crm_can_manage_network(user_id):
     try:
@@ -307,76 +314,6 @@ CRM_UPLOAD_MAX_BYTES = max(
     1024 * 1024,
     min(10 * 1024 * 1024, int(os.getenv("CRM_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))),
 )
-
-# Ежемесячный конкурс сотрудников «БибиПасс». Проверка подписки работает
-# надёжно только когда бот добавлен администратором в указанный канал.
-BIBIPASS_ENABLED = os.getenv("BIBIPASS_ENABLED", "1").strip().lower() not in {
-    "0", "false", "off", "no",
-}
-BIBIPASS_CHANNEL_CHAT = os.getenv("BIBIPASS_CHANNEL_CHAT", "@bbbikefan").strip()
-BIBIPASS_CHANNEL_URL = os.getenv(
-    "BIBIPASS_CHANNEL_URL", "https://t.me/bbbikefan"
-).strip()
-BIBIPASS_SEASON_ID = os.getenv(
-    "BIBIPASS_SEASON_ID", "employee-quest-2026-08-26"
-).strip()
-BIBIPASS_SEASON_NAME = os.getenv(
-    "BIBIPASS_SEASON_NAME", "Квест сотрудников · 20 дней"
-).strip()
-BIBIPASS_SEASON_START = os.getenv(
-    "BIBIPASS_SEASON_START", "2026-08-26T09:00:00+03:00"
-).strip()
-BIBIPASS_SEASON_END = os.getenv(
-    "BIBIPASS_SEASON_END", "2026-09-15T09:00:00+03:00"
-).strip()
-BIBIPASS_MEMBERSHIP_TTL_SEC = max(
-    60, min(3600, int(os.getenv("BIBIPASS_MEMBERSHIP_TTL_SEC", "300")))
-)
-BIBIPASS_ANNOUNCEMENT_LEAD_HOURS = 24
-BIBIPASS_START_PUSH_WINDOW_HOURS = 6
-BIBIPASS_LEVEL_COUNT = 20
-BIBIPASS_FIRST_LEVEL_POINTS = 20
-BIBIPASS_LEVEL_POINTS_STEP = 5
-# Половину XP храним целым числом: 1 = 0,5 XP, 2 = 1 XP.
-BIBIPASS_ACTION_HALF_POINTS = {
-    "move": 2,
-    "fix": 1,
-    "to_sc": 2,
-    "from_sc": 2,
-    "battery": 2,
-}
-# Цена уровня и награда растут вместе. 20 + 25 + ... + 115 = 1350 XP
-# за полный сезон. Банк на участника — ровно 150 Бибибонусов:
-# Ступени 2 → 4 → 6 → 8 → 10 → 12 → 14 → 20 дают ровно 150.
-# Две подписки идут дополнительно: 1 месяц и 3 месяца.
-BIBIPASS_BONUS_PROGRESSION = (
-    2, 2, 2, 2,
-    4, 4, 4,
-    6, 6, 6,
-    8, 8, 8,
-    10, 10, 10,
-    12, 12,
-    14,
-    20,
-)
-BIBIPASS_REWARDS = []
-_bibipass_cumulative_points = 0
-for _bibipass_level_number in range(1, BIBIPASS_LEVEL_COUNT + 1):
-    _bibipass_need = (
-        BIBIPASS_FIRST_LEVEL_POINTS
-        + (_bibipass_level_number - 1) * BIBIPASS_LEVEL_POINTS_STEP
-    )
-    _bibipass_cumulative_points += _bibipass_need
-    BIBIPASS_REWARDS.append({
-        "level": _bibipass_level_number,
-        "points_needed": _bibipass_need,
-        "cumulative_points": _bibipass_cumulative_points,
-        "bibibonuses": BIBIPASS_BONUS_PROGRESSION[
-            _bibipass_level_number - 1
-        ],
-        "subscription_months": (1 if _bibipass_level_number == 10
-                                else 3 if _bibipass_level_number == 20 else 0),
-    })
 
 # One source of truth for the quick CRM calendar.  The night hours for scouts
 # and chargers match the existing single-shift editor.  Driver presets keep
@@ -1469,6 +1406,8 @@ async def init_db():
                 FOREIGN KEY(route_id) REFERENCES task_chat_routes(id) ON DELETE CASCADE
             )
         """)
+        # БибиПасс удалён из бота и Mini App. Таблицы оставлены: на проде
+        # в них история сезона, а схема БД только расширяется.
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bibipass_participants (
                 season_id TEXT NOT NULL,
@@ -3014,10 +2953,6 @@ async def replace_message_actions(uid, mid, city_id, shift_id, actions, event_ve
             (event_version, city_id, chat_id, uid, mid)
         )
         await db.commit()
-    try:
-        await _bibipass_reconcile_user(uid)
-    except Exception:
-        logger.exception("BibiPass: не удалось обновить награды пользователя %s", uid)
     return [row[0] for row in rows], True
 
 
@@ -4820,6 +4755,289 @@ def read_number_without_ocr(image, numpy, Image):
 
 
 # ============================================================
+# === НОВАЯ ВЕРСИЯ ТЕХПРИЛОЖЕНИЯ: шрифт Inter, список «Выбрано» ==
+# ------------------------------------------------------------
+# Номера в техприложении набраны шрифтом Inter. Эталоны цифр Inter
+# (обычное, среднее, полужирное, жирное начертания) вшиты сюда как
+# битовые маски 16x24 в hex — шрифты на сервере не нужны.
+# Номер ищется по всему экрану как слово «NN-NNNN», поэтому одинаково
+# читаются крупный номер карточки байка и номера в списке массового
+# выделения у водителей.
+# ============================================================
+
+DIGIT_TEMPLATES_INTER_HEX = {
+    "0": (
+        "07e00ff01ff8383c701e700ee00ee007e007e007e007e007e007e007e007e007e007e00e700e701e383c3ff80ff007e0",
+        "07e00ff01ff83c3c781e781e700ef00ef00fe007e007e007e007e007e007f00ff00f700e781e781e3c3c1ff80ff007e0",
+        "07e00ff01ff83ffc7c3c781e781ef00ef00ff00ff00ff00ff00ff00ff00ff00ff00e781e781e7c3e3ffc3ff80ff007e0",
+        "07e00ff01ff83ffc3e3e7c1e781e781ff80ff00ff00ff00ff00ff00ff00ff80f781f781e7c1e3e3e3ffc1ff80ff007e0",
+        "07e00ff03ff83ffc7ffe7c3e783ef81ef81ff81ff81ff81ff81ff81ff81ff81ff81e783e7c3e7ffe3ffc3ff80ff007e0",
+    ),
+    "1": (
+        "00ff03ff1fff7f9ffc1ff01fc01f001f001f001f001f001f001f001f001f001f001f001f001f001f001f001f001f001f",
+        "00ff07ff1fff7ffffe3ff83fe03f003f003f003f003f003f003f003f003f003f003f003f003f003f003f003f003f003f",
+        "01ff07ff1fff7fffff7ff87fe07f807f007f007f007f007f007f007f007f007f007f007f007f007f007f007f007f007f",
+        "01ff07ff1fff7ffffffffc7ff07fc07f007f007f007f007f007f007f007f007f007f007f007f007f007f007f007f007f",
+        "01ff07ff1fff7ffffffffcfff8ffe0ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff",
+    ),
+    "2": (
+        "07e01ff83ffc781e700ee00ee00f000e000e000e001c003c007800f001e003c007800f001e003c007800ffffffffffff",
+        "0fe01ff83ffc7c3ef01ef00ff00f000f000e001e001c003c007800f001e003c007800f001e003c007800ffffffffffff",
+        "07e01ff83ffc7e7ef81ef01ff00f000f001f001e003e007c007800f801f003e007c00f801f003e007fffffffffffffff",
+        "07e01ff83ffc7ffe7c3ef81ff81f001f001f001e003e007c00fc01f803f007e00fc01f803f007e00ffffffffffffffff",
+        "07e01ff83ffc7ffe7e7efc3ef81ff81f001f003e003e007c00fc01f803f007e00fc01f803f007f00ffffffffffffffff",
+    ),
+    "3": (
+        "07e01ff83ffc781c700e600e000e000e000e001c03f803f003f8003e000e000f00070007e007f00e781e7ffc1ff807e0",
+        "7ffe7ffe7ffe001c0038007000e001c003c0038007e007f8007c001e000f000700070007e007f00e781e3ffc1ff807e0",
+        "07e01ff83ffc7c3c781e700e000e000e001e003c03f803f003f8003e001e000f000f0007f00ff00f7c3e3ffc1ff807e0",
+        "7ffe7ffe7ffe003c0038007800f001e003c0078007e007f803fe001e000f000f000f000ff00ff01f7c3e7ffc1ff807e0",
+        "07e01ff83ffc7e7e781e781e701e001e001e003c03f803f003fc007e001e000f000ff00ff00ff81f7ffe3ffc1ff807e0",
+        "7ffe7ffe7ffe7ffe003c007800f001e003c007c007f007fc03fe001e001f000f000ff00ff00ff81f7ffe3ffc1ff807e0",
+        "07e01ff83ffc7ffc7c3ef81ef01e001e003e007c07f807f007fc03fe003e001f001ff01ff81ffc3e7ffe3ffc1ff80fe0",
+        "7ffe7ffe7ffe7ffe007c007800f001f003e007c007f007f807fc003e001f001f001ff01ff81ffc3e7ffe3ffc1ff80fe0",
+        "07e01ff83ffc7ffe7e7e7c3ef81e001e003e007c07f803f007fc03fe003f001f001ff81ffc3fffff7ffe3ffc1ff807e0",
+        "7ffe7ffe7ffe7ffe007e007c00f801f003e007c007f807fc07fe003e001f001f001ff81ffc3f7ffe7ffe3ffc1ff807e0",
+    ),
+    "4": (
+        "0078007800f801f801f803b80338073806380e381c381c38383830387038e038ffffffffffff00380038003800380038",
+        "00e000e001c001c003800300070006000e000c381c381838383830387038e038ffffffffffff00380038003800380038",
+        "007800f800f801f801f803b803b807380f380e381e381c383838383870387038ffffffffffff00380038003800380038",
+        "00e000e001c003c003800380070007000e000e381c383c38383878387038f038ffffffffffff00380038003800380038",
+        "00f800f801f801f803f803f807b807380f380e381e383c383c3878387838f038ffffffffffffffff0038003800380038",
+        "00e001e001c003c00380078007000f000e001e381c383c38383878387038f038ffffffffffffffff0038003800380038",
+        "00f801f801f803f803f807f807f80f780f781e781e783c783c7878787878f07cffffffffffffffff0078007800780078",
+        "01e001e003c003c0078007800f000f001e001e383c383c383c387838f038f03cffffffffffffffff0078007800780078",
+        "00fc01fc01fc03fc03fc07fc07fc0ffc0f7c1f7c1e7c3e7c3c7c7c7c787cffffffffffffffffffff007c007c007c007c",
+        "01e003e003c007c007c007800f800f001f001e3c3e3c3c3c7c3c783cf83cffffffffffffffffffff007c007c007c007c",
+    ),
+    "5": (
+        "7ffe7ffe7ffc7000700070007000700063c0fff8fffcf03c001e000f0007000700070007e00ff00e781e7ffc1ff80fe0",
+        "3ffe7ffe7ffe7800780070007000700073e07ff87ffcfc3e001e000f000f000f000f000ff00ff01e7c3e3ffc1ff807e0",
+        "7ffe7ffe7ffe7ffc780078007800780071e07ff8fffcfefe703e001f000f000f000ff00ff01ef83e7efe3ffc1ff807e0",
+        "3ffe7ffe7ffe7ffe780078007800780079e07bf87ffc7ffe783e001f001f000f000ff01ff81f7c3e7ffe3ffc1ff807e0",
+        "7ffe7ffe7ffe7ffe7c0078007800780079f07ff8fffcfffefc3e001f001f001f001ff81ff83ffe7e7ffe3ffc1ff80fe0",
+    ),
+    "6": (
+        "03e00ff81ffc3c1e380e70077000e000e0c0e7f0effcfc3ef80ef00fe007e007e007e0077007700e381e3ffc1ff807e0",
+        "007000f001e001c003c0078007000e001c003de03ff87e7c781ef00fe007e007e007e007e007f00e781e3ffc1ff807e0",
+        "03f00ff81ffc3e3e380e780f70007000f0e0e7f8effcfe3ef81ef80ff00ff007f007700f700f781e3c3e1ffc0ff807e0",
+        "00f000f001e003c003c007800f000e001e003ff03ff87e7c781ef00ff00ff00ff00ff00ff00f781e7c3e3ffc1ff807e0",
+        "07e00ff81ffc3ffe3c1e781e780ef000f0e0f3f8f7fcfffefc1ef81ff00ff00ff00ff00f781f7c1e3e7e3ffc1ff807e0",
+        "00f001f001e003c007c007800f001f001e003ff03ffc7ffe7c3ef81ff00ff00ff00ff00ff80f781e7e7e3ffc1ff807e0",
+        "03e00ff81ffc3ffe3e3e7c1f780f7800f8e0f3f8fffcfffefc3ef81ff80ff80ff80f780f781f7c3e3ffe1ffc0ff807e0",
+        "00f001f003e003c007c007800f001f001ec03ff83ffc7ffe7c3ef81ff81ff00ff00ff81ff81f7c3e7ffe3ffc1ff807e0",
+        "03e00ff81ffc3ffc3ffe7c3e7c1ff800f8e0fbf8fbfcfffefe7efc1ff81ff81ff81f781f7c1f7e7e3ffe1ffc0ff807e0",
+        "01f001f003e007c007c00f800f801f003fe03ff87ffc7ffefe7ffc1ff81ff81ff81ff81ffc3f7e7e7ffe3ffc1ff807e0",
+    ),
+    "7": (
+        "ffffffffffff000f000e001e001c003c00380070007000e000e001c001c00380078007000f000e001e001c003c003800",
+        "ffffffffffff000f001e001e003c003c0078007800f000f001e001e003c003c0078007800f000f001e001e003c003c00",
+        "ffffffffffffffff001f001e003e003c007c007800f800f001f001e003e003c007c007800f800f001f001e003e003c00",
+        "ffffffffffffffff001f001f003e003e007c007c00f800f801f001f003e003e007c007c00f800f801f001f003e003e00",
+        "ffffffffffffffff003f003f003e007e007c00fc00f801f801f001f003e003e007e007c00fc00f801f801f003f003e00",
+    ),
+    "8": (
+        "07e01ff83ffc781c700e700e700e700e700e381c1ff80ff03ffc781e700ee007e007e007e007f00f781e7ffc1ff807e0",
+        "07e01ff83ffc3c3c781e700e700e700e781e3c3c1ff80ff03ffc7c3e780ef00ff00ff00ff00ff00f7c1e3ffc1ff807e0",
+        "07e01ff83ffc7e7c783e781e781e781e781e3c3c3ff80ff03ff87e7c781ef01ff00ff00ff00ff81f7c3e3ffc1ff807e0",
+        "07e01ff83ffc3ffe7c3e781e781e781e781e3e3c1ff80ff01ffc7ffe7c1ef81ff80ff80ff81ffc1f7ffe3ffe1ff807e0",
+        "07e01ff83ffc7ffe7e7e7c3e781e781e7c3e3e7c1ff80ff03ffc7ffe7c3ef81ff81ff81ff81ffc3f7ffe3ffc1ff807e0",
+    ),
+    "9": (
+        "07e01ff03ff8783c700ee00ee006e007e007e00ff00f701f7c3f3ff71fe703070006000ee00e701c783c3ff81ff007c0",
+        "07e01ff83ffc781ef00ee007e007e007e007e007f00f781e3e7e1ffc07bc0078007000e001e003c0038007800f000e00",
+        "07e01ff03ff87c3c781ef00ef00ff00ff00ff00ff00f781f7e7f3ff70fe7030f000fe00ef01e781c7c7c3ff81ff007e0",
+        "07e01ff83ffc7c3e781ef00ff00ff00ff00ff00ff00f781e3e7e1ffc0ffc0078007000f001e003c003c007800f000f00",
+        "07e01ff03ff87efc783ef01ef01ef00ff00ff01ff01f783f7fff3fef1fcf070f000e701ef01e783c7ffc3ff81ff007c0",
+        "07e01ff83ffc7e7e781ef01ff00ff00ff00ff00ff81f7c3e7ffe3ffc0ffc007800f800f001e003e003c007800f800f00",
+        "07e01ff03ff87ffc7c3ef81ef81ef01ff01ff81ff81f7c3f7fff3fef1fcf070f001ef81e783e7c7c7ffc3ff81ff007c0",
+        "07e01ff83ffc7ffe7c3ef81ff81ff00ff00ff81ff81f7c3e7ffe3ffc1ffc037800f800f001e003e003c007c00f800f00",
+        "07e01ff03ff87ffc7e7ef83ef83ef81ff81ff83ff83ffe7f7fff3fdf1fdf061f001ef83efc7e7ffc7ffc3ff81ff007c0",
+        "07e01ff83ffc7ffe7e7efc3ff81ff81ff81ff81ff81ffe7f7ffe3ffe1ffc07fc00f801f001f003e003e007c00f800f80",
+    ),
+}
+
+PHOTO_NUMBER_DARK_MAX = 120        # тёмный текст номера (серые подписи светлее)
+PHOTO_NUMBER_MATCH_MIN = 0.80      # минимальное сходство цифры с эталоном
+PHOTO_NUMBER_MATCH_MARGIN = 0.04   # отрыв от ближайшей другой цифры
+PHOTO_CARD_NUMBER_MIN_HEIGHT = 0.042   # доля ширины: крупный номер карточки
+PHOTO_LIST_NUMBER_MIN_HEIGHT = 0.018   # доля ширины: номер в списке «Выбрано»
+
+
+def _inter_digit_templates(numpy):
+    cache = globals().get("_INTER_DIGIT_TEMPLATES_CACHE")
+    if cache is not None:
+        return cache
+    width, height = DIGIT_GRID
+    cache = {}
+    for char, variants in DIGIT_TEMPLATES_INTER_HEX.items():
+        cache[char] = [
+            numpy.array([int(bit) for bit in format(int(value, 16), f"0{width * height}b")],
+                        dtype=numpy.uint8).reshape(height, width)
+            for value in variants
+        ]
+    globals()["_INTER_DIGIT_TEMPLATES_CACHE"] = cache
+    return cache
+
+
+def _classify_digit(glyph, numpy, Image):
+    """Цифра по всем эталонам (старые скриншоты + шрифт Inter техприложения).
+
+    Возвращает None, если сходство низкое или две разные цифры почти
+    одинаково похожи: лучше не засчитать, чем записать чужой номер.
+    """
+    normalized = _normalize_glyph(glyph, numpy, Image)
+    best = {}
+    for source in (_digit_templates(), _inter_digit_templates(numpy)):
+        for char, variants in source.items():
+            for template in variants:
+                score = float((normalized == template).mean())
+                if score > best.get(char, -1.0):
+                    best[char] = score
+    if not best:
+        return None
+    ranked = sorted(best.items(), key=lambda item: -item[1])
+    char, score = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
+    if score < PHOTO_NUMBER_MATCH_MIN or score - runner_up < PHOTO_NUMBER_MATCH_MARGIN:
+        return None
+    return char
+
+
+def _row_blocks(mask_rows, min_value, max_gap):
+    active = [index for index, value in enumerate(mask_rows) if value > min_value]
+    if not active:
+        return []
+    blocks, start, prev = [], active[0], active[0]
+    for index in active[1:]:
+        if index - prev > max_gap:
+            blocks.append((start, prev))
+            start = index
+        prev = index
+    blocks.append((start, prev))
+    return blocks
+
+
+def find_bike_numbers(image, numpy, Image):
+    """Все номера вида «23-0537» на скриншоте техприложения.
+
+    Ищет строки тёмного текста, режет их на слова и символы и принимает
+    только слово ровно из двух цифр, дефиса и четырёх цифр. Подписи
+    («Заряд: 41%»), время и даты под этот шаблон не подходят.
+    Возвращает [{"code": "0537", "height": доля ширины, "top": доля высоты}].
+    """
+    width, height = image.size
+    gray = numpy.array(image.convert("L"))
+    dark = gray < PHOTO_NUMBER_DARK_MAX
+    found = []
+    min_glyph = max(8, int(width * 0.012))
+    for y0, y1 in _row_blocks(dark.sum(axis=1), max(2, int(width * 0.004)), 2):
+        band_height = y1 - y0 + 1
+        if band_height < min_glyph or band_height > width * 0.09:
+            continue
+        band = dark[y0:y1 + 1, :]
+        columns = band.sum(axis=0)
+        pieces, start = [], None
+        for index, value in enumerate(columns):
+            if value > 0 and start is None:
+                start = index
+            elif value == 0 and start is not None:
+                pieces.append((start, index))
+                start = None
+        if start is not None:
+            pieces.append((start, len(columns)))
+        # Слова: символы номера стоят плотно, между словами — большой зазор.
+        words, current = [], []
+        for piece in pieces:
+            if current and piece[0] - current[-1][1] > band_height * 0.55:
+                words.append(current)
+                current = []
+            current.append(piece)
+        if current:
+            words.append(current)
+        for word in words:
+            if len(word) != 7:
+                continue
+            glyphs = []
+            for x0, x1 in word:
+                piece = band[:, x0:x1]
+                rows = numpy.where(piece.sum(axis=1) > 0)[0]
+                glyphs.append(piece[rows[0]:rows[-1] + 1, :])
+            digit_height = max(glyph.shape[0] for glyph in glyphs)
+            text = ""
+            for glyph in glyphs:
+                glyph_height, glyph_width = glyph.shape
+                if glyph_height < digit_height * 0.35 and glyph_width > glyph_height:
+                    text += "-"
+                elif glyph_height >= digit_height * 0.85:
+                    text += _classify_digit(glyph, numpy, Image) or "?"
+                else:
+                    text += "?"
+            match = re.fullmatch(r"\d{2}-(\d{4})", text)
+            if match:
+                found.append({
+                    "code": match.group(1),
+                    "height": digit_height / width,
+                    "top": y0 / height,
+                })
+    return found
+
+
+def _photo_read_toggles_v2(image, numpy):
+    """Тумблеры новой версии техприложения: тёмный круглый бегунок на дорожке.
+
+    Включённый — дорожка зелёная, выключенный — светло-серая. Возвращает
+    список состояний сверху вниз или None, если тумблеры не найдены.
+    """
+    arr = numpy.array(image.convert("RGB")).astype(int)
+    height, width, _ = arr.shape
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    left = int(width * 0.55)
+    knob = ((r < 60) & (g < 60) & (b < 70))[:, left:]
+    green = ((g > 150) & (g - r > 45) & (g - b > 45))[:, left:]
+    track = ((r > 205) & (r < 245) & (b >= r) & (b - r <= 16) & (abs(g - r) <= 10))[:, left:]
+    states = []
+    knob_min = width * 0.035
+    for y0, y1 in _row_blocks(knob.sum(axis=1), int(width * 0.02), 2):
+        block_height = y1 - y0 + 1
+        if block_height < width * 0.035 or block_height > width * 0.09:
+            continue
+        # Бегунок — сплошной круг: его самая длинная тёмная серия не короче
+        # ~3,5% ширины. Текст и значки состоят из тонких штрихов. Белый
+        # значок внутри бегунка («−» или «✓») режет середину, поэтому
+        # берём самую длинную серию по всем строкам блока.
+        best_run = None
+        for row in knob[y0:y1 + 1]:
+            xs = numpy.where(row)[0]
+            if len(xs) == 0:
+                continue
+            run_start = prev = xs[0]
+            for x in list(xs[1:]) + [None]:
+                if x is None or x - prev > 1:
+                    if best_run is None or prev - run_start > best_run[1] - best_run[0]:
+                        best_run = (run_start, prev)
+                    run_start = x
+                if x is not None:
+                    prev = x
+        if best_run is None or best_run[1] - best_run[0] + 1 < knob_min:
+            continue
+        knob_x0, knob_x1 = best_run
+        span = int(width * 0.10)
+        x_from = max(0, knob_x0 - span)
+        x_to = min(knob.shape[1], knob_x1 + span)
+        area = slice(y0, y1 + 1), slice(x_from, x_to)
+        green_pixels = int(green[area].sum())
+        track_pixels = int(track[area].sum())
+        threshold = block_height * block_height * 0.25
+        if green_pixels > threshold and green_pixels > track_pixels:
+            states.append(True)
+        elif track_pixels > threshold:
+            states.append(False)
+    return states or None
+
+
+# ============================================================
 # === ЭКСПЕРИМЕНТ: распознавание скриншотов техприложения ===
 # ------------------------------------------------------------
 # Полностью изолированный блок. Работает ТОЛЬКО если у сотрудника
@@ -4958,93 +5176,220 @@ def _photo_read_toggles(image, numpy):
     return {name for name, is_on in zip(names, toggles) if is_on}
 
 
-def parse_bike_screenshot(image_bytes):
-    """Разбор одного скриншота. Возвращает None, если это не карточка байка.
+def analyze_bike_photo(image_bytes):
+    """Что на фотографии: скриншот техприложения или снимок улицы.
 
-    Логика действий:
-      «На линии» -> байк поставлен на линию, значит было перемещение;
-      «Ремонт»   -> снят в ремонт (обычно вместе с перемещением);
-      «Склад»    -> отвезён на склад/СЦ.
+    Возвращает словарь:
+      {"kind": "street"}                         — фото парковки/байка;
+      {"kind": "screenshot", "screen": "card"|"list"|"unknown",
+       "codes": [...]}                           — номера, которые бот запишет
+                                                   перемещением;
+      {"kind": "unknown"}                        — не удалось разобрать.
+
+    Перемещение даёт только:
+      • карточка байка с включённым тумблером «На линии»;
+      • список массового выделения («Выбрано: N») — все номера списка.
+    Поправки, ремонт и прочее сотрудник пишет текстом сам.
     """
     Image, numpy, _unused = _photo_libs()
     if Image is None:
-        return None
+        return {"kind": "unknown"}
     try:
         import io
         image = Image.open(io.BytesIO(image_bytes))
+        image.load()
         if not _photo_looks_like_app(image, numpy):
-            logger.info(
-                "ФОТО-ПРОПУСК: не похоже на скриншот техприложения "
-                "(размер=%sx%s) — вероятно, фото парковки. Это нормально.",
-                image.size[0], image.size[1]
-            )
-            return None
-        number = _photo_read_number(image, numpy, Image)
-        toggles = _photo_read_toggles(image, numpy)
-        if not number:
-            # Диагностика: видно, что скриншот опознан, но цифры не собрались.
-            # По этой строке можно понять, какой цифры не хватает в эталонах.
-            logger.info(
-                "ФОТО-ДИАГНОСТИКА: скриншот опознан, размер=%sx%s, "
-                "тумблеры=%s, НО номер не распознан — пришли этот скриншот "
-                "разработчику, чтобы добавить начертание цифр",
-                image.size[0], image.size[1], sorted(toggles) or "не найдены"
-            )
-            return None
+            logger.info("ФОТО: снимок улицы/парковки (размер=%sx%s)", *image.size)
+            return {"kind": "street"}
+        width = image.size[0]
+        numbers = find_bike_numbers(image, numpy, Image)
+        card_numbers = [item["code"] for item in numbers
+                        if item["height"] >= PHOTO_CARD_NUMBER_MIN_HEIGHT]
+        list_numbers = [item["code"] for item in numbers
+                        if PHOTO_LIST_NUMBER_MIN_HEIGHT <= item["height"] < PHOTO_CARD_NUMBER_MIN_HEIGHT]
 
-        actions = []
-        if "on_line" in toggles:
-            actions.append("move")
-        if "repair" in toggles:
-            if "move" not in actions:
-                actions.append("move")
-            actions.append("repair")
-        if "warehouse" in toggles:
-            actions.append("to_sc")
-        if not actions:
+        toggles = None
+        states = _photo_read_toggles_v2(image, numpy)
+        names = PHOTO_TOGGLE_ORDER.get(len(states or []))
+        if names:
+            toggles = {name for name, is_on in zip(names, states) if is_on}
+        elif states is None:
+            legacy = _photo_read_toggles(image, numpy)
+            toggles = legacy or None
+
+        if toggles is not None:
+            number = card_numbers[0] if card_numbers else _photo_read_number(image, numpy, Image)
+            if not number:
+                logger.info(
+                    "ФОТО-ДИАГНОСТИКА: карточка байка, тумблеры=%s, номер не распознан "
+                    "(размер=%sx%s) — пришлите скриншот разработчику",
+                    sorted(toggles) or "все выключены", width, image.size[1],
+                )
+                return {"kind": "screenshot", "screen": "card", "codes": []}
+            codes = [number] if "on_line" in toggles else []
             logger.info(
-                "ФОТО-ДИАГНОСТИКА: байк %s распознан, но ни один тумблер "
-                "действия не включён (найдено: %s) — засчитывать нечего",
-                number, sorted(toggles) or "нет"
+                "ФОТО: карточка байка %s, тумблеры=%s -> перемещение=%s",
+                number, sorted(toggles) or "все выключены", bool(codes),
             )
-            return None
+            return {"kind": "screenshot", "screen": "card", "codes": codes}
+
+        if list_numbers and not card_numbers:
+            codes = list(dict.fromkeys(list_numbers))
+            logger.info("ФОТО: список массового выделения, номера=%s", codes)
+            return {"kind": "screenshot", "screen": "list", "codes": codes}
+
         logger.info(
-            "ФОТО-РАСПОЗНАНО: байк=%s размер=%sx%s тумблеры=%s действия=%s",
-            number, image.size[0], image.size[1], sorted(toggles), actions
+            "ФОТО-ДИАГНОСТИКА: скриншот без распознанных номеров/тумблеров "
+            "(размер=%sx%s, крупные=%s, список=%s)",
+            width, image.size[1], card_numbers, list_numbers,
         )
-        return {"number": number, "toggles": sorted(toggles), "actions": actions}
+        return {"kind": "screenshot", "screen": "unknown", "codes": []}
     except Exception as exc:
-        logger.warning("ЭКСПЕРИМЕНТ (скриншоты): разбор не удался: %s", exc)
-        return None
+        logger.warning("ФОТО: разбор не удался: %s", exc)
+        return {"kind": "unknown"}
 
 
-async def try_parse_screenshot_message(message: Message, city, shift):
-    """Пробует разобрать скриншоты сообщения. Возвращает список действий.
-
-    Ошибки не пробрасываются наружу: при любой проблеме возвращается
-    пустой список и обычная обработка сообщения продолжается.
-    """
+async def analyze_photo_message(message: Message):
+    """Скачивает фото сообщения и разбирает его. Ошибки не пробрасываются."""
     try:
         if not getattr(message, "photo", None):
-            return []
+            return {"kind": "unknown"}
         file_info = await bot.get_file(message.photo[-1].file_id)
         if getattr(file_info, "file_size", 0) and file_info.file_size > PHOTO_MAX_IMAGE_BYTES:
-            return []
+            return {"kind": "unknown"}
         buffer = await bot.download_file(file_info.file_path)
-        parsed = parse_bike_screenshot(buffer.read())
-        if not parsed:
-            return []
-        logger.info(
-            "ЭКСПЕРИМЕНТ (скриншоты): uid=%s байк=%s тумблеры=%s действия=%s",
-            message.from_user.id, parsed["number"], parsed["toggles"], parsed["actions"]
-        )
-        return [
-            {"action_type": atype, "bike_codes": [parsed["number"]], "quantity": 0}
-            for atype in parsed["actions"]
-        ]
+        return await asyncio.to_thread(analyze_bike_photo, buffer.read())
     except Exception as exc:
-        logger.warning("ЭКСПЕРИМЕНТ (скриншоты): пропуск сообщения: %s", exc)
-        return []
+        logger.warning("ФОТО: пропуск сообщения: %s", exc)
+        return {"kind": "unknown"}
+
+
+# ------------------------------------------------------------
+# Правило подтверждения: перемещение по скриншоту засчитывается,
+# только если тот же сотрудник в том же чате прислал рядом по
+# времени (±PHOTO_PARKING_WINDOW_SEC) и фото парковки. Порядок не
+# важен: альбом «скриншоты + парковка», «парковка + скриншоты» или
+# отдельные сообщения подряд. Без фото парковки бот ничего не пишет.
+# ------------------------------------------------------------
+PHOTO_PARKING_WINDOW_SEC = 180
+_photo_street_seen = {}          # (chat_id, uid) -> [время фото парковки, ...]
+_photo_pending_screens = {}      # (chat_id, uid) -> [ожидающие скриншоты]
+_photo_confirmed_messages = {}   # (chat_id, message_id) -> время подтверждения
+_photo_credited_codes = {}       # (chat_id, uid) -> {номер: (message_id, время)}
+
+
+def _photo_message_ts(message):
+    value = getattr(message, "date", None)
+    try:
+        return _as_aware_datetime(value).timestamp() if value else time.time()
+    except Exception:
+        return time.time()
+
+
+def _photo_prune(now_ts):
+    horizon = now_ts - PHOTO_PARKING_WINDOW_SEC * 3
+    for store in (_photo_street_seen, _photo_pending_screens):
+        for key in list(store):
+            if store is _photo_street_seen:
+                kept = [ts for ts in store[key] if ts >= horizon]
+            else:
+                kept = [item for item in store[key] if item["ts"] >= horizon]
+            if kept:
+                store[key] = kept
+            else:
+                store.pop(key, None)
+    for key in list(_photo_credited_codes):
+        kept = {code: value for code, value in _photo_credited_codes[key].items()
+                if value[1] >= horizon}
+        if kept:
+            _photo_credited_codes[key] = kept
+        else:
+            _photo_credited_codes.pop(key, None)
+    day_ago = now_ts - 86400
+    for key in [key for key, ts in _photo_confirmed_messages.items() if ts < day_ago]:
+        _photo_confirmed_messages.pop(key, None)
+
+
+def _photo_street_near(chat_id, uid, ts):
+    return any(abs(ts - seen) <= PHOTO_PARKING_WINDOW_SEC
+               for seen in _photo_street_seen.get((chat_id, uid), []))
+
+
+def _photo_fresh_codes(chat_id, uid, message_id, codes, ts):
+    """Один байк на нескольких фото одной пачки — одно перемещение."""
+    credited = _photo_credited_codes.setdefault((chat_id, uid), {})
+    fresh = []
+    for code in codes or []:
+        previous = credited.get(code)
+        if (previous and previous[0] != message_id
+                and abs(previous[1] - ts) <= PHOTO_PARKING_WINDOW_SEC):
+            continue
+        credited[code] = (message_id, ts)
+        fresh.append(code)
+    return fresh
+
+
+def _photo_moves(codes):
+    return [{"action_type": "move", "bike_codes": [code], "quantity": 0}
+            for code in codes or []]
+
+
+def _merge_photo_moves(text_actions, codes):
+    """Текст сотрудника + перемещения со скриншота без двойного счёта."""
+    already_moved = {
+        str(code) for action in text_actions or []
+        if action.get("action_type") == "move"
+        for code in action.get("bike_codes") or []
+    }
+    return list(text_actions or []) + _photo_moves(
+        [code for code in codes or [] if code not in already_moved]
+    )
+
+
+async def _message_move_codes(uid, mid, city_id, chat_id):
+    async with db_connect() as db:
+        rows = await (await db.execute(
+            "SELECT bike_codes FROM actions WHERE user_id=? AND message_id=? "
+            "AND city_id=? AND chat_id=? AND action_type='move'",
+            (uid, mid, city_id, chat_id),
+        )).fetchall()
+    return {code for row in rows for code in str(row[0] or "").split(",") if code}
+
+
+async def _confirm_pending_photo_screens(chat_id, uid, street_ts):
+    """Фото парковки пришло: записываем ожидавшие его скриншоты."""
+    pending = _photo_pending_screens.get((chat_id, uid)) or []
+    ready = [item for item in pending if abs(item["ts"] - street_ts) <= PHOTO_PARKING_WINDOW_SEC]
+    if not ready:
+        return
+    _photo_pending_screens[(chat_id, uid)] = [item for item in pending if item not in ready]
+    for item in ready:
+        codes = _photo_fresh_codes(chat_id, uid, item["message_id"], item["codes"], item["ts"])
+        if not codes:
+            continue
+        actions = _merge_photo_moves(item["text_actions"], codes)
+        try:
+            removed_shift_ids, applied = await replace_message_actions(
+                uid, item["message_id"], item["city_id"], item["shift_id"],
+                actions, item["event_version"], chat_id,
+            )
+        except Exception as exc:
+            logger.warning("ФОТО: не удалось записать подтверждённый скриншот msg=%s: %s",
+                           item["message_id"], exc)
+            continue
+        if not applied:
+            logger.info("ФОТО: скриншот msg=%s изменился, подтверждение пропущено",
+                        item["message_id"])
+            continue
+        _photo_confirmed_messages[(chat_id, item["message_id"])] = time.time()
+        logger.info("ФОТО-ЗАСЧИТАНО (есть фото парковки): uid=%s msg=%s -> %s",
+                    uid, item["message_id"], actions)
+        for sid in set(removed_shift_ids) | {item["shift_id"]}:
+            changed = await get_shift_by_id(sid)
+            if changed and not changed.get("is_active"):
+                await freeze_earned(sid)
+            schedule_report_update(sid)
+        await _reply_with_photo_result(item["message"], actions)
 
 
 def _photo_action_codes(actions):
@@ -5281,45 +5626,73 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
             message_date.isoformat() if message_date else None, chat_id,
         )
 
-    # === ЭКСПЕРИМЕНТ: распознавание скриншотов техприложения ===
-    # Проверяем ДО выхода для сообщений без текста: скриншот обычно шлют
-    # без подписи, и раньше такие сообщения уходили мимо эксперимента.
-    photo_actions = []
+    # === Распознавание фото (тумблер «Распознавание скриншотов») ===
+    # Скриншот техприложения даёт перемещение только вместе с фото
+    # парковки от того же сотрудника рядом по времени. Подпись под фото —
+    # обычное рабочее сообщение: поправки и ремонт сотрудник пишет сам.
+    photo_codes = []
+    pending_screen = None
     if getattr(message, "photo", None):
         try:
             author = await get_user(uid)
             if author and author.get("photo_parse"):
-                logger.info(
-                    "ФОТО-СТАРТ: uid=%s msg=%s чат=%s тема=%s — тумблер включён, "
-                    "пробую распознать скриншот",
-                    uid, message.message_id, chat_id, message.message_thread_id
-                )
-                photo_actions = await try_parse_screenshot_message(message, city, shift)
-                if photo_actions:
-                    logger.info(
-                        "ФОТО-ЗАСЧИТАНО: uid=%s msg=%s -> %s",
-                        uid, message.message_id, photo_actions
-                    )
-                else:
-                    logger.info(
-                        "ФОТО-НЕ ЗАСЧИТАНО: uid=%s msg=%s — причину смотри "
-                        "в строках ФОТО-ПРОПУСК / ФОТО-ДИАГНОСТИКА выше",
-                        uid, message.message_id
-                    )
-            else:
-                logger.info(
-                    "ФОТО-ВЫКЛЮЧЕНО: uid=%s msg=%s — эксперимент не включён "
-                    "в настройках, скриншот не разбирается",
-                    uid, message.message_id
-                )
+                analysis = await analyze_photo_message(message)
+                photo_ts = _photo_message_ts(message)
+                _photo_prune(photo_ts)
+                if analysis.get("kind") == "street" and not edited:
+                    _photo_street_seen.setdefault((chat_id, uid), []).append(photo_ts)
+                    await _confirm_pending_photo_screens(chat_id, uid, photo_ts)
+                elif analysis.get("kind") == "screenshot" and analysis.get("codes"):
+                    codes = list(analysis["codes"])
+                    confirmed = (chat_id, message.message_id) in _photo_confirmed_messages
+                    if not confirmed and edited:
+                        confirmed = set(codes) <= await _message_move_codes(
+                            uid, message.message_id, city["id"], chat_id,
+                        )
+                    if not confirmed:
+                        confirmed = _photo_street_near(chat_id, uid, photo_ts)
+                    if confirmed:
+                        photo_codes = _photo_fresh_codes(
+                            chat_id, uid, message.message_id, codes, photo_ts,
+                        )
+                        _photo_confirmed_messages[(chat_id, message.message_id)] = time.time()
+                        logger.info("ФОТО-ЗАСЧИТАНО: uid=%s msg=%s номера=%s", uid,
+                                    message.message_id, codes)
+                    else:
+                        pending_screen = {"codes": codes, "ts": photo_ts}
+                        logger.info(
+                            "ФОТО-ОЖИДАНИЕ: uid=%s msg=%s номера=%s — жду фото парковки "
+                            "(±%s с), без него перемещение не записывается",
+                            uid, message.message_id, codes, PHOTO_PARKING_WINDOW_SEC,
+                        )
         except Exception as exc:
-            # Эксперимент не должен ломать обычную обработку ни при каких
-            # условиях: при любой ошибке идём дальше без распознанных действий.
-            logger.warning("ЭКСПЕРИМЕНТ (скриншоты): сбой, пропускаю: %s", exc)
-            photo_actions = []
+            # Распознавание не должно ломать обычную обработку сообщения.
+            logger.warning("ФОТО: сбой, пропускаю: %s", exc)
+            photo_codes, pending_screen = [], None
+
+    def remember_pending_screen(text_actions):
+        if pending_screen is None:
+            return
+        key = (chat_id, uid)
+        queue = [item for item in _photo_pending_screens.get(key, [])
+                 if item["message_id"] != message.message_id]
+        queue.append({
+            **pending_screen, "message": message, "message_id": message.message_id,
+            "city_id": city["id"], "shift_id": shift["id"],
+            "text_actions": list(text_actions or []), "event_version": event_version,
+        })
+        _photo_pending_screens[key] = queue
+
+    photo_actions = _photo_moves(photo_codes)
 
     if not text or text.startswith('/'):
         # Сообщение без текста, но со скриншотом: засчитываем распознанное.
+        if pending_screen is not None:
+            await link_work_message(
+                uid, message.message_id, city["id"], shift["id"],
+                message_date.isoformat() if message_date else None, chat_id,
+            )
+            remember_pending_screen([])
         if photo_actions:
             await link_work_message(
                 uid, message.message_id, city["id"], shift["id"],
@@ -5367,18 +5740,10 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         message_date.isoformat() if message_date else None, chat_id,
     )
 
-    # Если скриншот распознан, его переключатели — единственный источник
-    # действий. Подпись остаётся человеческим комментарием в Telegram и не
-    # смешивается с результатом изображения. Если изображение не распознано,
-    # подпись обрабатывается как обычное рабочее сообщение.
-    used_photo_actions = bool(photo_actions)
-    if used_photo_actions:
-        actions = photo_actions
-        logger.info(
-            "ФОТО-ЗАСЧИТАНО (подпись оставлена комментарием): uid=%s msg=%s -> %s",
-            uid, message.message_id, photo_actions,
-        )
-    elif bare_repair_topic:
+    # Подпись разбирается как обычное рабочее сообщение. Перемещения
+    # со скриншота добавляются к ней без двойного счёта одного номера.
+    used_photo_actions = bool(photo_codes)
+    if bare_repair_topic:
         actions = parse_bare_repair_message(text)  # тема 4485: номера с любым описанием
     elif sticker_topic:
         actions = parse_sticker_message(text)      # тема 2290: номер + слово
@@ -5392,6 +5757,9 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         actions = parse_polyana_message(text)
     else:
         actions = parse_message(text)
+    remember_pending_screen(actions)
+    if used_photo_actions:
+        actions = _merge_photo_moves(actions, photo_codes)
 
     logger.info(
         f"РАЗБОР: город={city['name']} роль_группы={city.get('role_group') or '—'} "
@@ -5857,9 +6225,16 @@ async def private_subscription_start(message: Message):
     city = get_city(user.get("city_id")) or get_default_city()
     subscription = await _city_subscription(city["id"])
     text = subscription["message"] if subscription["enabled"] else "Откройте приложение бота."
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Открыть приложение", url=_crm_miniapp_link())
-    ]]))
+    creator = await _creator_contact()
+    creator_line = f"Создатель бота — {creator['name']}"
+    if creator["telegram_url"]:
+        creator_line += f" ({creator['telegram_url'].replace('https://t.me/', '@')})"
+    text = (f"{text}\n\n{creator_line}.\nПроект Кирилла — «Кира Конструктор»: "
+            f"создайте своего Telegram-бота бесплатно.")
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Открыть приложение", url=_crm_miniapp_link())],
+        [InlineKeyboardButton(text="🤖 Кира Конструктор", url=KIRA_KONSTRUKTOR_URL)],
+    ]))
 
 
 @private_router.message(Command("tasks"), F.chat.type == "private")
@@ -6496,549 +6871,6 @@ async def _request_json_object(request):
     return body if isinstance(body, dict) else None
 
 
-_BIBIPASS_MONTHS = (
-    "январь", "февраль", "март", "апрель", "май", "июнь",
-    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
-)
-
-
-def _bibipass_boundary(value, fallback, *, inclusive_date_end=False):
-    """Разбирает ISO-дату/время; старую конечную дату считает включительной."""
-    if not value:
-        return fallback
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return fallback
-    date_only = len(value) == 10
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=MSK)
-    else:
-        parsed = parsed.astimezone(MSK)
-    if inclusive_date_end and date_only:
-        parsed += timedelta(days=1)
-    return parsed
-
-
-def _bibipass_season(now=None):
-    """Возвращает границы и состояние конкурса по московскому времени."""
-    now = now or datetime.now(MSK)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=MSK)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    start = _bibipass_boundary(BIBIPASS_SEASON_START, month_start)
-    next_month = (start.replace(year=start.year + 1, month=1)
-                  if start.month == 12 else start.replace(month=start.month + 1))
-    end_exclusive = _bibipass_boundary(
-        BIBIPASS_SEASON_END, next_month, inclusive_date_end=True,
-    )
-    if end_exclusive <= start:
-        end_exclusive = start + timedelta(days=20)
-    season_id = BIBIPASS_SEASON_ID or start.strftime("%Y-%m")
-    name = BIBIPASS_SEASON_NAME or (
-        f"БибиПасс · {_BIBIPASS_MONTHS[start.month - 1].capitalize()} {start.year}"
-    )
-    status = "upcoming" if now < start else "active" if now < end_exclusive else "ended"
-    return {
-        "id": season_id,
-        "name": name,
-        "start_at": start.isoformat(),
-        "end_at": end_exclusive.isoformat(),
-        "start_date": start.strftime("%Y-%m-%d"),
-        "end_date": end_exclusive.strftime("%Y-%m-%d"),
-        "server_now": now.isoformat(),
-        "duration_days": round((end_exclusive - start).total_seconds() / 86400, 3),
-        "status": status,
-        "active": bool(BIBIPASS_ENABLED and status == "active"),
-    }
-
-
-def _bibipass_reward_label(reward):
-    label = f"{reward['bibibonuses']} Бибибонусов"
-    months = reward.get("subscription_months", 0)
-    if months:
-        label += (" + подписка на 1 месяц" if months == 1
-                  else " + подписка на 3 месяца")
-    return label
-
-
-def _bibipass_public_rewards():
-    return [dict(reward, label=_bibipass_reward_label(reward))
-            for reward in BIBIPASS_REWARDS]
-
-
-def _bibipass_level(points):
-    points = max(0.0, float(points or 0))
-    level, remaining = 0, points
-    for reward in BIBIPASS_REWARDS:
-        need = reward["points_needed"]
-        if remaining < need:
-            return {
-                "level": level, "next_level": level + 1, "points": points,
-                "current": remaining, "need": need,
-                "percent": round(remaining / need * 100, 1),
-                "season_need": BIBIPASS_REWARDS[-1]["cumulative_points"],
-            }
-        remaining -= need
-        level += 1
-    return {
-        "level": BIBIPASS_LEVEL_COUNT, "next_level": None, "points": points,
-        "current": BIBIPASS_REWARDS[-1]["points_needed"],
-        "need": BIBIPASS_REWARDS[-1]["points_needed"], "percent": 100,
-        "season_need": BIBIPASS_REWARDS[-1]["cumulative_points"],
-    }
-
-
-async def _bibipass_participant(uid, season, create=True):
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        row = await (await db.execute(
-            "SELECT * FROM bibipass_participants WHERE season_id=? AND user_id=?",
-            (season["id"], uid),
-        )).fetchone()
-        if row or not create:
-            return dict(row) if row else None
-        # api_state вызывается фоново каждые 20 секунд. Пишем строку только
-        # при первом входе в сезон, а не берём write-lock на каждом polling.
-        await db.execute(
-            "INSERT OR IGNORE INTO bibipass_participants "
-            "(season_id,user_id,membership_status) VALUES (?,?, 'unknown')",
-            (season["id"], uid),
-        )
-        await db.commit()
-        row = await (await db.execute(
-            "SELECT * FROM bibipass_participants WHERE season_id=? AND user_id=?",
-            (season["id"], uid),
-        )).fetchone()
-    return dict(row) if row else {
-        "season_id": season["id"], "user_id": uid, "membership_status": "unknown",
-        "intro_seen_at": None, "joined_at": None, "membership_checked_at": None,
-    }
-
-
-def _bibipass_member_allowed(member):
-    status = getattr(member.status, "value", str(member.status)).lower().split(".")[-1]
-    if status == "restricted":
-        return bool(getattr(member, "is_member", False)), status
-    return status in {"creator", "administrator", "member"}, status
-
-
-async def _bibipass_verify_membership(uid, season, force=False):
-    participant = await _bibipass_participant(uid, season)
-    checked = _parse_datetime(participant.get("membership_checked_at"))
-    now = datetime.now(MSK)
-    if (not force and checked and
-            (now - checked.astimezone(MSK)).total_seconds() < BIBIPASS_MEMBERSHIP_TTL_SEC):
-        return participant.get("membership_status") == "member", None
-    try:
-        member = await bot.get_chat_member(BIBIPASS_CHANNEL_CHAT, uid)
-        allowed, telegram_status = _bibipass_member_allowed(member)
-    except Exception as exc:
-        logger.warning(
-            "БибиПасс: не удалось проверить подписку uid=%s в %s: %s",
-            uid, BIBIPASS_CHANNEL_CHAT, exc,
-        )
-        # Кратковременный сбой Telegram не отбирает уже выданный доступ.
-        return participant.get("membership_status") == "member", "check_failed"
-    stored_status = "member" if allowed else telegram_status
-    async with db_connect() as db:
-        await db.execute(
-            "UPDATE bibipass_participants SET membership_status=?,"
-            "membership_checked_at=?,joined_at=CASE WHEN ? AND joined_at IS NULL "
-            "THEN ? ELSE joined_at END WHERE season_id=? AND user_id=?",
-            (stored_status, now.isoformat(), int(allowed), now.isoformat(), season["id"], uid),
-        )
-        await db.commit()
-    return allowed, None
-
-
-async def _bibipass_scores(user_ids, season):
-    user_ids = sorted({int(value) for value in user_ids})
-    if not user_ids:
-        return {}
-    scores = {
-        uid: {"action_points": 0, "total": 0}
-        for uid in user_ids
-    }
-    marks = ",".join("?" for _ in user_ids)
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(
-            "SELECT a.user_id,a.action_type,a.bike_codes,a.quantity,a.message_id FROM actions a "
-            f"JOIN shifts s ON s.id=a.shift_id WHERE a.user_id IN ({marks}) "
-            "AND datetime(COALESCE(s.start_at,s.created_at))>=datetime(?) "
-            "AND datetime(COALESCE(s.start_at,s.created_at))<datetime(?)",
-            (*user_ids, season["start_at"], season["end_at"]),
-        )).fetchall()
-        half_points = {uid: 0 for uid in user_ids}
-        for row in rows:
-            # Ручной плюс в Mini App не участвует в конкурсе: иначе счётчик
-            # можно накрутить. Ручной минус учитывается как честная коррекция.
-            if not row["message_id"] and (row["quantity"] or 0) >= 0:
-                continue
-            units = _action_units(row)
-            half_points[int(row["user_id"])] += (
-                units * BIBIPASS_ACTION_HALF_POINTS.get(row["action_type"], 0)
-            )
-    for uid, value in half_points.items():
-        scores[uid]["action_points"] = max(0, value) / 2
-    for score in scores.values():
-        score["total"] = score["action_points"]
-    return scores
-
-
-async def _bibipass_points(uid, season):
-    return (await _bibipass_scores([uid], season))[int(uid)]
-
-
-async def _bibipass_sync_level_rewards(uid, season, level, total_points=None):
-    now_iso = datetime.now(MSK).isoformat()
-    async with db_connect() as db:
-        await db.execute("BEGIN IMMEDIATE")
-        existing_rows = await (await db.execute(
-            "SELECT level,reward_type FROM bibipass_reward_grants "
-            "WHERE season_id=? AND user_id=?", (season["id"], uid),
-        )).fetchall()
-        existing = {(int(row[0]), row[1]) for row in existing_rows}
-        inserted_levels = []
-        for reward in BIBIPASS_REWARDS:
-            if reward["level"] > level:
-                break
-            if (reward["level"], "bibibonus") not in existing:
-                cursor = await db.execute(
-                    "INSERT OR IGNORE INTO bibipass_reward_grants "
-                    "(season_id,user_id,level,reward_type,amount,earned_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (season["id"], uid, reward["level"], "bibibonus",
-                     reward["bibibonuses"], now_iso),
-                )
-                if cursor.rowcount:
-                    inserted_levels.append(reward["level"])
-            if (reward["level"], "subscription") not in existing and reward.get(
-                    "subscription_months"):
-                await db.execute(
-                    "INSERT OR IGNORE INTO bibipass_reward_grants "
-                    "(season_id,user_id,level,reward_type,amount,earned_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (season["id"], uid, reward["level"], "subscription",
-                     reward["subscription_months"], now_iso),
-                )
-        if inserted_levels:
-            reached = [reward for reward in BIBIPASS_REWARDS
-                       if reward["level"] in inserted_levels]
-            earned = [reward for reward in BIBIPASS_REWARDS
-                      if reward["level"] <= level]
-            user_row = await (await db.execute(
-                "SELECT city_id FROM users WHERE user_id=?", (uid,),
-            )).fetchone()
-            if user_row and user_row[0] is not None:
-                next_reward = next(
-                    (reward for reward in BIBIPASS_REWARDS if reward["level"] > level), None
-                )
-                await _enqueue_crm_notification(
-                    db, int(user_row[0]), uid, "bibipass_level_reached",
-                    _bibipass_campaign_entity_id(season) * 100 + max(inserted_levels),
-                    {
-                        "levels": [{
-                            "level": reward["level"],
-                            "bibibonuses": reward["bibibonuses"],
-                            "subscription_months": reward.get("subscription_months") or 0,
-                        } for reward in reached],
-                        "earned_bibibonuses": sum(r["bibibonuses"] for r in earned),
-                        "earned_subscription_months": sum(
-                            r.get("subscription_months") or 0 for r in earned
-                        ),
-                        "reward_levels": level,
-                        "total_points": total_points,
-                        "next_level": next_reward["level"] if next_reward else None,
-                        "next_cumulative_points": (
-                            next_reward["cumulative_points"] if next_reward else None
-                        ),
-                    },
-                )
-        await _commit_and_wake(db, _notification_wakeup)
-
-
-async def _bibipass_reconcile_user(uid):
-    """Best-effort level reconciliation after a parsed work-message update."""
-    if not BIBIPASS_ENABLED:
-        return
-    season = _bibipass_season()
-    if season["status"] != "active":
-        return
-    participant = await _bibipass_participant(uid, season, create=False)
-    if (not participant or participant.get("membership_status") != "member"
-            or not participant.get("joined_at")):
-        return
-    points = await _bibipass_points(uid, season)
-    level_state = _bibipass_level(points["total"])
-    await _bibipass_sync_level_rewards(
-        uid, season, level_state["level"], points["total"]
-    )
-
-
-async def _bibipass_state_summary(uid):
-    season = _bibipass_season()
-    if not BIBIPASS_ENABLED:
-        return {"enabled": False}
-    participant = await _bibipass_participant(uid, season)
-    return {
-        "enabled": True,
-        "season_id": season["id"],
-        "name": season["name"],
-        "active": season["active"],
-        "status": season["status"],
-        "start_at": season["start_at"],
-        "end_at": season["end_at"],
-        "server_now": season["server_now"],
-        "intro_required": not bool(participant.get("intro_seen_at")),
-        "member": participant.get("membership_status") == "member",
-        "joined": bool(participant.get("joined_at")),
-        "channel_url": BIBIPASS_CHANNEL_URL,
-    }
-
-
-async def _bibipass_payload(uid, verify=True, force=False):
-    season = _bibipass_season()
-    participant = await _bibipass_participant(uid, season)
-    member = participant.get("membership_status") == "member"
-    check_error = None
-    # До старта можно заранее подписаться и открыть участие. После дедлайна
-    # сохраняем финальную таблицу без лишних обращений к Telegram.
-    if verify and season["status"] != "ended":
-        member, check_error = await _bibipass_verify_membership(uid, season, force=force)
-        participant = await _bibipass_participant(uid, season, create=False)
-    base = {
-        "enabled": BIBIPASS_ENABLED,
-        "season": season,
-        "channel": {
-            "chat": BIBIPASS_CHANNEL_CHAT,
-            "url": BIBIPASS_CHANNEL_URL,
-            "title": "Общий канал команды бибибайк",
-        },
-        "member": bool(member),
-        "joined": bool(participant.get("joined_at")),
-        "intro_required": not bool(participant.get("intro_seen_at")),
-        "check_error": check_error,
-        "rules": {
-            "levels": BIBIPASS_LEVEL_COUNT,
-            "first_level_points": BIBIPASS_FIRST_LEVEL_POINTS,
-            "level_points_step": BIBIPASS_LEVEL_POINTS_STEP,
-            "season_points": BIBIPASS_REWARDS[-1]["cumulative_points"],
-            "actions": [
-                {"type": "move", "label": "Перемещение", "points": 1},
-                {"type": "fix", "label": "Поправленный байк", "points": 0.5},
-                {"type": "to_sc", "label": "Привоз на СЦ", "points": 1},
-                {"type": "from_sc", "label": "Вывоз с СЦ", "points": 1},
-                {"type": "battery", "label": "Замена АКБ", "points": 1},
-            ],
-        },
-        "rewards": _bibipass_public_rewards(),
-    }
-    if not BIBIPASS_ENABLED or not member:
-        return base
-
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        people = await (await db.execute(
-            "SELECT p.user_id,p.joined_at,u.full_name,u.role,c.name AS city_name "
-            "FROM bibipass_participants p JOIN users u ON u.user_id=p.user_id "
-            "LEFT JOIN cities c ON c.id=u.city_id WHERE p.season_id=? "
-            "AND p.membership_status='member' AND p.joined_at IS NOT NULL "
-            "AND COALESCE(u.statistics_visible,1)=1",
-            (season["id"],),
-        )).fetchall()
-    score_ids = [int(person["user_id"]) for person in people]
-    if int(uid) not in score_ids:
-        score_ids.append(int(uid))
-    scores = await _bibipass_scores(score_ids, season)
-    own_points = scores[int(uid)]
-    own_level = _bibipass_level(own_points["total"])
-    await _bibipass_sync_level_rewards(
-        uid, season, own_level["level"], own_points["total"]
-    )
-    ranking = []
-    for raw in people:
-        person = dict(raw)
-        score = scores[int(person["user_id"])]
-        level_state = _bibipass_level(score["total"])
-        ranking.append({
-            "user_id": person["user_id"], "name": person["full_name"] or "Сотрудник",
-            "role": person["role"] or "", "city": person["city_name"] or "",
-            "points": score["total"], "level": level_state["level"],
-            "joined_at": person["joined_at"],
-        })
-    ranking.sort(key=lambda item: (-item["level"], -item["points"], item["joined_at"],
-                                   item["name"].casefold()))
-    for position, item in enumerate(ranking, 1):
-        item["position"] = position
-        item["is_me"] = int(item["user_id"]) == int(uid)
-        item.pop("joined_at", None)
-    level_bonuses = sum(
-        reward["bibibonuses"] for reward in BIBIPASS_REWARDS
-        if reward["level"] <= own_level["level"]
-    )
-    subscription_months = sum(
-        reward["subscription_months"] for reward in BIBIPASS_REWARDS
-        if reward["subscription_months"] and reward["level"] <= own_level["level"]
-    )
-    visible_ranking = ranking[:100]
-    own_ranking = next((item for item in ranking if item["is_me"]), None)
-    if own_ranking and not any(item["is_me"] for item in visible_ranking):
-        visible_ranking.append(own_ranking)
-    base.update({
-        "progress": dict(own_level, **own_points),
-        "earned": {
-            "bibibonuses": level_bonuses,
-            "level_bibibonuses": level_bonuses,
-            "subscription_months": subscription_months,
-            "reward_levels": own_level["level"],
-        },
-        "position": next((item["position"] for item in ranking if item["is_me"]), None),
-        "participants": len(ranking),
-        "ranking": visible_ranking,
-    })
-    return base
-
-
-def _bibipass_campaign_entity_id(season):
-    start = datetime.fromisoformat(season["start_at"])
-    return int(start.strftime("%Y%m%d"))
-
-
-def _bibipass_campaign_due(kind, season, now=None):
-    now = now or datetime.now(MSK)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=MSK)
-    else:
-        now = now.astimezone(MSK)
-    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
-    end = datetime.fromisoformat(season["end_at"]).astimezone(MSK)
-    if kind == "bibipass_announcement":
-        return start - timedelta(hours=BIBIPASS_ANNOUNCEMENT_LEAD_HOURS) <= now < start
-    if kind == "bibipass_started":
-        return start <= now < min(
-            end, start + timedelta(hours=BIBIPASS_START_PUSH_WINDOW_HOURS),
-        )
-    return False
-
-
-async def _enqueue_bibipass_campaign_notifications(kind, now=None):
-    """Один раз ставит личное сообщение квеста каждому активному сотруднику."""
-    now = now or datetime.now(MSK)
-    season = _bibipass_season(now)
-    if not BIBIPASS_ENABLED or not _bibipass_campaign_due(kind, season, now):
-        return 0
-    entity_id = _bibipass_campaign_entity_id(season)
-    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
-    end = datetime.fromisoformat(season["end_at"]).astimezone(MSK)
-    duration_days = float(season["duration_days"])
-    payload = {
-        "season_id": season["id"],
-        "season_name": season["name"],
-        "start_label": start.strftime("%d.%m.%Y в %H:%M МСК"),
-        "end_label": end.strftime("%d.%m.%Y в %H:%M МСК"),
-        "duration_days": int(duration_days) if duration_days.is_integer() else duration_days,
-    }
-    async with db_connect() as db:
-        db.row_factory = aiosqlite.Row
-        recipients = await (await db.execute(
-            "SELECT user_id,city_id FROM users WHERE user_id>0 AND city_id IS NOT NULL "
-            "AND statistics_archived_at IS NULL "
-            "AND TRIM(COALESCE(role,'')) IN ('Скаут','Водитель','Чарджер') "
-            "ORDER BY user_id"
-        )).fetchall()
-        if not recipients:
-            return 0
-        existing_rows = await (await db.execute(
-            "SELECT user_id FROM crm_notification_outbox WHERE kind=? AND entity_id=?",
-            (kind, entity_id),
-        )).fetchall()
-        existing = {int(row["user_id"]) for row in existing_rows}
-        missing = [row for row in recipients if int(row["user_id"]) not in existing]
-        for row in missing:
-            await _enqueue_crm_notification(
-                db, int(row["city_id"]), int(row["user_id"]), kind, entity_id, payload,
-            )
-        if missing:
-            await _commit_and_wake(db, _notification_wakeup)
-            logger.info(
-                "БибиПасс: в очередь %s поставлено %s личных уведомлений",
-                kind, len(missing),
-            )
-    return len(missing)
-
-
-async def bibipass_campaign_worker():
-    """Ставит анонс и старт квеста в outbox в нужное московское время."""
-    season = _bibipass_season()
-    start = datetime.fromisoformat(season["start_at"]).astimezone(MSK)
-    announcement_at = start - timedelta(hours=BIBIPASS_ANNOUNCEMENT_LEAD_HOURS)
-    start_window_end = start + timedelta(hours=BIBIPASS_START_PUSH_WINDOW_HOURS)
-    announcement_checked = False
-    start_checked = False
-    while True:
-        now = datetime.now(MSK)
-        if not announcement_checked and now >= announcement_at:
-            if now < start:
-                await _enqueue_bibipass_campaign_notifications("bibipass_announcement", now)
-            announcement_checked = True
-        if not start_checked and now >= start:
-            if now < start_window_end:
-                await _enqueue_bibipass_campaign_notifications("bibipass_started", now)
-            start_checked = True
-        if start_checked:
-            return
-        target = announcement_at if not announcement_checked else start
-        await asyncio.sleep(max(1.0, (target - now).total_seconds()))
-
-
-async def api_bibipass(request):
-    tg_user = await _auth_user(request)
-    if not tg_user:
-        return web.json_response({"error": "auth"}, status=401)
-    force = str(request.query.get("force") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    return web.json_response(
-        await _bibipass_payload(tg_user["id"], verify=True, force=force)
-    )
-
-
-async def api_bibipass_check_membership(request):
-    tg_user = await _auth_user(request)
-    if not tg_user:
-        return web.json_response({"error": "auth"}, status=401)
-    payload = await _bibipass_payload(tg_user["id"], verify=True, force=True)
-    if payload.get("check_error") and not payload.get("member"):
-        payload["message"] = (
-            "Не удалось проверить подписку из-за временной ошибки Telegram. "
-            "Попробуйте ещё раз через минуту."
-        )
-        return web.json_response(payload, status=503)
-    if not payload.get("member"):
-        payload["message"] = (
-            "Подписка не найдена. Откройте канал, нажмите «Подписаться», "
-            "затем вернитесь в бот и повторите проверку."
-        )
-        return web.json_response(payload, status=403)
-    return web.json_response(payload)
-
-
-async def api_bibipass_intro_seen(request):
-    tg_user = await _auth_user(request)
-    if not tg_user:
-        return web.json_response({"error": "auth"}, status=401)
-    season = _bibipass_season()
-    await _bibipass_participant(tg_user["id"], season)
-    async with db_connect() as db:
-        await db.execute(
-            "UPDATE bibipass_participants SET intro_seen_at=? WHERE season_id=? AND user_id=?",
-            (datetime.now(MSK).isoformat(), season["id"], tg_user["id"]),
-        )
-        await db.commit()
-    return web.json_response({"ok": True})
-
 @web.middleware
 async def city_subscription_mw(request, handler):
     """Read-only после срока. Проверяем реальный город сущности, а не только JSON."""
@@ -7327,7 +7159,6 @@ async def api_state(request):
         }
 
     title, tier = _title_for_level(lvl)
-    bibipass_summary = await _bibipass_state_summary(uid)
     return web.json_response({
         "user": {
             "id": uid,
@@ -7368,8 +7199,32 @@ async def api_state(request):
         "build_version": BUILD_VERSION,
         "period_started_at": period_start,
         "period_started_label": _fmt_date(period_start),
-        "bibipass": bibipass_summary,
+        "creator": await _creator_contact(),
     })
+
+def _telegram_username(value):
+    """Ник из «@name», «name» или ссылки t.me/name. Пусто, если не похоже на ник."""
+    raw = str(value or "").strip()
+    raw = re.sub(r"^(?:https?://)?(?:t\.me|telegram\.me)/", "", raw, flags=re.IGNORECASE)
+    raw = raw.lstrip("@").split("?")[0].strip("/")
+    return raw if re.fullmatch(r"[A-Za-z0-9_]{5,32}", raw) else ""
+
+
+async def _creator_contact():
+    """Имя создателя, ссылка на его Telegram и проект «Кира Конструктор»."""
+    username = _telegram_username(CREATOR_TELEGRAM)
+    if not username and CRM_OWNER_USER_ID:
+        try:
+            owner = await get_user(CRM_OWNER_USER_ID) or {}
+            username = _telegram_username(owner.get("telegram_username"))
+        except Exception as exc:
+            logger.warning("Создатель: не удалось прочитать профиль владельца: %s", exc)
+    return {
+        "name": CREATOR_NAME,
+        "telegram_url": f"https://t.me/{username}" if username else None,
+        "project_url": KIRA_KONSTRUKTOR_URL,
+    }
+
 
 async def api_settings(request):
     tg_user = await _auth_user(request)
@@ -14202,14 +14057,6 @@ def _crm_miniapp_link(task_id=None, start_param=None):
     return f"{base}{separator}tgWebAppStartParam={param}"
 
 
-def _bibipass_miniapp_link():
-    username = (BOT_USERNAME or "").lstrip("@")
-    if username:
-        return f"https://t.me/{username}/{WEBAPP_SHORTNAME}?startapp=bibipass"
-    separator = "&" if "?" in WEBAPP_URL else "?"
-    return f"{WEBAPP_URL}{separator}tgWebAppStartParam=bibipass"
-
-
 def _crm_human_date(value):
     try:
         parsed = datetime.strptime(str(value), "%Y-%m-%d")
@@ -14237,65 +14084,6 @@ def _crm_notification_text(kind, payload):
             f"🕒 {payload.get('start_time') or '—'}–{payload.get('end_time') or '—'}",
             f"📍 {district or 'Район не указан'}", "",
             "Откройте «Карту дня»: там видны границы района, рисунки, стрелки и задачи руководителя.",
-        ])
-    if kind == "bibipass_level_reached":
-        levels = list(payload.get("levels") or [])
-        if not levels:
-            return "🎉 Новый уровень БибиПасса пройден!\n\nОткрой БибиПасс и посмотри награду."
-        last_level = int(levels[-1].get("level") or 0)
-        lines = [
-            f"🎉 Уровень {last_level:02d} пройден!",
-            "",
-            "🎁 Награды:",
-        ]
-        for reward in levels:
-            level_number = int(reward.get("level") or 0)
-            lines.append(
-                f"⭐ Уровень {level_number:02d}: +{int(reward.get('bibibonuses') or 0)} БибиБонусов"
-            )
-            months = int(reward.get("subscription_months") or 0)
-            if months:
-                lines.append(f"📱 Подписка на {months} мес.")
-        lines.extend([
-            "",
-            f"🏦 Заработано в БибиПассе: {int(payload.get('earned_bibibonuses') or 0)} БибиБонусов",
-            f"🏆 Пройдено уровней: {int(payload.get('reward_levels') or last_level)} из {BIBIPASS_LEVEL_COUNT}",
-        ])
-        subscription_months = int(payload.get("earned_subscription_months") or 0)
-        if subscription_months:
-            lines.append(f"📱 Заработано подписок: {subscription_months} мес.")
-        next_level = payload.get("next_level")
-        next_points = payload.get("next_cumulative_points")
-        total_points = payload.get("total_points")
-        if next_level and next_points is not None and total_points is not None:
-            remaining = max(0, float(next_points) - float(total_points))
-            remaining_text = str(int(remaining)) if remaining.is_integer() else str(remaining).replace(".", ",")
-            lines.extend(["", f"🎯 До уровня {int(next_level):02d}: {remaining_text} XP"])
-        elif last_level >= BIBIPASS_LEVEL_COUNT:
-            lines.extend(["", "🏁 Все уровни сезона пройдены!"])
-        lines.extend(["", "Награды записаны в БибиПассе. Открой его, чтобы увидеть весь путь."])
-        return "\n".join(lines)
-    if kind == "bibipass_announcement":
-        return "\n".join([
-            "🏁 Завтра стартует квест сотрудников бибибайк!", "",
-            f"🕘 Старт: {payload.get('start_label') or '26.08.2026 в 09:00 МСК'}",
-            f"⏳ Продолжительность: {payload.get('duration_days') or 20} дней", "",
-            "Выполняй привычные рабочие действия, набирай XP, проходи 20 уровней "
-            "и поднимайся в общем рейтинге всех городов.", "",
-            "🎁 Награды: 150 БибиБонусов, подписка на 1 месяц и подписка на 3 месяца.", "",
-            "Как открыть участие:",
-            "1. Открой общий канал команды и подпишись.",
-            "2. Вернись в БибиПасс и нажми «Проверить подписку».",
-            "Если участие уже подтверждено, повторная проверка не нужна.",
-        ])
-    if kind == "bibipass_started":
-        return "\n".join([
-            "🚀 Квест сотрудников бибибайк начался!", "",
-            "У тебя есть 20 дней, чтобы пройти БибиПасс и заработать награды.",
-            f"🏁 Дедлайн: {payload.get('end_label') or '15.09.2026 в 09:00 МСК'}", "",
-            "Первые XP уже можно набирать. Если участие подтверждено — просто открой "
-            "БибиПасс. Если нет — сначала подпишись на канал, затем вернись и нажми "
-            "«Проверить подписку».", "", "Удачи! 🏆",
         ])
     if kind == "task_assigned":
         date_from = _crm_human_date(payload.get("date_from"))
@@ -14530,6 +14318,17 @@ async def deliver_crm_notifications_once(limit=50):
     delivered = 0
     for row in rows:
         payload = json.loads(row["payload_json"] or "{}")
+        if str(row["kind"] or "").startswith("bibipass_"):
+            # БибиПасс удалён: старые неотправленные уведомления конкурса
+            # закрываем, а не рассылаем сотрудникам.
+            async with db_connect() as skip_db:
+                await skip_db.execute(
+                    "UPDATE crm_notification_outbox SET status='failed',next_attempt_at=NULL,"
+                    "last_error='bibipass_removed' WHERE id=? AND status IN ('pending','retry')",
+                    (row["id"],),
+                )
+                await skip_db.commit()
+            continue
         if row["kind"] in {
             "admin_shift_ended", "admin_lunch_started", "admin_lunch_ended",
         }:
@@ -14567,16 +14366,7 @@ async def deliver_crm_notifications_once(limit=50):
         } else None
         app_link = (_crm_miniapp_link(start_param="map")
                     if row["kind"] == "map_assignment" else _crm_miniapp_link(task_id))
-        if row["kind"] == "bibipass_level_reached":
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🏆 Открыть БибиПасс", url=_bibipass_miniapp_link())],
-            ])
-        elif row["kind"].startswith("bibipass_"):
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="1. Открыть канал", url=BIBIPASS_CHANNEL_URL)],
-                [InlineKeyboardButton(text="2. Открыть БибиПасс", url=_bibipass_miniapp_link())],
-            ])
-        elif row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
+        if row["kind"].startswith("admin_") and row["kind"] != "admin_access_updated":
             button_text = "🗂 Открыть CRM"
         elif row["kind"] in {"planned_shift", "shift_reminder", "shift_end_reminder",
                              "shift_auto_started", "shift_plan_changed", "shift_extended_by_admin"}:
@@ -14585,10 +14375,9 @@ async def deliver_crm_notifications_once(limit=50):
             button_text = "🗺 Открыть карту дня"
         else:
             button_text = "🗓 Открыть приложение"
-        if not row["kind"].startswith("bibipass_"):
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=button_text, url=app_link)
-            ]])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=button_text, url=app_link)
+        ]])
         try:
             sent_messages = []
             photo_sent = False
@@ -14645,9 +14434,6 @@ async def deliver_crm_notifications_once(limit=50):
                     )
                 await db.commit()
             delivered += 1
-            if row["kind"].startswith("bibipass_"):
-                # Массовую рассылку держим значительно ниже глобального лимита Telegram.
-                await asyncio.sleep(0.06)
         except Exception as exc:
             attempts = int(row["attempt_count"] or 0) + 1
             permanent = isinstance(exc, TelegramForbiddenError)
@@ -15855,9 +15641,6 @@ async def start_api_server():
         app.router.add_get("/api/admin/crm/subscriptions", api_city_subscriptions)
         app.router.add_post("/api/admin/crm/subscriptions/launch", api_city_subscription_launch)
         app.router.add_post("/api/admin/crm/subscriptions/grant", api_city_subscription_grant)
-        app.router.add_get("/api/bibipass", api_bibipass)
-        app.router.add_post("/api/bibipass/check-membership", api_bibipass_check_membership)
-        app.router.add_post("/api/bibipass/intro-seen", api_bibipass_intro_seen)
         app.router.add_get("/api/my-schedule", api_my_schedule)
         app.router.add_get("/api/my-map", api_my_map)
         app.router.add_post("/api/settings", api_settings)
@@ -16017,7 +15800,6 @@ def start_background_workers():
         ("auto-close", auto_close_worker),
         ("health", health_watchdog),
         ("planned-shift", crm_planned_shift_worker),
-        ("bibipass-campaign", bibipass_campaign_worker),
         ("notification", crm_notification_worker),
         ("shift-task-sync", crm_shift_task_sync_worker),
         ("todo-cleanup", todo_cleanup_worker),

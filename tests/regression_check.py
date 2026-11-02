@@ -394,107 +394,166 @@ async def check_photo_result_reply():
     assert second.replies == []
 
 
-async def check_photo_caption_priority():
+def _photo_message(uid, message_id, *, caption=None, media_group_id=None, date=None):
+    message = FakeMessage(
+        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
+        bot.STAVROPOL_DRIVERS_TOPIC_WORK, message_id, None,
+        media_group_id=media_group_id, date=date,
+    )
+    message.caption = caption
+    message.photo = [SimpleNamespace(file_id=f"photo-{message_id}")]
+    return message
+
+
+def _photo_analysis(kinds):
+    """Подмена скачивания и разбора: message_id -> результат анализа фото."""
+    async def analyze(message):
+        return kinds[message.message_id]
+    return AsyncMock(side_effect=analyze)
+
+
+def _screen(*codes):
+    return {"kind": "screenshot", "screen": "card", "codes": list(codes)}
+
+
+STREET = {"kind": "street"}
+
+
+async def check_photo_parking_rule():
+    """Скриншот засчитывается перемещением только вместе с фото парковки."""
     city = bot.get_city_by_group(bot.STAVROPOL_TRANSPORT_GROUP_ID)
     uid = 930004
     await bot.add_user(uid, "Фото Тест", "Водитель", city["id"])
     await bot.set_user_photo_parse(uid, True)
     shift_id = await insert_shift(uid, city, "Водитель")
 
-    recognized = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7101, None,
-    )
-    recognized.caption = "0001 требует ремонта"
-    recognized.photo = [SimpleNamespace(file_id="photo-1")]
-    photo_actions = [{"action_type": "move", "bike_codes": ["0915"], "quantity": 0}]
-    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(return_value=photo_actions)):
-        await bot.process_work_message(recognized, city)
+    # 1. Скриншот без парковки: перемещения нет, подпись считается как текст.
+    screen = _photo_message(uid, 7101, caption="0001 требует ремонта")
+    with patch.object(bot, "analyze_photo_message", _photo_analysis({7101: _screen("0915")})):
+        await bot.process_work_message(screen, city)
     stats = await bot.get_stats(shift_id)
-    assert stats["move"] == 1 and stats["repair"] == 0, stats
-    assert recognized.replies == ["0915 — переместил"], recognized.replies
+    assert stats["move"] == 0 and stats["repair"] == 1, stats
+    assert screen.replies == [], screen.replies
 
-    fallback = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7102, None,
-    )
-    fallback.caption = "0001 требует ремонта"
-    fallback.photo = [SimpleNamespace(file_id="photo-2")]
-    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(return_value=[])):
-        await bot.process_work_message(fallback, city)
-    stats = await bot.get_stats(shift_id)
-    assert stats["repair"] == 1, stats
-    assert fallback.replies == [], fallback.replies
-
-    album_first = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7103, None, media_group_id="work-album-1",
-    )
-    album_first.photo = [SimpleNamespace(file_id="photo-3")]
-    album_second = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7104, None, media_group_id="work-album-1",
-    )
-    album_second.photo = [SimpleNamespace(file_id="photo-4")]
-
-    async def parse_album(message, _city, _shift):
-        if message.message_id == 7103:
-            return [{"action_type": "move", "bike_codes": ["0103"], "quantity": 0}]
-        return [
-            {"action_type": "move", "bike_codes": ["0915"], "quantity": 0},
-            {"action_type": "repair", "bike_codes": ["0915"], "quantity": 0},
-        ]
-
-    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(side_effect=parse_album)), \
+    # 2. Следом фото парковки: ожидавший скриншот записывается перемещением,
+    #    ремонт из подписи сохраняется, ответ приходит под скриншотом.
+    street = _photo_message(uid, 7102)
+    with patch.object(bot, "analyze_photo_message", _photo_analysis({7102: STREET})), \
             patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
-        await asyncio.gather(
-            bot.process_work_message(album_first, city),
-            bot.process_work_message(album_second, city),
-        )
-        await asyncio.sleep(0.03)
-    assert album_first.replies == [
-        "0103 — переместил\n0915 — переместил, требует ремонта"
-    ], album_first.replies
-    assert album_second.replies == [], album_second.replies
+        await bot.process_work_message(street, city)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 1 and stats["repair"] == 1, stats
+    assert screen.replies == ["0001 — требует ремонта\n0915 — переместил"], screen.replies
+    assert street.replies == [], street.replies
 
-    # Второй снимок приходит почти в момент ответа и долго распознаётся:
-    # ранний таймер обязан отмениться, ответ всё равно остаётся один.
-    delayed_first = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7105, None, media_group_id="work-album-2",
+    # 3. Правка подписи подтверждённого скриншота не теряет перемещение.
+    edited = _photo_message(uid, 7101, caption="0001 требует ремонта, 0002 требует ремонта")
+    edited.edit_date = datetime.now(timezone.utc) + timedelta(seconds=5)
+    with patch.object(bot, "analyze_photo_message", _photo_analysis({7101: _screen("0915")})):
+        await bot.process_work_message(edited, city, edited=True)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 1 and stats["repair"] == 2, stats
+
+    # 4. Альбом: парковка и два скриншота (карточка + список) — один ответ.
+    album = [
+        _photo_message(uid, 7103, media_group_id="work-album-1"),
+        _photo_message(uid, 7104, media_group_id="work-album-1"),
+        _photo_message(uid, 7105, media_group_id="work-album-1"),
+    ]
+    kinds = {
+        7103: _screen("0103"),
+        7104: STREET,
+        7105: {"kind": "screenshot", "screen": "list", "codes": ["0201", "0202", "0103"]},
+    }
+    with patch.object(bot, "analyze_photo_message", _photo_analysis(kinds)), \
+            patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
+        for item in album:
+            await bot.process_work_message(item, city)
+        await asyncio.sleep(0.05)
+    stats = await bot.get_stats(shift_id)
+    # 0103 есть и на карточке, и в списке — одно перемещение, не два.
+    assert stats["move"] == 4, stats
+    assert album[0].replies == [
+        "0103 — переместил\n0201 — переместил\n0202 — переместил"
+    ], album[0].replies
+    assert album[1].replies == [] and album[2].replies == []
+
+    # 5. Подпись уже называет тот же номер — дубля перемещения нет.
+    old = datetime.now(timezone.utc) - timedelta(hours=1)
+    same = _photo_message(uid, 7106, caption="Переместил 0300", date=old)
+    same_street = _photo_message(uid, 7107, date=old + timedelta(seconds=30))
+    with patch.object(bot, "analyze_photo_message",
+                      _photo_analysis({7106: _screen("0300"), 7107: STREET})), \
+            patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
+        await bot.process_work_message(same, city)
+        await bot.process_work_message(same_street, city)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 5, stats
+
+    # 6. Парковка пришла слишком поздно — перемещение не записывается.
+    late_screen = _photo_message(uid, 7108, date=old + timedelta(minutes=10))
+    late_street = _photo_message(
+        uid, 7109, date=old + timedelta(minutes=10, seconds=bot.PHOTO_PARKING_WINDOW_SEC + 60),
     )
-    delayed_first.photo = [SimpleNamespace(file_id="photo-5")]
-    delayed_second = FakeMessage(
-        uid, bot.STAVROPOL_TRANSPORT_GROUP_ID,
-        bot.STAVROPOL_DRIVERS_TOPIC_WORK, 7106, None, media_group_id="work-album-2",
-    )
-    delayed_second.photo = [SimpleNamespace(file_id="photo-6")]
+    with patch.object(bot, "analyze_photo_message",
+                      _photo_analysis({7108: _screen("0400"), 7109: STREET})):
+        await bot.process_work_message(late_screen, city)
+        await bot.process_work_message(late_street, city)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 5, stats
+    assert late_screen.replies == []
 
-    delayed_second_started = asyncio.Event()
-
-    async def parse_delayed_album(message, _city, _shift):
-        if message.message_id == 7106:
-            delayed_second_started.set()
-            await asyncio.sleep(0.06)
-        code = "0201" if message.message_id == 7105 else "0202"
-        return [{"action_type": "move", "bike_codes": [code], "quantity": 0}]
-
-    with patch.object(bot, "try_parse_screenshot_message", AsyncMock(side_effect=parse_delayed_album)), \
-            patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.10):
-        await bot.process_work_message(delayed_first, city)
-        await asyncio.sleep(0.02)
-        second_task = asyncio.create_task(bot.process_work_message(delayed_second, city))
-        # Дождаться фактического входа второго update в OCR: к этому моменту
-        # process_work_message уже отменил таймер первого ответа.
-        await delayed_second_started.wait()
-        await asyncio.sleep(0.04)
-        assert delayed_first.replies == [] and delayed_second.replies == []
-        await second_task
-        await asyncio.sleep(0.15)
-    assert delayed_first.replies == ["0201 — переместил\n0202 — переместил"]
-    assert delayed_second.replies == []
+    # 7. Без тумблера фото не разбирается вовсе.
+    await bot.set_user_photo_parse(uid, False)
+    analyze = _photo_analysis({7110: _screen("0500")})
+    with patch.object(bot, "analyze_photo_message", analyze):
+        await bot.process_work_message(_photo_message(uid, 7110), city)
+    assert analyze.await_count == 0
     assert bot._photo_media_group_pending == {}
-    assert bot._photo_media_group_replies == {}
+
+
+def check_screenshot_recognition():
+    """Распознавание на настоящих пикселях техприложения (без имён сотрудников)."""
+    fixtures = ROOT / "tests" / "fixtures"
+    selection = (fixtures / "screen_selection.jpg").read_bytes()
+    card = (fixtures / "screen_card_online.jpg").read_bytes()
+    result = bot.analyze_bike_photo(selection)
+    assert result == {"kind": "screenshot", "screen": "list", "codes": ["0537"]}, result
+    result = bot.analyze_bike_photo(card)
+    assert result == {"kind": "screenshot", "screen": "card", "codes": ["0537"]}, result
+
+    from io import BytesIO
+    from PIL import Image
+    # Другие разрешения экрана — тот же результат.
+    for size in ((720, 1600), (576, 1280)):
+        for raw, screen in ((selection, "list"), (card, "card")):
+            image = Image.open(BytesIO(raw)).convert("RGB")
+            image = image.resize((size[0], int(image.height * size[0] / image.width)))
+            buffer = BytesIO()
+            image.save(buffer, "JPEG", quality=85)
+            result = bot.analyze_bike_photo(buffer.getvalue())
+            assert result["codes"] == ["0537"] and result["screen"] == screen, (size, result)
+
+    # Карточка, где «На линии» выключен: номер виден, но перемещения нет.
+    image = Image.open(BytesIO(card)).convert("RGB")
+    width, height = image.size
+    states = bot._photo_read_toggles_v2(image, bot_numpy())
+    assert states == [False, False, True, False], states
+
+    # Фото улицы (пёстрая картинка) — это парковка, а не скриншот.
+    import random
+    rng = random.Random(7)
+    street = Image.new("RGB", (480, 640))
+    street.putdata([(rng.randrange(40, 200), rng.randrange(40, 200), rng.randrange(40, 200))
+                    for _ in range(480 * 640)])
+    buffer = BytesIO()
+    street.save(buffer, "JPEG", quality=80)
+    assert bot.analyze_bike_photo(buffer.getvalue()) == {"kind": "street"}
+
+
+def bot_numpy():
+    import numpy
+    return numpy
 
 
 async def main():
@@ -507,8 +566,9 @@ async def main():
         await check_charger_close_race()
         await check_report_rendering()
         await check_photo_result_reply()
-        await check_photo_caption_priority()
-        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo priority")
+        await check_photo_parking_rule()
+        check_screenshot_recognition()
+        print(f"PASS {TARGET.name}: parser, routing, database, burst, edit, roles, report, photo rules, screenshots")
     finally:
         await bot.bot.session.close()
         shutil.rmtree(TEMP_DIR, ignore_errors=True)

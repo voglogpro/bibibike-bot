@@ -24,34 +24,9 @@ REQUIRED = (
     'function openMyMap()',
     'function initEmployeeMap(data)',
     "String(startParam)==='map'",
-    'id="profileBibipassOpen"',
     'id="profileMonthEarned"',
     'id="profileDecadeEarned"',
     'id="profileMonthShifts"',
-    'id="shiftBibipassPromo"',
-    'id="tab-bibipass"',
-    'id="bibipassInstructions"',
-    'id="bibipassIntro"',
-    'id="bibipassIntroTimer"',
-    'function tickBibipassCountdowns()',
-    'data-bibipass-countdown',
-    "String(startParam)==='bibipass'",
-    'function openBibipass()',
-    'function showBibipassInstructions(replay=true)',
-    'function bibipassXpText(value)',
-    'class="pass-focus"',
-    'class="pass-progress-track ${progressPercent<=0',
-    'role="progressbar"',
-    'class="pass-earned-strip"',
-    '<section class="pass-ranking">',
-    'class="pass-drawers"',
-    'class="pass-drawer"',
-    'XP только за действия с байками',
-    'Как получить XP',
-    '<b>XP</b> — опыт для прохождения уровней.',
-    'Все награды',
-    'Рейтинг всех городов',
-    "'/api/bibipass'",
     'id="profileNavBadge"',
     'id="todoProfileBack"',
     'id="myScheduleBack">← Профиль',
@@ -64,16 +39,14 @@ REQUIRED = (
     "function motionIn(element,kind='view')",
     "function showPage(id,kind='page')",
     'function openMotionLayer(element)',
-    'function renderBibipassIntro(member=false,error=\'\')',
-    'async function maybeShowBibipassIntro()',
-    "intro.dataset.member=member?'1':'0'",
-    'Повторно подписываться или проверять подписку не нужно.',
-    '1. Открыть канал',
-    '2. Проверить подписку',
-    "if($('bibipassIntro').dataset.member==='1')",
     '@media(prefers-reduced-motion:reduce)',
+    'id="creatorCard"',
+    'Кирилл Понамарев',
+    'id="creatorTelegram"',
+    'function renderCreator()',
+    'href="https://kirakonstruktor.ru"',
+    'id="shiftKiraPromo"',
     '--motion-page:220ms',
-    'transform:scaleX(var(--progress,0))',
 )
 
 REMOVED_GAMIFICATION = (
@@ -88,6 +61,11 @@ REMOVED_GAMIFICATION = (
     'id="profilePeriodEarned"',
     'routeStops',
     '<details class="pass-drawer"><summary><span><small>${Number(data.participants)',
+    # БибиПасс удалён по решению владельца (ноябрь 2026).
+    'bibipass',
+    'Bibipass',
+    'БибиПасс',
+    "'/api/bibipass'",
 )
 
 
@@ -120,7 +98,7 @@ def main():
     else:
         print("WARN employee UI: node не найден, проверены только контракты разметки")
 
-    print("PASS employee UI: profile navigation, tasks, schedule and BibiPass")
+    print("PASS employee UI: profile navigation, tasks, schedule, creator card")
 
 
 if __name__ == "__main__":

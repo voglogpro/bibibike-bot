@@ -423,8 +423,9 @@ def _photo_analysis(kinds):
     return AsyncMock(side_effect=analyze)
 
 
-def _screen(*codes):
-    return {"kind": "screenshot", "screen": "card", "codes": list(codes)}
+def _screen(*codes, action="move"):
+    return {"kind": "screenshot", "screen": "card",
+            "items": [(action, code) for code in codes], "codes": list(codes)}
 
 
 STREET = {"kind": "street"}
@@ -438,15 +439,77 @@ async def check_photo_parking_rule():
     await bot.set_user_photo_parse(uid, True)
     shift_id = await insert_shift(uid, city, "Водитель")
     dm = AsyncMock()
-    dm_patch = patch.object(bot.bot, "send_message", dm)
-    reminder_patch = patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 0.05)
-    dm_patch.start()
-    reminder_patch.start()
+    patches = [
+        patch.object(bot.bot, "send_message", dm),
+        patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 0.05),
+        patch.object(bot, "PHOTO_REPOST_ENABLED", False),
+    ]
+    for item in patches:
+        item.start()
     try:
         await _check_photo_parking_rule(uid, city, shift_id, dm)
     finally:
-        dm_patch.stop()
-        reminder_patch.stop()
+        for item in patches:
+            item.stop()
+    await check_photo_repost(city)
+
+
+async def check_photo_repost(city):
+    """Пачка «скриншоты + парковка» заменяется одним аккуратным постом."""
+    uid = 930005
+    await bot.add_user(uid, "Иван Петров", "Водитель", city["id"])
+    await bot.set_user_photo_parse(uid, True)
+    shift_id = await insert_shift(uid, city, "Водитель")
+    album = [
+        _photo_message(uid, 7201, media_group_id="post-album"),
+        _photo_message(uid, 7202, media_group_id="post-album"),
+        _photo_message(uid, 7203, media_group_id="post-album", caption="поправил 3"),
+    ]
+    kinds = {
+        7201: {"kind": "screenshot", "screen": "card", "codes": ["0537"],
+               "items": [("move", "0537")]},
+        7202: {"kind": "screenshot", "screen": "card", "codes": ["0612"],
+               "items": [("to_sc", "0612")]},
+        7203: STREET,
+    }
+    sent = []
+
+    async def send_photo(chat_id, photo, caption=None, message_thread_id=None):
+        sent.append((chat_id, photo, caption, message_thread_id))
+        return SimpleNamespace(message_id=9001)
+
+    delete = AsyncMock()
+    with patch.object(bot, "analyze_photo_message", _photo_analysis(kinds)), \
+            patch.object(bot, "PHOTO_REPOST_DELAY_SEC", 0.02), \
+            patch.object(bot.bot, "send_photo", AsyncMock(side_effect=send_photo)), \
+            patch.object(bot.bot, "delete_message", delete):
+        for item in album:
+            await bot.process_work_message(item, city)
+        await asyncio.sleep(0.15)
+    stats = await bot.get_stats(shift_id)
+    assert stats["move"] == 1 and stats["to_sc"] == 1 and stats["fix"] == 3, stats
+    assert len(sent) == 1, sent
+    chat_id, photo, caption, thread = sent[0]
+    assert photo == "photo-7203" and thread == bot.STAVROPOL_DRIVERS_TOPIC_WORK
+    assert caption.startswith("👤 Иван Петров"), caption
+    assert "🚚 Переместил: 0537" in caption and "🏭 Привёз на СЦ: 0612" in caption, caption
+    assert "🛠 Поправил: 3" in caption and "💬 поправил 3" in caption, caption
+    deleted = sorted(call.args[1] for call in delete.await_args_list)
+    assert deleted == [7201, 7202, 7203], deleted
+    assert bot._photo_packets == {}
+
+    # Только фото парковки с подписью — без скриншота пост не делается.
+    lonely = _photo_message(uid, 7204, caption="поправил 2")
+    send_photo_mock = AsyncMock()
+    with patch.object(bot, "analyze_photo_message", _photo_analysis({7204: STREET})), \
+            patch.object(bot, "PHOTO_REPOST_DELAY_SEC", 0.02), \
+            patch.object(bot.bot, "send_photo", send_photo_mock), \
+            patch.object(bot.bot, "delete_message", AsyncMock()) as lonely_delete:
+        await bot.process_work_message(lonely, city)
+        await asyncio.sleep(0.1)
+    assert send_photo_mock.await_count == 0 and lonely_delete.await_count == 0
+    stats = await bot.get_stats(shift_id)
+    assert stats["fix"] == 5, stats
 
 
 async def _check_photo_parking_rule(uid, city, shift_id, dm):
@@ -488,7 +551,8 @@ async def _check_photo_parking_rule(uid, city, shift_id, dm):
     kinds = {
         7103: _screen("0103"),
         7104: STREET,
-        7105: {"kind": "screenshot", "screen": "list", "codes": ["0201", "0202", "0103"]},
+        7105: {"kind": "screenshot", "screen": "list", "codes": ["0201", "0202", "0103"],
+               "items": [("move", "0201"), ("move", "0202"), ("move", "0103")]},
     }
     with patch.object(bot, "analyze_photo_message", _photo_analysis(kinds)), \
             patch.object(bot, "PHOTO_MEDIA_GROUP_REPLY_DELAY_SEC", 0.01):
@@ -532,7 +596,8 @@ async def _check_photo_parking_rule(uid, city, shift_id, dm):
     # Номер на скриншоте не прочитан — сразу сообщение в личку.
     unreadable = _photo_message(uid, 7111)
     with patch.object(bot, "analyze_photo_message", _photo_analysis({7111: {
-        "kind": "screenshot", "screen": "unknown", "codes": [], "problem": "unrecognized",
+        "kind": "screenshot", "screen": "unknown", "items": [], "codes": [],
+        "problem": "unrecognized",
     }})):
         await bot.process_work_message(unreadable, city)
     assert dm.await_count == 2 and "Не смог прочитать номер" in dm.await_args.args[1]
@@ -553,9 +618,11 @@ def check_screenshot_recognition():
     selection = (fixtures / "screen_selection.jpg").read_bytes()
     card = (fixtures / "screen_card_online.jpg").read_bytes()
     result = bot.analyze_bike_photo(selection)
-    assert result == {"kind": "screenshot", "screen": "list", "codes": ["0537"]}, result
+    assert result == {"kind": "screenshot", "screen": "list", "codes": ["0537"],
+                      "items": [("move", "0537")]}, result
     result = bot.analyze_bike_photo(card)
-    assert result == {"kind": "screenshot", "screen": "card", "codes": ["0537"]}, result
+    assert result == {"kind": "screenshot", "screen": "card", "codes": ["0537"],
+                      "items": [("move", "0537")]}, result
 
     from io import BytesIO
     from PIL import Image

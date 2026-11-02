@@ -260,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-02 · Распознавание фото и без БибиПасса"
+BUILD_VERSION = "2026-11-02 · Аккуратный пост по фото, СЦ и ремонт со скриншота"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -5182,14 +5182,15 @@ def analyze_bike_photo(image_bytes):
     Возвращает словарь:
       {"kind": "street"}                         — фото парковки/байка;
       {"kind": "screenshot", "screen": "card"|"list"|"unknown",
-       "codes": [...]}                           — номера, которые бот запишет
-                                                   перемещением;
+       "items": [(тип действия, номер), ...],
+       "codes": [...]}                           — что бот запишет за сотрудника;
       {"kind": "unknown"}                        — не удалось разобрать.
 
-    Перемещение даёт только:
-      • карточка байка с включённым тумблером «На линии»;
-      • список массового выделения («Выбрано: N») — все номера списка.
-    Поправки, ремонт и прочее сотрудник пишет текстом сам.
+    Действия по скриншоту:
+      • карточка байка: «На линии» — перемещение, «На складе» — привёз на СЦ,
+        «Требует ремонта» — ремонт;
+      • список массового выделения («Выбрано: N») — перемещение всех номеров.
+    Поправки и прочее сотрудник пишет в подписи — она считается как текст.
     """
     Image, numpy, _unused = _photo_libs()
     if Image is None:
@@ -5225,26 +5226,29 @@ def analyze_bike_photo(image_bytes):
                     "(размер=%sx%s) — пришлите скриншот разработчику",
                     sorted(toggles) or "все выключены", width, image.size[1],
                 )
-                return {"kind": "screenshot", "screen": "card", "codes": [],
+                return {"kind": "screenshot", "screen": "card", "items": [], "codes": [],
                         "problem": "number_unreadable"}
-            codes = [number] if "on_line" in toggles else []
+            items = [(action_type, number) for toggle, action_type in PHOTO_TOGGLE_ACTIONS
+                     if toggle in toggles]
             logger.info(
-                "ФОТО: карточка байка %s, тумблеры=%s -> перемещение=%s",
-                number, sorted(toggles) or "все выключены", bool(codes),
+                "ФОТО: карточка байка %s, тумблеры=%s -> %s",
+                number, sorted(toggles) or "все выключены", items or "нет действий",
             )
-            return {"kind": "screenshot", "screen": "card", "codes": codes}
+            return {"kind": "screenshot", "screen": "card", "items": items,
+                    "codes": [number] if items else []}
 
         if list_numbers and not card_numbers:
             codes = list(dict.fromkeys(list_numbers))
             logger.info("ФОТО: список массового выделения, номера=%s", codes)
-            return {"kind": "screenshot", "screen": "list", "codes": codes}
+            return {"kind": "screenshot", "screen": "list",
+                    "items": [("move", code) for code in codes], "codes": codes}
 
         logger.info(
             "ФОТО-ДИАГНОСТИКА: скриншот без распознанных номеров/тумблеров "
             "(размер=%sx%s, крупные=%s, список=%s)",
             width, image.size[1], card_numbers, list_numbers,
         )
-        return {"kind": "screenshot", "screen": "unknown", "codes": [],
+        return {"kind": "screenshot", "screen": "unknown", "items": [], "codes": [],
                 "problem": "unrecognized"}
     except Exception as exc:
         logger.warning("ФОТО: разбор не удался: %s", exc)
@@ -5274,10 +5278,16 @@ async def analyze_photo_message(message: Message):
 # отдельные сообщения подряд. Без фото парковки бот ничего не пишет.
 # ------------------------------------------------------------
 PHOTO_PARKING_WINDOW_SEC = 180
+# Тумблер карточки -> действие, которое бот запишет за сотрудника.
+PHOTO_TOGGLE_ACTIONS = (
+    ("on_line", "move"),       # «На линии» — переместил
+    ("warehouse", "to_sc"),    # «На складе» — привёз на СЦ
+    ("repair", "repair"),      # «Требует ремонта» — ремонт
+)
 _photo_street_seen = {}          # (chat_id, uid) -> [время фото парковки, ...]
 _photo_pending_screens = {}      # (chat_id, uid) -> [ожидающие скриншоты]
 _photo_confirmed_messages = {}   # (chat_id, message_id) -> время подтверждения
-_photo_credited_codes = {}       # (chat_id, uid) -> {номер: (message_id, время)}
+_photo_credited_codes = {}       # (chat_id, uid) -> {(действие, номер): (message_id, время)}
 
 
 def _photo_message_ts(message):
@@ -5317,45 +5327,50 @@ def _photo_street_near(chat_id, uid, ts):
                for seen in _photo_street_seen.get((chat_id, uid), []))
 
 
-def _photo_fresh_codes(chat_id, uid, message_id, codes, ts):
-    """Один байк на нескольких фото одной пачки — одно перемещение."""
+def _photo_fresh_items(chat_id, uid, message_id, items, ts):
+    """Один байк с одним действием на нескольких фото пачки — одна запись."""
     credited = _photo_credited_codes.setdefault((chat_id, uid), {})
     fresh = []
-    for code in codes or []:
-        previous = credited.get(code)
+    for item in items or []:
+        item = (str(item[0]), str(item[1]))
+        previous = credited.get(item)
         if (previous and previous[0] != message_id
                 and abs(previous[1] - ts) <= PHOTO_PARKING_WINDOW_SEC):
             continue
-        credited[code] = (message_id, ts)
-        fresh.append(code)
+        credited[item] = (message_id, ts)
+        if item not in fresh:
+            fresh.append(item)
     return fresh
 
 
-def _photo_moves(codes):
-    return [{"action_type": "move", "bike_codes": [code], "quantity": 0}
-            for code in codes or []]
+def _photo_item_codes(items):
+    return list(dict.fromkeys(str(code) for _type, code in items or []))
 
 
-def _merge_photo_moves(text_actions, codes):
-    """Текст сотрудника + перемещения со скриншота без двойного счёта."""
-    already_moved = {
-        str(code) for action in text_actions or []
-        if action.get("action_type") == "move"
+def _photo_item_actions(items):
+    return [{"action_type": action_type, "bike_codes": [code], "quantity": 0}
+            for action_type, code in items or []]
+
+
+def _merge_photo_items(text_actions, items):
+    """Текст сотрудника + действия со скриншота без двойного счёта."""
+    already = {
+        (action.get("action_type"), str(code)) for action in text_actions or []
         for code in action.get("bike_codes") or []
     }
-    return list(text_actions or []) + _photo_moves(
-        [code for code in codes or [] if code not in already_moved]
+    return list(text_actions or []) + _photo_item_actions(
+        [item for item in items or [] if (item[0], item[1]) not in already]
     )
 
 
-async def _message_move_codes(uid, mid, city_id, chat_id):
+async def _message_action_items(uid, mid, city_id, chat_id):
     async with db_connect() as db:
         rows = await (await db.execute(
-            "SELECT bike_codes FROM actions WHERE user_id=? AND message_id=? "
-            "AND city_id=? AND chat_id=? AND action_type='move'",
+            "SELECT action_type, bike_codes FROM actions WHERE user_id=? AND message_id=? "
+            "AND city_id=? AND chat_id=?",
             (uid, mid, city_id, chat_id),
         )).fetchall()
-    return {code for row in rows for code in str(row[0] or "").split(",") if code}
+    return {(row[0], code) for row in rows for code in str(row[1] or "").split(",") if code}
 
 
 async def _confirm_pending_photo_screens(chat_id, uid, street_ts):
@@ -5366,10 +5381,10 @@ async def _confirm_pending_photo_screens(chat_id, uid, street_ts):
         return
     _photo_pending_screens[(chat_id, uid)] = [item for item in pending if item not in ready]
     for item in ready:
-        codes = _photo_fresh_codes(chat_id, uid, item["message_id"], item["codes"], item["ts"])
-        if not codes:
+        items = _photo_fresh_items(chat_id, uid, item["message_id"], item["items"], item["ts"])
+        if not items:
             continue
-        actions = _merge_photo_moves(item["text_actions"], codes)
+        actions = _merge_photo_items(item["text_actions"], items)
         try:
             removed_shift_ids, applied = await replace_message_actions(
                 uid, item["message_id"], item["city_id"], item["shift_id"],
@@ -5384,6 +5399,7 @@ async def _confirm_pending_photo_screens(chat_id, uid, street_ts):
                         item["message_id"])
             continue
         _photo_confirmed_messages[(chat_id, item["message_id"])] = time.time()
+        _photo_packet_mark_confirmed(chat_id, uid, item["message_id"])
         logger.info("ФОТО-ЗАСЧИТАНО (есть фото парковки): uid=%s msg=%s -> %s",
                     uid, item["message_id"], actions)
         for sid in set(removed_shift_ids) | {item["shift_id"]}:
@@ -5392,6 +5408,191 @@ async def _confirm_pending_photo_screens(chat_id, uid, street_ts):
                 await freeze_earned(sid)
             schedule_report_update(sid)
         await _reply_with_photo_result(item["message"], actions)
+
+
+# ------------------------------------------------------------
+# Аккуратный пост вместо альбома сотрудника. Когда пачка подтверждена
+# (скриншоты + фото парковки), бот удаляет исходные сообщения и
+# публикует одно: фото парковки и подпись «кто и что сделал». Только
+# у сотрудников с включённым тумблером. Если номер не прочитан или нет
+# парковки — оригинал остаётся, а сотруднику пишется в личку.
+# Боту нужно право администратора «Удаление сообщений».
+# ------------------------------------------------------------
+PHOTO_REPOST_ENABLED = True
+PHOTO_REPOST_DELAY_SEC = 6          # тишина после последнего фото пачки
+_photo_packets = {}                 # (chat_id, uid) -> {"messages": {...}, "task": ...}
+_photo_repost_rights_warned = set()
+
+PHOTO_POST_LABELS = (
+    ("move", "🚚 Переместил"),
+    ("to_sc", "🏭 Привёз на СЦ"),
+    ("from_sc", "📤 Вывез с СЦ"),
+    ("repair", "🔧 Ремонт"),
+    ("fix", "🛠 Поправил"),
+    ("battery", "🔋 Заменил АКБ"),
+    ("sticker", "🏷 Оклеил"),
+)
+
+
+def _photo_packet_add(chat_id, uid, message, city, kind, ts):
+    if not PHOTO_REPOST_ENABLED:
+        return
+    packet = _photo_packets.setdefault((chat_id, uid), {"messages": {}, "task": None})
+    packet["city"] = city
+    entry = packet["messages"].get(message.message_id)
+    if entry is None:
+        packet["messages"][message.message_id] = {
+            "message": message, "kind": kind, "ts": ts, "confirmed": False,
+        }
+    else:
+        entry.update(message=message, kind=kind, ts=ts)
+
+
+def _photo_packet_mark_confirmed(chat_id, uid, message_id):
+    entry = ((_photo_packets.get((chat_id, uid)) or {}).get("messages") or {}).get(message_id)
+    if entry:
+        entry["confirmed"] = True
+
+
+def _schedule_photo_packet(chat_id, uid):
+    packet = _photo_packets.get((chat_id, uid))
+    if not packet or not packet["messages"]:
+        return
+    task = packet.get("task")
+    if task and not task.done():
+        task.cancel()
+    packet["task"] = asyncio.create_task(_flush_photo_packet((chat_id, uid)))
+
+
+async def _flush_photo_packet(key):
+    try:
+        await asyncio.sleep(PHOTO_REPOST_DELAY_SEC)
+    except asyncio.CancelledError:
+        return
+    packet = _photo_packets.get(key)
+    if not packet:
+        return
+    city = packet.get("city") or {}
+    try:
+        async with _employee_event_guard(city.get("id"), key[1]):
+            await _repost_photo_packet(key)
+    except Exception as exc:
+        logger.warning("ФОТО-ПОСТ: сбой, оригиналы оставлены: %s", exc)
+
+
+def _photo_post_caption(name, when, actions, comments):
+    lines = [f"👤 {name}" + (f" · {when}" if when else "")]
+    for action_type, label in PHOTO_POST_LABELS:
+        codes, quantity = [], 0
+        for action in actions:
+            if action["action_type"] != action_type:
+                continue
+            row_codes = [code for code in str(action["bike_codes"] or "").split(",") if code]
+            codes.extend(code for code in row_codes if code not in codes)
+            if not row_codes:
+                quantity += int(action["quantity"] or 0)
+        parts = list(codes)
+        if quantity:
+            parts.append(f"{quantity} шт." if codes else str(quantity))
+        if parts:
+            lines.append(f"{label}: {', '.join(parts)}")
+    for comment in comments:
+        lines.append(f"💬 {comment[:300]}")
+    caption = "\n".join(lines)
+    return caption if len(caption) <= 1024 else caption[:1020] + "…"
+
+
+async def _repost_photo_packet(key):
+    chat_id, uid = key
+    packet = _photo_packets.get(key)
+    if not packet:
+        return
+    entries = packet["messages"]
+    confirmed = [entry for entry in entries.values()
+                 if entry["kind"] == "screen" and entry["confirmed"]]
+    if not confirmed:
+        # Ждём фото парковки; старые записи пачки выбрасываем.
+        horizon = time.time() - PHOTO_PARKING_WINDOW_SEC * 3
+        for mid in [mid for mid, entry in entries.items()
+                    if _photo_message_ts(entry["message"]) < horizon]:
+            entries.pop(mid, None)
+        if not entries:
+            _photo_packets.pop(key, None)
+        return
+    streets = [entry for entry in entries.values()
+               if entry["kind"] == "street"
+               and any(abs(entry["ts"] - item["ts"]) <= PHOTO_PARKING_WINDOW_SEC
+                       for item in confirmed)]
+    used = sorted(confirmed + streets, key=lambda entry: entry["message"].message_id)
+    used_ids = [entry["message"].message_id for entry in used]
+    for mid in used_ids:
+        entries.pop(mid, None)
+    if not entries:
+        _photo_packets.pop(key, None)
+
+    city = packet.get("city") or {}
+    placeholders = ",".join("?" for _ in used_ids)
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        actions = [dict(row) for row in await (await db.execute(
+            "SELECT action_type, bike_codes, quantity FROM actions WHERE user_id=? "
+            f"AND city_id=? AND chat_id=? AND message_id IN ({placeholders}) ORDER BY id",
+            (uid, city.get("id"), chat_id, *used_ids),
+        )).fetchall()]
+    if not actions:
+        return
+    first = used[0]["message"]
+    user = await get_user(uid) or {}
+    name = (user.get("full_name") or getattr(first.from_user, "full_name", "") or "Сотрудник").strip()
+    when = ""
+    try:
+        last_date = used[-1]["message"].date
+        when = _as_aware_datetime(last_date).astimezone(_city_tz(city)).strftime("%H:%M")
+    except Exception:
+        pass
+    comments = [str(entry["message"].caption or entry["message"].text or "").strip()
+                for entry in used]
+    caption = _photo_post_caption(name, when, actions, [text for text in comments if text])
+    thread_id = getattr(first, "message_thread_id", None)
+    photos = [entry["message"].photo[-1].file_id for entry in used
+              if entry["kind"] == "street" and getattr(entry["message"], "photo", None)][:10]
+    try:
+        if len(photos) > 1:
+            media = [InputMediaPhoto(media=file_id, caption=caption if index == 0 else None)
+                     for index, file_id in enumerate(photos)]
+            posted = await bot.send_media_group(chat_id, media, message_thread_id=thread_id)
+        elif photos:
+            posted = [await bot.send_photo(chat_id, photos[0], caption=caption,
+                                           message_thread_id=thread_id)]
+        else:
+            posted = [await bot.send_message(chat_id, caption, message_thread_id=thread_id)]
+    except Exception as exc:
+        logger.warning("ФОТО-ПОСТ НЕ ОТПРАВЛЕН: chat=%s uid=%s ошибка=%s — оригиналы оставлены",
+                       chat_id, uid, exc)
+        return
+    deleted = 0
+    for mid in used_ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+            deleted += 1
+        except Exception as exc:
+            logger.info("ФОТО-ПОСТ: не удалось удалить msg=%s: %s", mid, exc)
+    if not deleted:
+        # Нет права удалять: убираем свой пост, чтобы в чате не было дубля.
+        for item in posted:
+            try:
+                await bot.delete_message(chat_id, item.message_id)
+            except Exception:
+                pass
+        if chat_id not in _photo_repost_rights_warned:
+            _photo_repost_rights_warned.add(chat_id)
+            logger.warning(
+                "ФОТО-ПОСТ: у бота нет права «Удаление сообщений» в чате %s — "
+                "аккуратный пост отключён для этого чата до выдачи права", chat_id,
+            )
+        return
+    logger.info("ФОТО-ПОСТ: chat=%s uid=%s заменено сообщений=%s/%s", chat_id, uid,
+                deleted, len(used_ids))
 
 
 def _photo_action_codes(actions):
@@ -5681,7 +5882,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
     # Скриншот техприложения даёт перемещение только вместе с фото
     # парковки от того же сотрудника рядом по времени. Подпись под фото —
     # обычное рабочее сообщение: поправки и ремонт сотрудник пишет сам.
-    photo_codes = []
+    photo_items = []
     pending_screen = None
     if getattr(message, "photo", None):
         try:
@@ -5692,6 +5893,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                 _photo_prune(photo_ts)
                 if analysis.get("kind") == "street" and not edited:
                     _photo_street_seen.setdefault((chat_id, uid), []).append(photo_ts)
+                    _photo_packet_add(chat_id, uid, message, city, "street", photo_ts)
                     await _confirm_pending_photo_screens(chat_id, uid, photo_ts)
                 elif analysis.get("problem") and not edited:
                     await _photo_dm(uid, (
@@ -5699,24 +5901,28 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                         "Перемещение по нему не записано — напишите в рабочий чат "
                         "текстом, например: «Переместил 0537»."
                     ))
-                elif analysis.get("kind") == "screenshot" and analysis.get("codes"):
-                    codes = list(analysis["codes"])
+                elif analysis.get("kind") == "screenshot" and analysis.get("items"):
+                    items = [(str(kind), str(code)) for kind, code in analysis["items"]]
+                    codes = _photo_item_codes(items)
                     confirmed = (chat_id, message.message_id) in _photo_confirmed_messages
                     if not confirmed and edited:
-                        confirmed = set(codes) <= await _message_move_codes(
+                        confirmed = set(items) <= await _message_action_items(
                             uid, message.message_id, city["id"], chat_id,
                         )
                     if not confirmed:
                         confirmed = _photo_street_near(chat_id, uid, photo_ts)
+                    if not edited:
+                        _photo_packet_add(chat_id, uid, message, city, "screen", photo_ts)
                     if confirmed:
-                        photo_codes = _photo_fresh_codes(
-                            chat_id, uid, message.message_id, codes, photo_ts,
+                        photo_items = _photo_fresh_items(
+                            chat_id, uid, message.message_id, items, photo_ts,
                         )
                         _photo_confirmed_messages[(chat_id, message.message_id)] = time.time()
-                        logger.info("ФОТО-ЗАСЧИТАНО: uid=%s msg=%s номера=%s", uid,
-                                    message.message_id, codes)
+                        _photo_packet_mark_confirmed(chat_id, uid, message.message_id)
+                        logger.info("ФОТО-ЗАСЧИТАНО: uid=%s msg=%s -> %s", uid,
+                                    message.message_id, items)
                     else:
-                        pending_screen = {"codes": codes, "ts": photo_ts}
+                        pending_screen = {"items": items, "ts": photo_ts}
                         if not edited:
                             _schedule_photo_parking_reminder(
                                 chat_id, uid, message.message_id, codes,
@@ -5729,7 +5935,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         except Exception as exc:
             # Распознавание не должно ломать обычную обработку сообщения.
             logger.warning("ФОТО: сбой, пропускаю: %s", exc)
-            photo_codes, pending_screen = [], None
+            photo_items, pending_screen = [], None
 
     def remember_pending_screen(text_actions):
         if pending_screen is None:
@@ -5744,7 +5950,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         })
         _photo_pending_screens[key] = queue
 
-    photo_actions = _photo_moves(photo_codes)
+    photo_actions = _photo_item_actions(photo_items)
 
     if not text or text.startswith('/'):
         # Сообщение без текста, но со скриншотом: засчитываем распознанное.
@@ -5803,7 +6009,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
 
     # Подпись разбирается как обычное рабочее сообщение. Перемещения
     # со скриншота добавляются к ней без двойного счёта одного номера.
-    used_photo_actions = bool(photo_codes)
+    used_photo_actions = bool(photo_items)
     if bare_repair_topic:
         actions = parse_bare_repair_message(text)  # тема 4485: номера с любым описанием
     elif sticker_topic:
@@ -5820,7 +6026,7 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
         actions = parse_message(text)
     remember_pending_screen(actions)
     if used_photo_actions:
-        actions = _merge_photo_moves(actions, photo_codes)
+        actions = _merge_photo_items(actions, photo_items)
 
     logger.info(
         f"РАЗБОР: город={city['name']} роль_группы={city.get('role_group') or '—'} "
@@ -5881,6 +6087,8 @@ async def process_work_message(message: Message, city, npb=False, edited=False,
                 bare_repair_topic=bare_repair_topic,
                 sticker_topic=sticker_topic,
             )
+        if not edited and getattr(message, "photo", None):
+            _schedule_photo_packet(message.chat.id, sender.id)
     finally:
         if album_key is not None:
             pending = _photo_media_group_pending.get(album_key, 1) - 1

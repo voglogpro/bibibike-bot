@@ -647,6 +647,18 @@ def check_screenshot_recognition():
             result = bot.analyze_bike_photo(buffer.getvalue())
             assert result["codes"] == ["0537"] and result["screen"] == screen, (size, result)
 
+    # Верх карточек с реальных телефонов, в т. ч. номер под уведомлением
+    # «На линии включено» (видна только нижняя часть цифр). Раньше 0779
+    # читался как 0999, а 0537 — как 0539 из-за перепутанных эталонов.
+    for path in sorted(fixtures.glob("card_top_*.jpg")):
+        expected = path.stem.rsplit("_", 1)[1]
+        for scale in (1.0, 0.8):
+            image = Image.open(path).convert("RGB")
+            if scale != 1.0:
+                image = image.resize((int(image.width * scale), int(image.height * scale)))
+            codes = [item["code"] for item in bot.find_bike_numbers(image, bot_numpy(), Image)]
+            assert codes == [expected], (path.name, scale, codes)
+
     # Карточка, где «На линии» выключен: номер виден, но перемещения нет.
     image = Image.open(BytesIO(card)).convert("RGB")
     width, height = image.size

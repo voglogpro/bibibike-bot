@@ -373,6 +373,17 @@ async def check_report_rendering():
 
 
 async def check_photo_result_reply():
+    # По умолчанию бот в рабочий чат не отвечает (только лог).
+    silent = FakeMessage(77, -100, None, 14, "")
+    await bot._send_photo_result(silent, [
+        {"action_type": "move", "bike_codes": ["0915"], "quantity": 0}
+    ])
+    assert silent.replies == []
+    with patch.object(bot, "PHOTO_GROUP_REPLIES", True):
+        await _check_photo_result_reply_enabled()
+
+
+async def _check_photo_result_reply_enabled():
     message = FakeMessage(77, -100, None, 15, "")
     await bot._reply_with_photo_result(message, [
         {"action_type": "move", "bike_codes": ["0915"], "quantity": 0}
@@ -426,7 +437,19 @@ async def check_photo_parking_rule():
     await bot.add_user(uid, "Фото Тест", "Водитель", city["id"])
     await bot.set_user_photo_parse(uid, True)
     shift_id = await insert_shift(uid, city, "Водитель")
+    dm = AsyncMock()
+    dm_patch = patch.object(bot.bot, "send_message", dm)
+    reminder_patch = patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 0.05)
+    dm_patch.start()
+    reminder_patch.start()
+    try:
+        await _check_photo_parking_rule(uid, city, shift_id, dm)
+    finally:
+        dm_patch.stop()
+        reminder_patch.stop()
 
+
+async def _check_photo_parking_rule(uid, city, shift_id, dm):
     # 1. Скриншот без парковки: перемещения нет, подпись считается как текст.
     screen = _photo_message(uid, 7101, caption="0001 требует ремонта")
     with patch.object(bot, "analyze_photo_message", _photo_analysis({7101: _screen("0915")})):
@@ -443,8 +466,10 @@ async def check_photo_parking_rule():
         await bot.process_work_message(street, city)
     stats = await bot.get_stats(shift_id)
     assert stats["move"] == 1 and stats["repair"] == 1, stats
-    assert screen.replies == ["0001 — требует ремонта\n0915 — переместил"], screen.replies
-    assert street.replies == [], street.replies
+    # В рабочий чат бот не пишет; напоминание о парковке не ушло — успели.
+    assert screen.replies == [] and street.replies == [], (screen.replies, street.replies)
+    await asyncio.sleep(0.1)
+    assert dm.await_count == 0, dm.await_args_list
 
     # 3. Правка подписи подтверждённого скриншота не теряет перемещение.
     edited = _photo_message(uid, 7101, caption="0001 требует ремонта, 0002 требует ремонта")
@@ -473,10 +498,7 @@ async def check_photo_parking_rule():
     stats = await bot.get_stats(shift_id)
     # 0103 есть и на карточке, и в списке — одно перемещение, не два.
     assert stats["move"] == 4, stats
-    assert album[0].replies == [
-        "0103 — переместил\n0201 — переместил\n0202 — переместил"
-    ], album[0].replies
-    assert album[1].replies == [] and album[2].replies == []
+    assert all(item.replies == [] for item in album)
 
     # 5. Подпись уже называет тот же номер — дубля перемещения нет.
     old = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -502,6 +524,19 @@ async def check_photo_parking_rule():
     stats = await bot.get_stats(shift_id)
     assert stats["move"] == 5, stats
     assert late_screen.replies == []
+    # Скриншот без парковки: напоминание в личку, не в чат.
+    await asyncio.sleep(0.1)
+    assert dm.await_count == 1, dm.await_args_list
+    assert dm.await_args.args[0] == uid and "нет фото парковки" in dm.await_args.args[1]
+
+    # Номер на скриншоте не прочитан — сразу сообщение в личку.
+    unreadable = _photo_message(uid, 7111)
+    with patch.object(bot, "analyze_photo_message", _photo_analysis({7111: {
+        "kind": "screenshot", "screen": "unknown", "codes": [], "problem": "unrecognized",
+    }})):
+        await bot.process_work_message(unreadable, city)
+    assert dm.await_count == 2 and "Не смог прочитать номер" in dm.await_args.args[1]
+    assert unreadable.replies == []
 
     # 7. Без тумблера фото не разбирается вовсе.
     await bot.set_user_photo_parse(uid, False)

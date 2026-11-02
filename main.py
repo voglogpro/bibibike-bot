@@ -296,10 +296,10 @@ CRM_OWNER_USER_ID = (
 )
 
 # Создатель бота — показывается сотрудникам в профиле Mini App.
-# CREATOR_TELEGRAM — ник (@name) или ссылка t.me/name. Если не задан,
-# берётся Telegram-ник владельца CRM из таблицы users.
+# CREATOR_TELEGRAM — ник (@name) или ссылка t.me/name. Пустое значение в
+# окружении — берётся Telegram-ник владельца CRM из таблицы users.
 CREATOR_NAME = os.getenv("CREATOR_NAME", "Кирилл Понамарев").strip() or "Кирилл Понамарев"
-CREATOR_TELEGRAM = os.getenv("CREATOR_TELEGRAM", "").strip()
+CREATOR_TELEGRAM = os.getenv("CREATOR_TELEGRAM", "@KiraKonstruktorru").strip()
 KIRA_KONSTRUKTOR_URL = "https://kirakonstruktor.ru"
 
 
@@ -5225,7 +5225,8 @@ def analyze_bike_photo(image_bytes):
                     "(размер=%sx%s) — пришлите скриншот разработчику",
                     sorted(toggles) or "все выключены", width, image.size[1],
                 )
-                return {"kind": "screenshot", "screen": "card", "codes": []}
+                return {"kind": "screenshot", "screen": "card", "codes": [],
+                        "problem": "number_unreadable"}
             codes = [number] if "on_line" in toggles else []
             logger.info(
                 "ФОТО: карточка байка %s, тумблеры=%s -> перемещение=%s",
@@ -5243,7 +5244,8 @@ def analyze_bike_photo(image_bytes):
             "(размер=%sx%s, крупные=%s, список=%s)",
             width, image.size[1], card_numbers, list_numbers,
         )
-        return {"kind": "screenshot", "screen": "unknown", "codes": []}
+        return {"kind": "screenshot", "screen": "unknown", "codes": [],
+                "problem": "unrecognized"}
     except Exception as exc:
         logger.warning("ФОТО: разбор не удался: %s", exc)
         return {"kind": "unknown"}
@@ -5436,10 +5438,59 @@ def _photo_result_text(actions):
     )
 
 
+# В рабочий чат бот по фото не пишет — чтобы не спамить. Успех виден в
+# отчёте смены, а о проблемах сотрудник узнаёт в личных сообщениях.
+PHOTO_GROUP_REPLIES = False
+PHOTO_PARKING_REMINDER_SEC = 60
+_photo_reminder_tasks = set()
+
+
+async def _photo_dm(uid, text):
+    """Личное сообщение сотруднику о проблеме с фото. Ошибки только в лог."""
+    try:
+        await bot.send_message(uid, text)
+        logger.info("ФОТО-ЛС: uid=%s — %s", uid, text.splitlines()[0])
+    except Exception as exc:
+        # Сотрудник мог ни разу не открыть личный чат с ботом.
+        logger.info("ФОТО-ЛС НЕ ОТПРАВЛЕНО: uid=%s ошибка=%s", uid, exc)
+
+
+async def _photo_parking_reminder(chat_id, uid, message_id, codes):
+    try:
+        await asyncio.sleep(PHOTO_PARKING_REMINDER_SEC)
+    except asyncio.CancelledError:
+        return
+    still_waiting = any(
+        item["message_id"] == message_id
+        for item in _photo_pending_screens.get((chat_id, uid), [])
+    )
+    if not still_waiting:
+        return
+    left_min = max(1, round((PHOTO_PARKING_WINDOW_SEC - PHOTO_PARKING_REMINDER_SEC) / 60))
+    await _photo_dm(uid, (
+        f"📸 Скриншот байка {', '.join(codes)} получен, но нет фото парковки.\n"
+        f"Пришлите фото парковки в рабочий чат в течение ~{left_min} мин — "
+        f"иначе перемещение не засчитается."
+    ))
+
+
+def _schedule_photo_parking_reminder(chat_id, uid, message_id, codes):
+    task = asyncio.create_task(_photo_parking_reminder(chat_id, uid, message_id, list(codes)))
+    _photo_reminder_tasks.add(task)
+    task.add_done_callback(_photo_reminder_tasks.discard)
+
+
 async def _send_photo_result(message: Message, actions):
     """Ответ Telegram не должен отменять уже сохранённые в БД действия."""
     text = _photo_result_text(actions)
     if not text:
+        return
+    if not PHOTO_GROUP_REPLIES:
+        logger.info(
+            "ФОТО-ИТОГ (без ответа в чат): uid=%s msg=%s номера=%s",
+            getattr(message.from_user, "id", None), message.message_id,
+            _photo_action_codes(actions),
+        )
         return
     try:
         await message.reply(text)
@@ -5642,6 +5693,12 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                 if analysis.get("kind") == "street" and not edited:
                     _photo_street_seen.setdefault((chat_id, uid), []).append(photo_ts)
                     await _confirm_pending_photo_screens(chat_id, uid, photo_ts)
+                elif analysis.get("problem") and not edited:
+                    await _photo_dm(uid, (
+                        "⚠️ Не смог прочитать номер байка на скриншоте техприложения.\n"
+                        "Перемещение по нему не записано — напишите в рабочий чат "
+                        "текстом, например: «Переместил 0537»."
+                    ))
                 elif analysis.get("kind") == "screenshot" and analysis.get("codes"):
                     codes = list(analysis["codes"])
                     confirmed = (chat_id, message.message_id) in _photo_confirmed_messages
@@ -5660,6 +5717,10 @@ async def _process_work_message_locked(message: Message, city, npb=False, edited
                                     message.message_id, codes)
                     else:
                         pending_screen = {"codes": codes, "ts": photo_ts}
+                        if not edited:
+                            _schedule_photo_parking_reminder(
+                                chat_id, uid, message.message_id, codes,
+                            )
                         logger.info(
                             "ФОТО-ОЖИДАНИЕ: uid=%s msg=%s номера=%s — жду фото парковки "
                             "(±%s с), без него перемещение не записывается",

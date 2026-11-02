@@ -473,10 +473,15 @@ async def check_photo_repost(city):
         7203: STREET,
     }
     sent = []
+    markups = []
+    for item in album:
+        item.from_user.username = "ivan_petrov"
 
-    async def send_photo(chat_id, photo, caption=None, message_thread_id=None, parse_mode=None):
+    async def send_photo(chat_id, photo, caption=None, message_thread_id=None, parse_mode=None,
+                         reply_markup=None):
         assert parse_mode == "HTML"
         sent.append((chat_id, photo, caption, message_thread_id))
+        markups.append(reply_markup)
         return SimpleNamespace(message_id=9001)
 
     delete = AsyncMock()
@@ -493,8 +498,11 @@ async def check_photo_repost(city):
     chat_id, photo, caption, thread = sent[0]
     assert photo == "photo-7203" and thread == bot.STAVROPOL_DRIVERS_TOPIC_WORK
     assert caption.splitlines()[0] == (
-        f'<a href="tg://user?id={uid}"><b>Иван Петров</b></a>'
+        '<a href="https://t.me/ivan_petrov"><b>Иван Петров</b></a> · <code>@ivan_petrov</code>'
     ), caption
+    button = markups[0].inline_keyboard[0][0].model_dump(exclude_none=True)
+    assert button == {"text": "📋 Скопировать @ivan_petrov",
+                      "copy_text": {"text": "@ivan_petrov"}}, button
     assert caption.splitlines()[1].startswith("🕒 "), caption
     assert "<code>0537</code> · перемещён" in caption, caption
     assert "<code>0612</code> · на складе" in caption, caption
@@ -667,10 +675,11 @@ def check_photo_post_caption():
     ]
     caption = bot._photo_post_caption(
         "Анна <Тест>", "09:05", actions, ["коммент & ещё"],
-        bot._photo_post_author_link(1, "@anna_scout"),
+        bot._photo_post_author_link(1, "@anna_scout"), "anna_scout",
     )
     assert caption == (
-        '<a href="https://t.me/anna_scout"><b>Анна &lt;Тест&gt;</b></a>\n'
+        '<a href="https://t.me/anna_scout"><b>Анна &lt;Тест&gt;</b></a>'
+        ' · <code>@anna_scout</code>\n'
         "🕒 09:05\n\n"
         "<code>0537</code> · перемещён, требует ремонта\n"
         "<code>0612</code> · на складе\n"

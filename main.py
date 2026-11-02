@@ -260,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-02 · Пост по фото: список байков и имя-ссылка"
+BUILD_VERSION = "2026-11-02 · Пост по фото: тег сотрудника копируется"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -5498,10 +5498,17 @@ def _photo_post_author_link(uid, username):
     return f"https://t.me/{username}" if username else f"tg://user?id={int(uid)}"
 
 
-def _photo_post_caption(name, when, actions, comments, author_url=None):
-    """HTML-подпись поста: имя-ссылка, время и список «номер · состояние»."""
+def _photo_post_caption(name, when, actions, comments, author_url=None, tag=None):
+    """HTML-подпись поста: имя-ссылка, тег, время и список «номер · состояние».
+
+    Тег набран моноширинным: нажатие копирует его, и старший вставляет
+    «@ник» в чат, не разыскивая сотрудника. Уведомления тег не вызывает.
+    """
     title = f"<b>{html.escape(name)}</b>"
-    lines = [f'<a href="{html.escape(author_url, quote=True)}">{title}</a>' if author_url else title]
+    head = f'<a href="{html.escape(author_url, quote=True)}">{title}</a>' if author_url else title
+    if tag:
+        head += f" · <code>@{html.escape(tag)}</code>"
+    lines = [head]
     if when:
         lines.append(f"🕒 {html.escape(when)}")
     states, quantities = {}, {}
@@ -5583,9 +5590,15 @@ async def _repost_photo_packet(key):
     first = used[0]["message"]
     user = await get_user(uid) or {}
     name = (user.get("full_name") or getattr(first.from_user, "full_name", "") or "Сотрудник").strip()
-    author_url = _photo_post_author_link(
-        uid, user.get("telegram_username") or getattr(first.from_user, "username", None),
+    tag = _telegram_username(
+        getattr(first.from_user, "username", None) or user.get("telegram_username")
     )
+    author_url = _photo_post_author_link(uid, tag)
+    # Кнопка «скопировать тег» (copy_text, Bot API 7.11). У альбома кнопок
+    # не бывает, там остаётся тег в подписи — он тоже копируется нажатием.
+    tag_markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=f"📋 Скопировать @{tag}", copy_text={"text": f"@{tag}"},
+    )]]) if tag else None
     when = ""
     try:
         last_date = used[-1]["message"].date
@@ -5595,7 +5608,7 @@ async def _repost_photo_packet(key):
     comments = [str(entry["message"].caption or entry["message"].text or "").strip()
                 for entry in used]
     caption = _photo_post_caption(name, when, actions, [text for text in comments if text],
-                                  author_url)
+                                  author_url, tag)
     thread_id = getattr(first, "message_thread_id", None)
     photos = [entry["message"].photo[-1].file_id for entry in used
               if entry["kind"] == "street" and getattr(entry["message"], "photo", None)][:10]
@@ -5607,10 +5620,11 @@ async def _repost_photo_packet(key):
             posted = await bot.send_media_group(chat_id, media, message_thread_id=thread_id)
         elif photos:
             posted = [await bot.send_photo(chat_id, photos[0], caption=caption,
-                                           message_thread_id=thread_id, parse_mode="HTML")]
+                                           message_thread_id=thread_id, parse_mode="HTML",
+                                           reply_markup=tag_markup)]
         else:
             posted = [await bot.send_message(chat_id, caption, message_thread_id=thread_id,
-                                             parse_mode="HTML")]
+                                             parse_mode="HTML", reply_markup=tag_markup)]
     except Exception as exc:
         logger.warning("ФОТО-ПОСТ НЕ ОТПРАВЛЕН: chat=%s uid=%s ошибка=%s — оригиналы оставлены",
                        chat_id, uid, exc)

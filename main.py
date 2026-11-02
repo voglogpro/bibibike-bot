@@ -260,7 +260,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-02 · Пост по фото: тег сотрудника копируется"
+BUILD_VERSION = "2026-11-02 · Пост по фото без кнопки, тег копируется"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -5594,11 +5594,6 @@ async def _repost_photo_packet(key):
         getattr(first.from_user, "username", None) or user.get("telegram_username")
     )
     author_url = _photo_post_author_link(uid, tag)
-    # Кнопка «скопировать тег» (copy_text, Bot API 7.11). У альбома кнопок
-    # не бывает, там остаётся тег в подписи — он тоже копируется нажатием.
-    tag_markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text=f"📋 Скопировать @{tag}", copy_text={"text": f"@{tag}"},
-    )]]) if tag else None
     when = ""
     try:
         last_date = used[-1]["message"].date
@@ -5620,11 +5615,10 @@ async def _repost_photo_packet(key):
             posted = await bot.send_media_group(chat_id, media, message_thread_id=thread_id)
         elif photos:
             posted = [await bot.send_photo(chat_id, photos[0], caption=caption,
-                                           message_thread_id=thread_id, parse_mode="HTML",
-                                           reply_markup=tag_markup)]
+                                           message_thread_id=thread_id, parse_mode="HTML")]
         else:
             posted = [await bot.send_message(chat_id, caption, message_thread_id=thread_id,
-                                             parse_mode="HTML", reply_markup=tag_markup)]
+                                             parse_mode="HTML")]
     except Exception as exc:
         logger.warning("ФОТО-ПОСТ НЕ ОТПРАВЛЕН: chat=%s uid=%s ошибка=%s — оригиналы оставлены",
                        chat_id, uid, exc)

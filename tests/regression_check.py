@@ -500,9 +500,7 @@ async def check_photo_repost(city):
     assert caption.splitlines()[0] == (
         '<a href="https://t.me/ivan_petrov"><b>Иван Петров</b></a> · <code>@ivan_petrov</code>'
     ), caption
-    button = markups[0].inline_keyboard[0][0].model_dump(exclude_none=True)
-    assert button == {"text": "📋 Скопировать @ivan_petrov",
-                      "copy_text": {"text": "@ivan_petrov"}}, button
+    assert markups == [None], markups  # без кнопок: тег копируется из подписи
     assert caption.splitlines()[1].startswith("🕒 "), caption
     assert "<code>0537</code> · перемещён" in caption, caption
     assert "<code>0612</code> · на складе" in caption, caption

@@ -1,5 +1,6 @@
 """Личная карточка смены и ввод времени/района прямо в переписке с ботом."""
 import asyncio
+import base64
 import html
 import json
 import re
@@ -13,7 +14,6 @@ from typing import Any
 import aiosqlite
 from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.methods import TelegramMethod
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 ASSETS = Path(__file__).resolve().parent / "assets" / "shift-panel"
 COMMAND = re.compile(r"sw:([a-f0-9]{20}):(\d{1,10}):(refresh|basic|open|close|now|commit|cancel|d\d)(?::(\d{1,12}))?")
@@ -26,9 +26,7 @@ class SendWidget(TelegramMethod[Any]):
     chat_id: int
     html: str
     chat_data: str
-    caption: str
     allow_queries: bool = True
-    reply_markup: InlineKeyboardMarkup
 
 
 class EditWidget(TelegramMethod[bool]):
@@ -78,12 +76,14 @@ class ShiftPanels:
             revision INTEGER NOT NULL DEFAULT 0, district TEXT NOT NULL DEFAULT '',
             last_shift_id INTEGER, last_data TEXT, draft_step TEXT, draft_time TEXT,
             draft_shift_id INTEGER, draft_expires_at REAL, prompt_message_id INTEGER,
-            last_input_message_id INTEGER NOT NULL DEFAULT 0, UNIQUE(user_id,city_id))""")
+            last_input_message_id INTEGER NOT NULL DEFAULT 0, ui_version INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(user_id,city_id))""")
         # Совместимость с ранним локальным прототипом: только добавление колонок.
         columns = {r[1] for r in await (await db.execute("PRAGMA table_info(shift_widget_sessions)")).fetchall()}
         for name, declaration in {"draft_step": "TEXT", "draft_time": "TEXT", "draft_shift_id": "INTEGER",
                 "draft_expires_at": "REAL", "prompt_message_id": "INTEGER",
-                "last_input_message_id": "INTEGER NOT NULL DEFAULT 0"}.items():
+                "last_input_message_id": "INTEGER NOT NULL DEFAULT 0",
+                "ui_version": "INTEGER NOT NULL DEFAULT 0"}.items():
             if name not in columns:
                 await db.execute(f"ALTER TABLE shift_widget_sessions ADD COLUMN {name} {declaration}")
 
@@ -113,28 +113,25 @@ class ShiftPanels:
     def callback_data(self, row, action, sid=0):
         return f"sw:{row['token']}:{row['revision']}:{action}:{sid}"
 
-    def markup(self, row, state=None):
-        app = InlineKeyboardButton(text="Открыть приложение", url=self.a._crm_miniapp_link())
-        if state is None:
-            return InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Обычные кнопки", callback_data=self.callback_data(row, "basic")), app]])
-        def button(label, action):
-            return InlineKeyboardButton(text=label, callback_data=self.callback_data(row, action, state["sid"]))
-        step = state["step"]
-        if step in {"start_time", "stop_time"}:
-            rows = [[button("Сейчас", "now"), button("Отмена", "cancel")]]
-        elif step == "start_district":
-            options = [button(d, f"d{i}") for i, d in enumerate(state["opts"])]
-            rows = [options[i:i+2] for i in range(0, len(options), 2)]
-            rows.append([button("Отмена", "cancel")])
-        elif step in {"start_confirm", "stop_confirm"}:
-            rows = [[button("Открыть смену" if step == "start_confirm" else "Закрыть смену", "commit"),
-                     button("Отмена", "cancel")]]
-        else:
-            rows = [[button("Закрыть смену" if state["sid"] else "Открыть смену",
-                            "close" if state["sid"] else "open")]]
-        rows.append([button("Обновить", "refresh"), app])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+    def build_html(self):
+        code = (ASSETS / "widget.html").read_text(encoding="utf-8")
+        image = "data:image/webp;base64," + base64.b64encode((ASSETS / "brand.webp").read_bytes()).decode("ascii")
+        code = code.replace("__APP_URL__", json.dumps(self.a._crm_miniapp_link()))
+        code = code.replace("__BRAND_IMAGE__", image)
+        if len(code.encode()) > 32768 or len(zlib.compress(code.encode(), 9)) > 4096:
+            raise ValueError("Размер HTML карточки превышает лимит Telegram")
+        return code
+
+    async def retire_legacy_controls(self, uid):
+        """Убирает старые внешние клавиатуры нашей карточки при новом /start."""
+        async with self.a.db_connect() as db:
+            rows = await (await db.execute("SELECT message_id,prompt_message_id FROM shift_widget_sessions "
+                "WHERE user_id=? AND ui_version=0", (uid,))).fetchall()
+        for mid in {mid for row in rows for mid in row if mid}:
+            try:
+                await self.a.bot.edit_message_reply_markup(chat_id=uid, message_id=mid, reply_markup=None)
+            except (TelegramBadRequest, TelegramNotFound):
+                pass
 
     async def open_private(self, message, payload=None):
         if message.chat.type != "private" or not message.from_user:
@@ -150,11 +147,9 @@ class ShiftPanels:
                 return
             city_id = int(match[1])
         city = a.get_city(city_id)
-        app_markup = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Зарегистрироваться в приложении", url=a._crm_miniapp_link())]])
         if not city or not user.get("full_name") or not user.get("role"):
             await message.answer("Для первого входа укажите имя, город и роль в приложении. "
-                                 "После регистрации сменой можно управлять здесь.", reply_markup=app_markup)
+                                 "После регистрации сменой можно управлять здесь.\n" + a._crm_miniapp_link())
             return
         if not user.get("statistics_visible", 1):
             await message.answer("Профиль скрыт руководителем. Обратитесь к администратору.")
@@ -167,32 +162,29 @@ class ShiftPanels:
             return
         await a.remember_telegram_username(uid, message.from_user.username)
         async with self.guard(uid):
+            await self.retire_legacy_controls(uid)
             plan = await a._employee_planned_shift(uid, city, active)
             token = uuid.uuid4().hex[:20]
             district = (active or plan or {}).get("district") or ""
             async with a.db_connect() as db:
                 await db.execute("UPDATE shift_widget_sessions SET draft_step=NULL,prompt_message_id=NULL WHERE user_id=?", (uid,))
-                await db.execute("INSERT INTO shift_widget_sessions(token,user_id,city_id,district,last_shift_id,last_input_message_id) "
-                    "VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,city_id) DO UPDATE SET token=excluded.token,"
+                await db.execute("INSERT INTO shift_widget_sessions(token,user_id,city_id,district,last_shift_id,last_input_message_id,ui_version) "
+                    "VALUES (?,?,?,?,?,?,1) ON CONFLICT(user_id,city_id) DO UPDATE SET token=excluded.token,"
                     "message_id=0,kind='widget',revision=0,district=excluded.district,last_shift_id=excluded.last_shift_id,"
                     "last_data=NULL,draft_step=NULL,draft_time=NULL,draft_shift_id=NULL,draft_expires_at=NULL,"
-                    "prompt_message_id=NULL,last_input_message_id=MAX(shift_widget_sessions.last_input_message_id,excluded.last_input_message_id)",
+                    "prompt_message_id=NULL,ui_version=1,last_input_message_id=MAX(shift_widget_sessions.last_input_message_id,excluded.last_input_message_id)",
                     (token, uid, city_id, district, (active or {}).get("id"), message.message_id))
                 await db.commit()
             row = await self.session(token)
             state = await self.state(row)
-            code = (ASSETS / "widget.html").read_text(encoding="utf-8")
-            code = code.replace("__APP_URL__", json.dumps(a._crm_miniapp_link()))
-            if len(code.encode()) > 32768 or len(zlib.compress(code.encode(), 9)) > 4096:
-                raise ValueError("Размер HTML карточки превышает лимит Telegram")
+            code = self.build_html()
             try:
-                sent = await a.bot(SendWidget(chat_id=uid, html=code, chat_data=self.encode(state),
-                    caption="Моя смена · бибибайк. Время и район можно написать боту. "
-                            "Если карточка не видна, нажмите «Обычные кнопки».", reply_markup=self.markup(row)))
+                sent = await a.bot(SendWidget(chat_id=uid, html=code, chat_data=self.encode(state)))
                 mid = sent["message_id"]
             except (TelegramBadRequest, TelegramNotFound):
                 row["kind"] = "text"
-                sent = await a.bot.send_message(uid, self.text(state), parse_mode="HTML", reply_markup=self.markup(row, state))
+                sent = await a.bot.send_message(uid, self.text(state) + "\n\nКарточка недоступна. Откройте приложение:\n"
+                                               + a._crm_miniapp_link(), parse_mode="HTML")
                 mid = sent.message_id
             await self.patch(token, message_id=mid, kind=row["kind"])
 
@@ -270,8 +262,9 @@ class ShiftPanels:
                 if fresh["kind"] == "widget":
                     await self.a.bot(EditWidget(chat_id=fresh["user_id"], message_id=fresh["message_id"], chat_data=data))
                 else:
-                    await self.a.bot.edit_message_text(self.text(state), chat_id=fresh["user_id"],
-                        message_id=fresh["message_id"], parse_mode="HTML", reply_markup=self.markup(fresh, state))
+                    await self.a.bot.edit_message_text(self.text(state) + "\n\nОткройте приложение:\n"
+                        + self.a._crm_miniapp_link(), chat_id=fresh["user_id"],
+                        message_id=fresh["message_id"], parse_mode="HTML", reply_markup=None)
             except TelegramBadRequest as exc:
                 if "not modified" not in str(exc):
                     raise
@@ -293,19 +286,6 @@ class ShiftPanels:
         except Exception as exc:
             self.a.logger.warning("Карточка смены %s не обновлена: %s", shift_id, type(exc).__name__)
 
-    async def prompt(self, row):
-        state = await self.state(row)
-        prompts = {
-            "start_time": "<b>Время начала</b>\nНапишите время, например 09:00, или нажмите «Сейчас».",
-            "start_district": "<b>Район / зона</b>\nНапишите район сообщением или выберите ниже.",
-            "start_confirm": "<b>Открыть смену?</b>\nНачало: " + html.escape(state["time"])
-                + "\nРайон: " + html.escape(row["district"]),
-            "stop_time": "<b>Время окончания</b>\nНапишите время, например 18:00, или нажмите «Сейчас».",
-            "stop_confirm": "<b>Закрыть смену?</b>\nОкончание: " + html.escape(state["time"]),
-        }
-        sent = await self.a.bot.send_message(row["user_id"], prompts[state["step"]], parse_mode="HTML",
-                                             reply_markup=self.markup(row, state))
-        await self.patch(row["token"], prompt_message_id=sent.message_id)
 
     async def accept_input(self, message):
         return bool(message.chat.type == "private" and message.from_user and message.text
@@ -320,23 +300,22 @@ class ShiftPanels:
             if (row.get("draft_expires_at") or 0) <= datetime.now(timezone.utc).timestamp():
                 await self.clear_draft(row["token"])
                 await self.render(row, "Ввод истёк. Нажмите кнопку открытия или закрытия заново.")
-                await message.answer("Ввод истёк. Нажмите нужную кнопку в карточке или отправьте /start.")
                 return
             text = message.text.strip()
             step = row["draft_step"]
             if step in {"start_time", "stop_time"}:
                 value = a._valid_time(text)
                 if not value:
-                    await message.answer("Введите время в формате ЧЧ:ММ, например 09:00. Для отмены — /cancel.")
+                    await self.render(row, "Введите время в формате ЧЧ:ММ, например 09:00.")
                     return
                 values = {"draft_time": value, "draft_step": "start_district" if step == "start_time" else "stop_confirm"}
             elif step == "start_district":
                 if not text or len(text) > 160 or a._valid_time(text):
-                    await message.answer("Напишите название района (до 160 символов), например ФМР, ЮМР.")
+                    await self.render(row, "Напишите название района (до 160 символов), например ФМР, ЮМР.")
                     return
                 values = {"district": text, "draft_step": "start_confirm"}
             else:
-                await message.answer("Проверьте данные в карточке и подтвердите действие кнопкой. Для отмены — /cancel.")
+                await self.render(row, "Проверьте данные и подтвердите действие внутри карточки.")
                 return
             async with a.db_connect() as db:
                 cur = await db.execute("UPDATE shift_widget_sessions SET " + ",".join(f"{k}=?" for k in values)
@@ -346,7 +325,6 @@ class ShiftPanels:
                 await db.commit()
             if cur.rowcount == 1:
                 fresh = await self.session(row["token"])
-                await self.prompt(fresh)
                 await self.render(fresh)
 
     async def cancel_input(self, message):
@@ -356,7 +334,8 @@ class ShiftPanels:
                 await self.patch(row["token"], revision=row["revision"] + 1)
                 await self.clear_draft(row["token"])
                 await self.render(row, "Ввод отменён. Смена не изменена.")
-        await message.answer("Ввод отменён. Чтобы открыть карточку смены, отправьте /start.")
+        else:
+            await message.answer("Чтобы открыть карточку смены, отправьте /start.")
 
     async def perform(self, uid, chat_id, message_id, data):
         match = COMMAND.fullmatch(data)
@@ -365,8 +344,7 @@ class ShiftPanels:
         token, revision, action, expected_sid = match.groups()
         async with self.guard(uid):
             row = await self.session(token)
-            if not row or row["user_id"] != uid or chat_id != uid or message_id not in {
-                row["message_id"], row.get("prompt_message_id")}:
+            if not row or row["user_id"] != uid or chat_id != uid or message_id != row["message_id"]:
                 return "Карточка устарела. Отправьте /start."
             a, notice = self.a, ""
             async with a.db_connect() as db:
@@ -446,18 +424,9 @@ class ShiftPanels:
                     await self.clear_draft(token)
                     notice = "Ввод отменён. Смена не изменена."
                 elif action == "basic":
-                    state = await self.state(row)
-                    sent = await a.bot.send_message(uid, self.text(state), parse_mode="HTML", reply_markup=self.markup(row, state))
-                    await self.patch(token, message_id=sent.message_id, kind="text", last_data=None)
-                fresh = await self.session(token)
-                if action not in {"refresh", "basic"}:
-                    if notice:
-                        await a.bot.send_message(uid, notice)
-                    elif fresh["draft_step"]:
-                        await self.prompt(fresh)
+                    notice = "Все действия теперь доступны внутри карточки. Для новой карточки отправьте /start."
             except (ValueError, a.CitySubscriptionRequired) as exc:
                 notice = str(exc)
-                await a.bot.send_message(uid, notice)
             except Exception:
                 a.logger.exception("Ошибка карточки смены uid=%s", uid)
                 notice = "Не удалось обновить карточку. Нажмите «Обновить» и проверьте смену."
@@ -467,12 +436,14 @@ class ShiftPanels:
             return notice
 
     async def callback(self, callback):
-        await callback.answer()
-        if callback.message:
-            notice = await self.perform(callback.from_user.id, callback.message.chat.id,
-                                       callback.message.message_id, callback.data or "")
-            if notice and "устарела" in notice:
-                await self.a.bot.send_message(callback.from_user.id, notice)
+        # Обработчик нужен только для очистки кнопок прежней версии.
+        await callback.answer("Управление перенесено внутрь карточки. Отправьте /start.")
+        if callback.message and callback.message.chat.id == callback.from_user.id:
+            try:
+                await self.a.bot.edit_message_reply_markup(chat_id=callback.message.chat.id,
+                    message_id=callback.message.message_id, reply_markup=None)
+            except (TelegramBadRequest, TelegramNotFound):
+                pass
 
     async def middleware(self, handler, event, data):
         raw = (getattr(event, "model_extra", None) or {}).get("widget_query")

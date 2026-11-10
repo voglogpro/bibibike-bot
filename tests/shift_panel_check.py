@@ -32,6 +32,7 @@ class FakeBot:
         self.mid, self.methods, self.unsupported = 1000, [], False
         self.send_message = AsyncMock(side_effect=self.message)
         self.edit_message_text = AsyncMock()
+        self.edit_message_reply_markup = AsyncMock()
 
     async def message(self, *_args, **_kwargs):
         self.mid += 1
@@ -72,6 +73,8 @@ async def run():
         assert len(widget.html.encode()) <= 32768 and len(zlib.compress(widget.html.encode(), 9)) <= 4096
         assert len(widget.chat_data.encode()) <= 1024 and "fetch(" not in widget.html
         assert "<input" not in widget.html and "<video" not in widget.html
+        assert "reply_markup" not in widget.model_dump() and "caption" not in widget.model_dump()
+        assert "data:image/webp;base64," in widget.html
         if shutil.which("node"):
             script = re.search(r"<script>(.*?)</script>", widget.html, re.S)[1]
             result = subprocess.run(["node", "-e", "new Function(process.argv[1])", script], capture_output=True)
@@ -90,7 +93,9 @@ async def run():
         invalid = message(uid, "25:99", 2)
         assert await panels.accept_input(invalid)
         await panels.receive_input(invalid)
-        assert invalid.answer.await_count == 1
+        assert invalid.answer.await_count == 0
+        error_state = json.loads([m for m in fake.methods if isinstance(m, EditWidget)][-1].chat_data)
+        assert "Введите время" in error_state["msg"]
         await panels.receive_input(message(uid, "09:00", 3))
         current = await panels.session(row["token"])
         assert current["draft_step"] == "start_district" and current["draft_time"] == "9:00", current
@@ -167,12 +172,20 @@ async def run():
         finally:
             await client.session.close()
         assert any(isinstance(m, AnswerWidget) for m in fake.methods)
+        # Обычный сценарий целиком обновляет виджет, не создавая сообщений
+        # с текстовыми клавиатурами или дублирующими подтверждениями.
+        assert fake.send_message.await_count == 0
 
-        # При старом сервере сценарий с текстом и кнопками остаётся полноценным.
+        # Старый сервер получает ссылку на приложение, но не новую клавиатуру.
         fake.unsupported = True
         await bot.private_subscription_start(message(990003, mid=10))
         fallback = await panels.session(uid=990003, city_id=cid)
         assert fallback["kind"] == "text"
+        assert "reply_markup" not in fake.send_message.await_args.kwargs
+        assert "https://t.me/" in fake.send_message.await_args.args[1]
+        await panels.render(fallback, "Проверка ссылки")
+        assert "https://t.me/" in fake.edit_message_text.await_args.args[0]
+        assert fake.edit_message_text.await_args.kwargs["reply_markup"] is None
         with patch.object(bot, "_is_city_role_member", AsyncMock(return_value=False)):
             denied = message(990003, mid=11)
             await panels.open_private(denied)
@@ -182,8 +195,21 @@ async def run():
         assert newcomer.answer.await_count == 1
         old = row["token"]
         fake.unsupported = False
+        legacy = await panels.session(old)
+        await panels.patch(old, ui_version=0, prompt_message_id=8888)
         await bot.private_subscription_start(message(uid, mid=20))
         assert await panels.session(old) is None
+        cleared = {(call.kwargs["chat_id"], call.kwargs["message_id"]) for call in fake.edit_message_reply_markup.await_args_list}
+        assert (uid, legacy["message_id"]) in cleared and (uid, 8888) in cleared
+        assert all(call.kwargs["reply_markup"] is None for call in fake.edit_message_reply_markup.await_args_list)
+        # Нажатие старой внешней кнопки только убирает её, не меняя смену.
+        callback = SimpleNamespace(answer=AsyncMock(), from_user=SimpleNamespace(id=uid),
+            message=SimpleNamespace(chat=SimpleNamespace(id=uid), message_id=8888),
+            data=panels.callback_data(legacy, "close", 123))
+        with patch.object(panels, "perform", AsyncMock()) as perform:
+            await panels.callback(callback)
+            perform.assert_not_awaited()
+        callback.answer.assert_awaited_once()
         # Проверяем настоящую маршрутизацию /start и текстового ответа:
         # ввод времени не перехватывает команды или обработчик фотографии.
         dp.include_router(bot.private_router)

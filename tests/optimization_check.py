@@ -133,10 +133,17 @@ async def check_main_worker_wiring():
     sentinels = [object()]
 
     class FakeDispatcher:
+        update = type("UpdateObserver", (), {"outer_middleware": lambda *_args: None})()
+
         def include_router(self, _router):
             pass
 
-        async def start_polling(self, _bot):
+        def resolve_used_update_types(self):
+            return ["message", "edited_message", "callback_query"]
+
+        async def start_polling(self, _bot, allowed_updates):
+            assert "widget_query" in allowed_updates
+            assert "edited_message" in allowed_updates
             return None
 
     with patch.object(bot, "init_db", AsyncMock()), \

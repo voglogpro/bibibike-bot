@@ -441,7 +441,9 @@ async def check_photo_parking_rule():
     dm = AsyncMock()
     patches = [
         patch.object(bot.bot, "send_message", dm),
-        patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 0.05),
+        # Проверка пары фотографий не должна зависеть от того, успеет ли SQLite
+        # обработать скриншот быстрее 50 мс. Напоминание проверяется явно ниже.
+        patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 60),
         patch.object(bot, "PHOTO_REPOST_ENABLED", False),
     ]
     for item in patches:
@@ -600,7 +602,8 @@ async def _check_photo_parking_rule(uid, city, shift_id, dm):
     assert stats["move"] == 5, stats
     assert late_screen.replies == []
     # Скриншот без парковки: напоминание в личку, не в чат.
-    await asyncio.sleep(0.1)
+    with patch.object(bot, "PHOTO_PARKING_REMINDER_SEC", 0):
+        await bot._photo_parking_reminder(late_screen.chat.id, uid, late_screen.message_id, ["0400"])
     assert dm.await_count == 1, dm.await_args_list
     assert dm.await_args.args[0] == uid and "нет фото парковки" in dm.await_args.args[1]
 

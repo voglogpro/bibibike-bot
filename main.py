@@ -49,6 +49,7 @@ _project_dir = os.path.dirname(os.path.abspath(__file__))
 if _project_dir not in sys.path:
     sys.path.insert(0, _project_dir)
 import city_billing
+from shift_panel import ShiftPanels
 from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qsl
 from aiohttp import web, ClientSession, ClientTimeout
@@ -260,7 +261,7 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-02 · Фото: исправлены цифры, номер под уведомлением"
+BUILD_VERSION = "2026-11-10 · Смена в личке без Mini App"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
@@ -410,6 +411,7 @@ KRASNODAR_WORK_ZONES = (
 work_router = Router()
 cmd_router = Router()
 private_router = Router()
+shift_panels = ShiftPanels(globals())
 
 # Фоновые циклы не должны опрашивать SQLite каждые 15–30 секунд в простое.
 # События будят нужный worker сразу после локального изменения, а редкий
@@ -861,6 +863,7 @@ async def init_db():
     repair_shift_ids = []
     async with db_connect() as db:
         await city_billing.init_schema(db)
+        await shift_panels.init_schema(db)
         await db.execute("PRAGMA foreign_keys = ON")
         # WAL и увеличенное ожидание записи защищают от потери действий, когда
         # сотрудники подряд отправляют много сообщений с номерами байков.
@@ -2810,7 +2813,8 @@ async def freeze_earned(sid):
             shift["city_id"], shift["user_id"], start_at.strftime("%Y-%m")
         )
 
-async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_override=None):
+async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_override=None,
+                    expected_shift_id=None):
     """Закрывает смену после всех уже вставших в очередь действий сотрудника."""
     lock_city_id = city_id
     if lock_city_id is None:
@@ -2822,13 +2826,14 @@ async def end_shift(uid, time, comment="", city_id=None, now=None, end_at_overri
         return await _end_shift_locked(
             uid, time, comment, city_id=city_id, now=now,
             end_at_override=end_at_override,
+            expected_shift_id=expected_shift_id,
         )
 
 
 async def _end_shift_locked(uid, time, comment="", city_id=None, now=None,
-                            end_at_override=None):
+                            end_at_override=None, expected_shift_id=None):
     shift = await get_active_shift(uid, city_id)
-    if not shift:
+    if not shift or (expected_shift_id is not None and shift["id"] != expected_shift_id):
         return None
     city = get_city(shift.get("city_id")) or get_default_city()
     scheduled = _shift_is_scheduled(shift, now)
@@ -4363,7 +4368,12 @@ async def update_report_message(shift_id, force_new=False):
     entry["users"] += 1
     try:
         async with entry["lock"]:
-            await _update_report_message_locked(shift_id, force_new=force_new)
+            try:
+                await _update_report_message_locked(shift_id, force_new=force_new)
+            finally:
+                # Личная панель обновляется тем же событием и дебаунсом, что отчёт.
+                # Сбой панели не должен мешать учёту действий или отчёту группы.
+                await shift_panels.sync_shift_safely(shift_id)
     finally:
         entry["users"] -= 1
         if entry["users"] == 0 and _report_update_locks.get(shift_id) is entry:
@@ -4483,6 +4493,21 @@ async def post_app_button(message: Message):
 # ============================================================================
 # [08-TELEGRAM] ФИЛЬТРЫ И ОБРАБОТЧИКИ СООБЩЕНИЙ TELEGRAM
 # ============================================================================
+@private_router.callback_query(F.data.startswith("sw:"))
+async def shift_panel_callback(callback: CallbackQuery):
+    await shift_panels.callback(callback)
+
+
+@private_router.message(Command("cancel"), F.chat.type == "private")
+async def cancel_private_shift_input(message: Message):
+    await shift_panels.cancel_input(message)
+
+
+@private_router.message(F.chat.type == "private", shift_panels.accept_input)
+async def private_shift_input(message: Message):
+    await shift_panels.receive_input(message)
+
+
 @cmd_router.message(Command("topicid"))
 async def topic_id_any_chat(message: Message):
     """Показывает реальные ID даже в ещё не настроенной группе или теме."""
@@ -6622,8 +6647,15 @@ async def _private_manager_context(user_id):
             "allowed_city_ids": sorted(CITIES_BY_ID) if account["role"] == "network_admin" else account["city_ids"]}
 
 
-@private_router.message(Command("start", "subscription"), F.chat.type == "private")
+@private_router.message(Command("start", "shift", "subscription"), F.chat.type == "private")
 async def private_subscription_start(message: Message):
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) == 2 and args[1].startswith("shift_"):
+        await shift_panels.open_private(message, args[1])
+        return
+    if args and args[0].split("@")[0].lower() in {"/start", "/shift"}:
+        await shift_panels.open_private(message)
+        return
     user = await get_user(message.from_user.id) or {}
     city = get_city(user.get("city_id")) or get_default_city()
     subscription = await _city_subscription(city["id"])
@@ -7905,16 +7937,19 @@ async def api_shift_start(request):
     if not tg_user:
         return web.json_response({"error": "auth"}, status=401)
     uid = tg_user["id"]
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
+    return await _employee_shift_start(uid, body)
 
+
+async def _employee_shift_start(uid, body):
+    """Общий запуск для подписанного Mini App и личного виджета Telegram."""
     user = await get_user(uid)
     if not user or not user.get("full_name"):
         return web.json_response(
             {"error": "no_name", "message": "Сначала укажи имя и роль в Настройках."},
             status=400)
-
-    body = await _request_json_object(request)
-    if body is None:
-        return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
     city_id = body.get("city_id", user.get("city_id"))
     if not isinstance(city_id, int) or not get_city(city_id):
         return web.json_response({"error": "city_id", "message": "Выбери город."}, status=400)
@@ -7997,15 +8032,19 @@ async def api_shift_stop(request):
     if not tg_user:
         return web.json_response({"error": "auth"}, status=401)
     uid = tg_user["id"]
+    body = await _request_json_object(request)
+    if body is None:
+        return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
+    return await _employee_shift_stop(uid, body)
+
+
+async def _employee_shift_stop(uid, body, expected_shift_id=None):
     active_shift = await get_active_shift(uid)
     city_id = active_shift.get("city_id") if active_shift else None
     if not active_shift:
         return web.json_response(
             {"error": "not_active", "message": "Нет открытой смены."}, status=400)
 
-    body = await _request_json_object(request)
-    if body is None:
-        return web.json_response({"error": "json", "message": "Ожидается JSON-объект."}, status=400)
     time_str = _valid_time((body.get("time") or "").strip())
     if not time_str:
         return web.json_response(
@@ -8013,7 +8052,11 @@ async def api_shift_stop(request):
     comment = (body.get("comment") or "").strip()
 
     try:
-        sid = await end_shift(uid, time_str, comment, city_id)
+        if expected_shift_id is None:
+            sid = await end_shift(uid, time_str, comment, city_id)
+        else:
+            sid = await end_shift(uid, time_str, comment, city_id,
+                                  expected_shift_id=expected_shift_id)
     except ValueError as exc:
         return web.json_response({"error": "end_time", "message": str(exc)}, status=400)
     if not sid:
@@ -16227,6 +16270,7 @@ async def main():
     await rebuild_monthly_aggregates()
     await start_api_server()   # === НОВОЕ: поднимаем API рядом с ботом ===
     dp = Dispatcher()
+    dp.update.outer_middleware(shift_panels.middleware)
     dp.include_router(private_router)
     dp.include_router(cmd_router)
     dp.include_router(work_router)
@@ -16274,7 +16318,7 @@ async def main():
 
     background_tasks = start_background_workers()
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types() + ["widget_query"])
     finally:
         await stop_background_workers(background_tasks)
 

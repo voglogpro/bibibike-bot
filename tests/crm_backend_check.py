@@ -1021,8 +1021,9 @@ async def run():
     payroll_data = payload(payroll_response)
     assert payroll_response.status == 200 and payroll_data["city"]["id"] == city["id"]
     assert all(item["user_id"] != 920004 for item in payroll_data["items"])
-    assert bot._round_payroll_minutes(12 * 60 + 20) == 12 * 60
-    assert bot._round_payroll_minutes(12 * 60 + 40) == 13 * 60
+    assert bot._round_payroll_end_at(local_today_dt := datetime.now(bot._city_tz(city)).replace(hour=17, minute=29)).hour == 17
+    assert bot._round_payroll_end_at(local_today_dt.replace(minute=31)).hour == 18
+    assert bot._round_payroll_end_at(local_today_dt.replace(minute=30)).minute == 30
 
     # Фото: проверка типов и orphan cleanup без публичной раздачи.
     assert bot._crm_image_type(b"\xff\xd8\xffrest")[0] == "image/jpeg"

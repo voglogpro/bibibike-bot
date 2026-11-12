@@ -3,6 +3,7 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+*.before-scout-rate-2026-11.bak
 .env
 .env.*
 data/

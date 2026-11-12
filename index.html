@@ -1218,7 +1218,7 @@ function paintEarnSub(){
   if(!(STATE && STATE.active && STATE.shift)) return;
   const u=STATE.user;
   if(scheduledNow()) $('earnSub').textContent = 'Ожидает начала · действия уже считаются';
-  else if(u.pay_type === 'hourly') $('earnSub').textContent = rub(u.pay_amount)+' ₽/час · капает по времени';
+  else if(u.pay_type === 'hourly') $('earnSub').textContent = rub(u.pay_amount)+' ₽/час · предварительно, округление при закрытии';
   else if(u.pay_type === 'piece') $('earnSub').textContent = rub(u.pay_amount)+' ₽ за замену АКБ';
   else $('earnSub').textContent = 'Фикс за выход';
 }
@@ -1271,7 +1271,7 @@ function render(){
     $('activeBlock').classList.add('hidden');
     $('idleBlock').classList.remove('hidden');
     if(STATE.last){
-      $('lastDate').textContent = STATE.last.date + ' · ' + STATE.last.worked;
+      $('lastDate').textContent = STATE.last.date + ' · к оплате ' + (STATE.last.payroll_worked || STATE.last.worked);
       $('lastEarned').textContent = rub(STATE.last.earned)+' ₽';
       $('lastCard').classList.remove('hidden');
     } else $('lastCard').classList.add('hidden');
@@ -2509,7 +2509,7 @@ async function loadHistory(){
         const cmt = it.comment ? `<div class="cmt">💬 ${esc(it.comment)}</div>` : '';
         return `<div class="hrow" id="hrow-${it.shift_id}">
           <div style="flex:1;min-width:0"><div class="d">${esc(it.date)}</div>
-          <div class="meta"><span class="bdg">${esc(ptName)}</span> ${esc(it.worked)}${dist}${city}</div>${cmt}</div>
+          <div class="meta"><span class="bdg">${esc(ptName)}</span> к оплате ${esc(it.payroll_worked || it.worked)}${dist}${city}</div><div class="meta">Фактически: ${esc(it.worked)}</div>${cmt}</div>
           <div class="e">${rub(it.earned)} ₽</div>
           <button class="edit" data-sid="${Number(it.shift_id)}" data-comment="${esc(it.comment||'')}">✏️</button>
           <button class="del" data-sid="${Number(it.shift_id)}" data-date="${esc(it.date)}">🗑</button></div>`;

@@ -261,10 +261,12 @@ MSK = timezone(timedelta(hours=3))
 # Модель оплаты по умолчанию для новых сотрудников
 # Метка сборки: видна в логах при старте и в мини-приложении (Настройки).
 # По ней сразу понятно, какая версия реально запущена на хостинге.
-BUILD_VERSION = "2026-11-10 · Карточка смены без лишних кнопок"
+BUILD_VERSION = "2026-11-12 · Округление окончания и ставка скаутов 320"
 
 DEFAULT_PAY_TYPE = "hourly"       # hourly | salary | piece
 DEFAULT_PAY_AMOUNT = 350.0        # ₽/час, ₽/смену или ₽/замену — зависит от типа
+DEFAULT_SCOUT_PAY_AMOUNT = 320.0
+PAYROLL_CLOCK_END_RULE = "clock_end_v1"
 
 # Авто-закрытие смены: сотрудник выбирает длительность, бот добавляет фору
 # (GRACE), чтобы человек успел закрыть сам/дописать комментарий до дедлайна.
@@ -935,6 +937,7 @@ async def init_db():
                 earned REAL DEFAULT 0,
                 pay_type_snap TEXT,
                 pay_amount_snap REAL,
+                payroll_rule TEXT,
                 city_id INTEGER,
                 start_at TEXT,
                 end_at TEXT,
@@ -1465,6 +1468,13 @@ async def init_db():
                 applied_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payroll_rate_adjustments (
+                migration TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER NOT NULL,
+                old_data TEXT NOT NULL, new_data TEXT NOT NULL, changed_at TEXT NOT NULL,
+                PRIMARY KEY(migration,entity_type,entity_id)
+            )
+        """)
         # Декады — расчётные периоды админки. «Обнуление» счётчиков это старт
         # новой декады: данные смен остаются в БД, меняется только точка отсчёта.
         await db.execute("""
@@ -1585,6 +1595,7 @@ async def init_db():
             "ALTER TABLE shifts ADD COLUMN earned REAL DEFAULT 0",
             "ALTER TABLE shifts ADD COLUMN pay_type_snap TEXT",
             "ALTER TABLE shifts ADD COLUMN pay_amount_snap REAL",
+            "ALTER TABLE shifts ADD COLUMN payroll_rule TEXT",
             "ALTER TABLE shifts ADD COLUMN city_id INTEGER",
             "ALTER TABLE shifts ADD COLUMN start_at TEXT",
             "ALTER TABLE shifts ADD COLUMN end_at TEXT",
@@ -2106,6 +2117,7 @@ async def init_db():
             await freeze_earned(shift_id)
         except Exception as exc:
             logger.error(f"Не удалось восстановить расчёт закрытой смены {shift_id}: {exc}")
+    await _migrate_scout_rate_november_2026()
 
 # ============================================================================
 # [04-USERS-SHIFTS] ПОЛЬЗОВАТЕЛИ, ДЕКАДЫ, СМЕНЫ, ДЕЙСТВИЯ И ЗАРАБОТОК
@@ -2115,11 +2127,15 @@ async def add_user(uid, name, role, city_id=None):
     # ВАЖНО: не используем INSERT OR REPLACE — иначе стёрлись бы pay_type/pay_amount.
     async with db_connect() as db:
         await db.execute(
-            "INSERT INTO users (user_id, full_name, role, city_id) VALUES (?, ?, ?, ?) "
+            "INSERT INTO users (user_id, full_name, role, city_id, pay_amount) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET full_name=excluded.full_name, "
+            "pay_amount=CASE WHEN COALESCE(users.role,'')='' "
+            "AND COALESCE(users.pay_type,'hourly')='hourly' AND users.pay_amount=350 "
+            "THEN excluded.pay_amount ELSE users.pay_amount END, "
             "role=excluded.role, city_id=CASE WHEN COALESCE(users.statistics_visible,1)=1 "
             "THEN COALESCE(excluded.city_id, users.city_id) ELSE users.city_id END",
-            (uid, name, role, city_id)
+            (uid, name, role, city_id,
+             DEFAULT_SCOUT_PAY_AMOUNT if _norm_role(role) in {"скаут", "scout"} else DEFAULT_PAY_AMOUNT)
         )
         await db.commit()
 
@@ -2738,10 +2754,10 @@ async def start_shift(uid, name, role, time, district, city_id, source="bot",
         now_iso = (now.astimezone(_city_tz(city)) if now else datetime.now(_city_tz(city))).isoformat()
         c = await db.execute(
             "INSERT INTO shifts (user_id, full_name, role, start_time, district, is_active, "
-            "created_at, city_id, start_at, source, source_message_id, auto_close_at, period_id) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+            "created_at, city_id, start_at, source, source_message_id, auto_close_at, period_id, payroll_rule) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
             (uid, name, role, time, district, now_iso, city_id, start_at.isoformat(),
-             source, source_message_id, auto_close_at, period_id)
+             source, source_message_id, auto_close_at, period_id, PAYROLL_CLOCK_END_RULE)
         )
         await db.commit()
         shift_id = c.lastrowid
@@ -2768,17 +2784,135 @@ def compute_earned(pay_type, amount, worked_min, battery_count):
     return round(amount * (worked_min or 0) / 60.0, 2)   # почасовая
 
 
-def _round_payroll_minutes(worked_min):
-    """Округляет длительность одной смены до ближайшего полного часа.
+def _round_payroll_end_at(end_at):
+    """Окончание :01–:29 вниз, :31–:59 вверх; ровно :00 и :30 сохраняются."""
+    end_at = end_at.replace(second=0, microsecond=0)
+    if end_at.minute in {0, 30}:
+        return end_at
+    hour = end_at.replace(minute=0)
+    return hour + timedelta(hours=1) if end_at.minute > 30 else hour
 
-    Точная длительность остаётся в смене и истории. Округление применяется
-    только в расчёте зарплаты: 12:20 -> 12 часов, 12:40 -> 13 часов.
-    """
-    try:
-        minutes = max(0, int(worked_min or 0))
-    except (TypeError, ValueError):
-        minutes = 0
-    return ((minutes + 30) // 60) * 60
+
+def _shift_payroll_end_at(shift, now=None):
+    """Расчётная граница отдельно от фактического end_at: действия не теряются."""
+    end_at = _parse_datetime(shift.get("end_at"))
+    if shift.get("is_active"):
+        city = get_city(shift.get("city_id")) or get_default_city()
+        end_at = now.astimezone(_city_tz(city)) if now else datetime.now(_city_tz(city))
+    if not end_at:
+        return None
+    city = get_city(shift.get("city_id")) or get_default_city()
+    tz = _city_tz(city)
+    end_at = end_at.astimezone(tz) if end_at.tzinfo else end_at.replace(tzinfo=tz)
+    start_at = _parse_datetime(shift.get("start_at"))
+    if start_at and start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=tz)
+    if start_at and end_at <= start_at:
+        return start_at
+    if shift.get("payroll_rule") != PAYROLL_CLOCK_END_RULE and not shift.get("is_active"):
+        return end_at  # Закрытая история сохраняет прежнее правило расчёта.
+    rounded = _round_payroll_end_at(end_at)
+    return max(start_at, rounded) if start_at else rounded
+
+
+def _shift_payroll_minutes(shift, now=None):
+    start_at = _parse_datetime(shift.get("start_at"))
+    end_at = _shift_payroll_end_at(shift, now)
+    if start_at and end_at:
+        if start_at.tzinfo is None:
+            city = get_city(shift.get("city_id")) or get_default_city()
+            start_at = start_at.replace(tzinfo=_city_tz(city))
+        return max(0, int((end_at - start_at).total_seconds() // 60))
+    return _shift_worked_min(shift, now)
+
+
+def _payroll_duration_text(shift):
+    minutes = _shift_payroll_minutes(shift)
+    return f"{minutes // 60} ч. {minutes % 60} мин."
+
+
+async def _migrate_scout_rate_november_2026():
+    """Однократная смена 350 → 320; закрытые смены до ноября не пересчитываются."""
+    migration = "scout_hourly_350_to_320_2026_11_v1"
+    stamp = datetime.now(timezone.utc).isoformat()
+    async with db_connect() as db:
+        db.row_factory = aiosqlite.Row
+        if await (await db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (migration,))).fetchone():
+            return
+        # Копия SQLite через backup API согласована даже при наличии WAL.
+        candidates = await (await db.execute(
+            "SELECT user_id,role FROM users WHERE pay_amount=350 "
+            "AND COALESCE(pay_type,'hourly')='hourly'"
+        )).fetchall()
+        scout_ids = [row["user_id"] for row in candidates if _norm_role(row["role"]) in {"скаут", "scout"}]
+        rate_shifts = await (await db.execute(
+            "SELECT s.*,u.pay_type AS user_pay_type,u.pay_amount AS user_pay_amount,u.role AS user_role "
+            "FROM shifts s LEFT JOIN users u ON u.user_id=s.user_id "
+            "WHERE s.is_active=1 OR COALESCE(s.start_at,s.created_at,'') LIKE '2026-11%'"
+        )).fetchall()
+        affected = [dict(row) for row in rate_shifts
+            if _norm_role(row["role"] or row["user_role"]) in {"скаут", "scout"}
+            and (row["pay_type_snap"] or row["user_pay_type"] or DEFAULT_PAY_TYPE) == "hourly"
+            and (row["pay_amount_snap"] if row["pay_amount_snap"] is not None else row["user_pay_amount"]) == 350]
+        pending = await (await db.execute(
+            "SELECT mr.*,u.role AS user_role FROM manual_reports mr JOIN users u ON u.user_id=mr.user_id "
+            "WHERE mr.shift_id IS NULL AND mr.pay_amount_snap=350 "
+            "AND COALESCE(mr.pay_type_snap,'hourly')='hourly' AND mr.created_at LIKE '2026-11%'"
+        )).fetchall()
+        pending = [dict(row) for row in pending if _norm_role(row["user_role"]) in {"скаут", "scout"}]
+        if scout_ids or affected or pending:
+            backup_path = str(DB_PATH) + ".before-scout-rate-2026-11.bak"
+            if not os.path.exists(backup_path):
+                async with aiosqlite.connect(backup_path) as backup:
+                    await db.backup(backup)
+                logger.info("Резервная копия перед сменой ставки скаутов: %s", backup_path)
+        await db.execute("BEGIN IMMEDIATE")
+        # Фиксируем прежнюю ставку старой истории до изменения профилей.
+        if await (await db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (migration,))).fetchone():
+            await db.rollback()
+            return
+        for uid in scout_ids:
+            await db.execute(
+                "UPDATE shifts SET pay_type_snap=COALESCE(pay_type_snap,'hourly'), "
+                "pay_amount_snap=COALESCE(pay_amount_snap,350) WHERE user_id=? AND is_active=0", (uid,))
+            old = json.dumps({"pay_amount": 350}, ensure_ascii=False)
+            new = json.dumps({"pay_amount": DEFAULT_SCOUT_PAY_AMOUNT}, ensure_ascii=False)
+            await db.execute("INSERT INTO payroll_rate_adjustments VALUES (?,?,?,?,?,?)",
+                (migration, "user", uid, old, new, stamp))
+            await db.execute("UPDATE users SET pay_amount=? WHERE user_id=? AND pay_amount=350",
+                (DEFAULT_SCOUT_PAY_AMOUNT, uid))
+        totals = set()
+        for shift in affected:
+            minutes = _shift_payroll_minutes(shift)
+            earned = (shift["earned"] if shift["is_active"] else
+                      compute_earned("hourly", DEFAULT_SCOUT_PAY_AMOUNT, minutes, 0))
+            old = json.dumps({"pay_amount_snap": shift["pay_amount_snap"],
+                "pay_type_snap": shift["pay_type_snap"], "earned": shift["earned"]}, ensure_ascii=False)
+            new = json.dumps({"pay_amount_snap": DEFAULT_SCOUT_PAY_AMOUNT, "earned": earned}, ensure_ascii=False)
+            await db.execute("INSERT INTO payroll_rate_adjustments VALUES (?,?,?,?,?,?)",
+                (migration, "shift", shift["id"], old, new, stamp))
+            await db.execute("UPDATE shifts SET pay_type_snap='hourly',pay_amount_snap=?,earned=? WHERE id=?",
+                (DEFAULT_SCOUT_PAY_AMOUNT, earned, shift["id"]))
+            # Правка текста того же ручного отчёта не должна вернуть старую ставку.
+            await db.execute("UPDATE manual_reports SET pay_amount_snap=? WHERE shift_id=? "
+                "AND COALESCE(pay_type_snap,'hourly')='hourly' AND pay_amount_snap=350",
+                (DEFAULT_SCOUT_PAY_AMOUNT, shift["id"]))
+            if not shift["is_active"]:
+                totals.add((shift["city_id"], shift["user_id"]))
+        for cid, uid in totals:
+            # Время и действия не изменились: обновляем сумму существующей сводки атомарно.
+            await db.execute("UPDATE monthly_aggregates SET earned=(SELECT COALESCE(SUM(earned),0) "
+                "FROM shifts WHERE city_id=? AND user_id=? AND is_active=0 AND start_at LIKE '2026-11%'), "
+                "updated_at=? WHERE city_id=? AND user_id=? AND month='2026-11'", (cid, uid, stamp, cid, uid))
+        for report in pending:
+            await db.execute("INSERT INTO payroll_rate_adjustments VALUES (?,?,?,?,?,?)",
+                (migration, "manual_report", report["id"], '{"pay_amount_snap":350}',
+                 '{"pay_amount_snap":320}', stamp))
+            await db.execute("UPDATE manual_reports SET pay_amount_snap=? WHERE id=?",
+                (DEFAULT_SCOUT_PAY_AMOUNT, report["id"]))
+        await db.execute("INSERT INTO schema_migrations(name,applied_at) VALUES (?,?)", (migration, stamp))
+        await db.commit()
+    logger.info("Ставка скаутов 350 → 320: профилей=%s, смен (ноябрь и активные)=%s", len(scout_ids), len(affected))
 
 async def freeze_earned(sid):
     """Фиксируем сумму на момент закрытия смены — потом ставку можно менять, история не перепишется."""
@@ -2795,7 +2929,7 @@ async def freeze_earned(sid):
     if amount is None:
         amount = DEFAULT_PAY_AMOUNT
     stats = await get_stats(sid)
-    wm = _shift_worked_min(shift) if shift.get('end_time') else 0
+    wm = _shift_payroll_minutes(shift) if shift.get('end_time') else 0
     start_at = _parse_datetime(shift.get("start_at"))
     end_at = _parse_datetime(shift.get("end_at"))
     if start_at and end_at and end_at <= start_at:
@@ -2843,9 +2977,9 @@ async def _end_shift_locked(uid, time, comment="", city_id=None, now=None,
     async with db_connect() as db:
         cursor = await db.execute(
             "UPDATE shifts SET is_active = 0, end_time = ?, end_at = ?, comment = ?, "
-            "on_lunch = 0 "
+            "on_lunch = 0, payroll_rule = ? "
             "WHERE id = ? AND is_active = 1",
-            (stored_end_time, end_at.isoformat(), comment, shift["id"])
+            (stored_end_time, end_at.isoformat(), comment, PAYROLL_CLOCK_END_RULE, shift["id"])
         )
         if cursor.rowcount != 1:
             await db.rollback()
@@ -4190,10 +4324,11 @@ async def capture_manual_report(message: Message, city):
                 "UPDATE shifts SET user_id=?, full_name=?, role=?, start_time=?, end_time=?, "
                 "start_at=?, end_at=?, created_at=?, is_active=0, on_lunch=0, city_id=?, source=?, "
                 "earned=?, pay_type_snap=COALESCE(pay_type_snap, ?), "
-                "pay_amount_snap=COALESCE(pay_amount_snap, ?) WHERE id=?",
+                "pay_amount_snap=COALESCE(pay_amount_snap, ?), "
+                "payroll_rule=CASE WHEN is_active=1 THEN ? ELSE payroll_rule END WHERE id=?",
                 (uid, full_name, role, parsed["start_time"], parsed["end_time"],
                  start_at.isoformat(), end_at.isoformat(), start_at.isoformat(), city["id"],
-                 source, earned, pay_type_snap, pay_amount_snap, shift_id)
+                 source, earned, pay_type_snap, pay_amount_snap, PAYROLL_CLOCK_END_RULE, shift_id)
             )
             if source == "manual_signal":
                 # Сохраняем действия, уже собранные эталонным парсером в рабочих темах.
@@ -4212,11 +4347,11 @@ async def capture_manual_report(message: Message, city):
             cursor = await db.execute(
                 "INSERT INTO shifts (user_id, full_name, role, start_time, end_time, is_active, "
                 "created_at, city_id, start_at, end_at, source, source_message_id, "
-                "earned, pay_type_snap, pay_amount_snap) "
-                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'manual_chat', ?, ?, ?, ?)",
+                "earned, pay_type_snap, pay_amount_snap, payroll_rule) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'manual_chat', ?, ?, ?, ?, ?)",
                 (uid, full_name, role, parsed["start_time"], parsed["end_time"],
                  start_at.isoformat(), city["id"], start_at.isoformat(), end_at.isoformat(),
-                 message.message_id, earned, pay_type_snap, pay_amount_snap)
+                 message.message_id, earned, pay_type_snap, pay_amount_snap, PAYROLL_CLOCK_END_RULE)
             )
             shift_id = cursor.lastrowid
 
@@ -4324,6 +4459,10 @@ def build_report_text(shift, stats):
             report += f"Дата завершения: {completed_date}\n"
         report += f"Закончил: {html.escape(shift['end_time'])}\n"
         report += f"Отработано: {_duration_shift(shift)}\n"
+        if shift.get("payroll_rule") == PAYROLL_CLOCK_END_RULE:
+            paid_end = _shift_payroll_end_at(shift)
+            if paid_end:
+                report += f"К оплате: {_payroll_duration_text(shift)} (до {paid_end.strftime('%d.%m %H:%M')})\n"
 
     if shift.get('district'):
         report += f"Район: {html.escape(shift['district'].upper())}\n"
@@ -7591,6 +7730,7 @@ async def api_state(request):
             "date": _fmt_date(last.get("created_at")),
             "earned": last.get("earned") or 0,
             "worked": _duration_shift(last) if last.get("end_time") else "—",
+            "payroll_worked": _payroll_duration_text(last) if last.get("end_time") else "—",
         }
 
     title, tier = _title_for_level(lvl)
@@ -8283,6 +8423,8 @@ async def api_history(request):
             "start": s.get("start_time"),
             "end": s.get("end_time"),
             "worked": worked,
+            "payroll_worked": _payroll_duration_text(s) if s.get("end_time") else "—",
+            "payroll_end_at": (_shift_payroll_end_at(s).isoformat() if _shift_payroll_end_at(s) else None),
             "earned": s.get("earned") or 0,
             "pay_type": s.get("pay_type_snap") or "hourly",
             "district": (s.get("district") or "").upper(),
@@ -8476,9 +8618,9 @@ async def _auto_close_shift(shift):
     end_time = deadline.astimezone(_city_tz(city)).strftime("%H:%M")
     async with db_connect() as db:
         cur = await db.execute(
-            "UPDATE shifts SET is_active = 0, end_time = ?, end_at = ?, on_lunch = 0 "
+            "UPDATE shifts SET is_active = 0, end_time = ?, end_at = ?, on_lunch = 0, payroll_rule = ? "
             "WHERE id = ? AND is_active = 1",
-            (end_time, deadline.isoformat(), shift["id"])
+            (end_time, deadline.isoformat(), PAYROLL_CLOCK_END_RULE, shift["id"])
         )
         if cur.rowcount != 1:
             await db.rollback()
@@ -9027,10 +9169,11 @@ async def approve_manual_report(report_id, start_time, end_time, expected_update
                 "UPDATE shifts SET full_name=?, role=?, start_time=?, end_time=?, "
                 "is_active=0, on_lunch=0, created_at=?, start_at=?, end_at=?, earned=?, "
                 "pay_type_snap=COALESCE(pay_type_snap, ?), "
-                "pay_amount_snap=COALESCE(pay_amount_snap, ?) "
+                "pay_amount_snap=COALESCE(pay_amount_snap, ?), "
+                "payroll_rule=CASE WHEN is_active=1 THEN ? ELSE payroll_rule END "
                 "WHERE id=? AND source='manual_signal'",
                 (full_name, role, start_time, end_time, start_at.isoformat(),
-                 start_at.isoformat(), end_at.isoformat(), earned, pay_type, pay_amount,
+                 start_at.isoformat(), end_at.isoformat(), earned, pay_type, pay_amount, PAYROLL_CLOCK_END_RULE,
                  shift_id),
             )
             await db.execute(
@@ -9045,11 +9188,11 @@ async def approve_manual_report(report_id, start_time, end_time, expected_update
             cursor = await db.execute(
                 "INSERT INTO shifts (user_id, full_name, role, start_time, end_time, is_active, "
                 "created_at, city_id, start_at, end_at, source, source_message_id, earned, "
-                "pay_type_snap, pay_amount_snap) "
-                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'manual_chat', ?, ?, ?, ?)",
+                "pay_type_snap, pay_amount_snap, payroll_rule) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'manual_chat', ?, ?, ?, ?, ?)",
                 (report["user_id"], full_name, role, start_time, end_time,
                  start_at.isoformat(), report["city_id"], start_at.isoformat(),
-                 end_at.isoformat(), report["message_id"], earned, pay_type, pay_amount),
+                 end_at.isoformat(), report["message_id"], earned, pay_type, pay_amount, PAYROLL_CLOCK_END_RULE),
             )
             shift_id = cursor.lastrowid
         if store_report_actions:
@@ -11456,10 +11599,11 @@ async def api_crm_payroll(request):
             pay_amount = employee["pay_amount"]
         battery = payload["actions"].get("battery", 0)
         actual_worked_minutes = payload["worked_minutes"]
-        rounded_worked_minutes = _round_payroll_minutes(actual_worked_minutes)
-        # В зарплатной ведомости каждая смена считается полными часами.
-        # Фактические минуты остаются доступны отдельно и в истории смен.
-        earned = compute_earned(pay_type, pay_amount, rounded_worked_minutes, battery)
+        rounded_worked_minutes = _shift_payroll_minutes(shift, now)
+        # Закрытая ведомость совпадает с замороженным заработком в профиле.
+        earned = (float(shift.get("earned") or 0) if not shift.get("is_active")
+                  else compute_earned(pay_type, pay_amount, rounded_worked_minutes, battery))
+        payroll_end = _shift_payroll_end_at(shift, now)
         employee["shifts_count"] += 1
         employee["worked_minutes"] += rounded_worked_minutes
         employee["earned"] += earned
@@ -11468,6 +11612,7 @@ async def api_crm_payroll(request):
             "start_time": payload["start_time"], "end_time": payload["end_time"],
             "worked_minutes": rounded_worked_minutes,
             "actual_worked_minutes": actual_worked_minutes,
+            "payroll_end_at": payroll_end.isoformat() if payroll_end else None,
             "district": payload["district"],
             "status": payload["status"], "earned": round(earned, 2),
         })
